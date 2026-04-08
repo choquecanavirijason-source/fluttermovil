@@ -5,8 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
 import android.os.SystemClock
 import android.util.Size
+import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -190,8 +192,12 @@ class CameraXManager(
         try {
             provider.unbindAll()
 
+            val rotation = displayRotation(activity)
+
             val imageAnalysis =
                 ImageAnalysis.Builder()
+                    .setTargetRotation(rotation)
+                    .setResolutionSelector(analysisResolutionSelector)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
@@ -210,6 +216,7 @@ class CameraXManager(
             if (pv != null) {
                 val preview =
                     Preview.Builder()
+                        .setTargetRotation(rotation)
                         .setResolutionSelector(previewResolutionSelector)
                         .build()
                 preview.setSurfaceProvider(pv.surfaceProvider)
@@ -284,13 +291,21 @@ class CameraXManager(
         }
     }
 
+    private fun displayRotation(activity: Activity): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            activity.display?.rotation ?: Surface.ROTATION_0
+        } else {
+            @Suppress("DEPRECATION")
+            activity.windowManager.defaultDisplay.rotation
+        }
+
     private companion object {
         private const val REBIND_DELAY_MS = 280L
         private const val STOP_UNBIND_DELAY_MS = 220L
 
         /**
-         * Preview a máxima calidad posible: límite ~12 MP 4:3; CameraX toma la resolución
-         * admitida más cercana (normalmente la máxima del sensor en ese ratio).
+         * Preview: pedir resolución muy alta. Importante: [ImageAnalysis] tiene su propio
+         * selector moderado; si no, CameraX suele bajar el preview al tamaño del análisis.
          */
         private val previewResolutionSelector: ResolutionSelector =
             ResolutionSelector.Builder()
@@ -299,6 +314,18 @@ class CameraXManager(
                     ResolutionStrategy(
                         Size(4032, 3024),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                    ),
+                )
+                .build()
+
+        /** Análisis ML acotado: libera ancho de banda para que el preview no quede pixelado. */
+        private val analysisResolutionSelector: ResolutionSelector =
+            ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        Size(960, 720),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
                     ),
                 )
                 .build()

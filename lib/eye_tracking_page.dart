@@ -174,7 +174,9 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
 
     try {
       final dpr = MediaQuery.devicePixelRatioOf(context);
-      final image = await boundary.toImage(pixelRatio: dpr);
+      // Mínimo 2.0: en algunos dispositivos el DPR lógico es bajo y la captura sale borrosa.
+      final captureRatio = dpr < 2.0 ? 2.0 : dpr;
+      final image = await boundary.toImage(pixelRatio: captureRatio);
       final bd = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       return bd?.buffer.asUint8List();
@@ -316,9 +318,11 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
                   fit: StackFit.expand,
                   children: [
                     if (Platform.isAndroid)
-                      AndroidView(
-                        key: ValueKey<String>('eye_preview_$_previewSession'),
-                        viewType: 'eye_tracking/camera_preview',
+                      Positioned.fill(
+                        child: AndroidView(
+                          key: ValueKey<String>('eye_preview_$_previewSession'),
+                          viewType: 'eye_tracking/camera_preview',
+                        ),
                       )
                     else
                       const ColoredBox(color: Colors.black),
