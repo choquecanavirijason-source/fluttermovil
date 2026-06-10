@@ -1,7 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../config/api_config.dart';
+
+const _kTokenKey = 'operaria_auth_token';
 
 class LoginUser {
   final int id;
@@ -54,9 +58,29 @@ class LoginResponse {
 class AuthSession {
   static String? accessToken;
   static LoginUser? currentUser;
+
+  static bool get isLoggedIn =>
+      accessToken != null && accessToken!.isNotEmpty;
 }
 
 class AuthService {
+  /// Restaura el token guardado al iniciar la app.
+  static Future<void> init() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString(_kTokenKey);
+    if (token != null && token.isNotEmpty) {
+      AuthSession.accessToken = token;
+    }
+  }
+
+  /// Cierra sesión: borra token de memoria y de almacenamiento.
+  static Future<void> logout() async {
+    AuthSession.accessToken = null;
+    AuthSession.currentUser = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kTokenKey);
+  }
+
   Future<LoginResponse> login({
     required String username,
     required String password,
@@ -100,8 +124,12 @@ class AuthService {
         throw Exception('No se recibio access_token');
       }
 
+      // Guarda en memoria y en disco
       AuthSession.accessToken = data.accessToken;
       AuthSession.currentUser = data.user;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kTokenKey, data.accessToken);
+
       return data;
     } on SocketException {
       throw Exception('No se pudo conectar con la API');

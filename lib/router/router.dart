@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:test_face/screens/probador.dart';
 
+import '../core/services/auth_service.dart';
 import '../screens/Login.dart';
 import '../screens/Home.dart';
 import '../eye_tracking_page.dart';
-//import '../screens/Probador.dart';
 import '../screens/servicio.dart';
 import '../screens/cliente.dart';
 import '../screens/work_assistant_screen.dart';
@@ -13,6 +13,13 @@ import '../work_assistant_args.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
+  redirect: (BuildContext context, GoRouterState state) {
+    final loggedIn = AuthSession.isLoggedIn;
+    final onLogin = state.matchedLocation == '/';
+    if (!loggedIn && !onLogin) return '/';
+    if (loggedIn && onLogin) return '/home';
+    return null;
+  },
   routes: <GoRoute>[
     GoRoute(
       path: '/',
@@ -29,12 +36,6 @@ final GoRouter appRouter = GoRouter(
       name: 'camera',
       builder: (BuildContext context, GoRouterState state) => EyeTrackingPage(),
     ),
- //   GoRoute(
- //     path: '/probador',
- //     name: 'probador',
- //     builder: (BuildContext context, GoRouterState state) =>
-  //        const ProbadorScreen(),
- //   ),
     GoRoute(
       path: '/selection',
       name: 'selection',
@@ -45,7 +46,7 @@ final GoRouter appRouter = GoRouter(
       path: '/servicio',
       name: 'servicio',
       builder: (BuildContext context, GoRouterState state) {
-        final nombre = state.extra as String?; 
+        final nombre = state.extra as String?;
         return ServicioPage(nombre: nombre ?? 'Cliente');
       },
     ),

@@ -9,6 +9,43 @@ import 'package:test_face/core/services/agenda_service.dart';
 import 'package:test_face/core/services/auth_service.dart';
 import 'package:test_face/screens/probador.dart';
 
+class _LogoutButton extends StatelessWidget {
+  const _LogoutButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 35,
+      right: 12,
+      child: GestureDetector(
+        onTap: () async {
+          await AuthService.logout();
+          if (context.mounted) context.go('/');
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(80),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white24),
+              ),
+              child: const Icon(
+                Icons.logout,
+                color: Colors.white,
+                size: 28,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -116,6 +153,7 @@ class _HomePageState extends State<HomePage> {
                   child: _safeImage("assets/chica2.png"),
                 ),
                 EyeTrackingBackButton(onTap: () => Navigator.pop(context)),
+                const _LogoutButton(),
               ],
             ),
 
@@ -302,7 +340,7 @@ class EyeTrackingBackButton extends StatelessWidget {
             filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
             child: Container(
               padding: const EdgeInsets.all(10),
-              color: Colors.white.withOpacity(0.2),
+              color: Colors.white.withValues(alpha: 0.2),
               child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
             ),
           ),

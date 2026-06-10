@@ -1,6 +1,6 @@
 /// Configuración central de la API (mismo esquema que Swagger en `/api/docs`).
 class ApiConfig {
-  static const String host = 'http://136.115.241.231';
+  static const String host = 'http://34.55.150.142';
   static const String apiPrefix = '/api';
 
   /// Rutas relativas al prefijo `/api` (sin duplicar).

@@ -1,9 +1,10 @@
-
 import 'package:flutter/material.dart';
+import 'core/services/auth_service.dart';
 import 'router/router.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AuthService.init();
   runApp(const MyApp());
 }
 
@@ -13,7 +14,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'facemap',
+      title: 'eLashes Operaria',
       debugShowCheckedModeBanner: false,
       routerConfig: appRouter,
       theme: ThemeData(
