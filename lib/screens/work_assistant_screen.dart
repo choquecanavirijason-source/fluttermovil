@@ -577,7 +577,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
           ],
         ),
         Positioned(
-          top: seamY - 28,
+          top: seamY + 12,
           left: 14,
           right: 14,
           child: _assistantFloatingBar(),
@@ -598,6 +598,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
           Positioned.fill(
             child: Transform.flip(
               flipX: _mirrorPrefetchTopPanel,
+              flipY: true,
               child: Image.memory(
                 prefBytes,
                 fit: BoxFit.cover,

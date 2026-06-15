@@ -12,11 +12,34 @@ class ApiConfig {
   static const String agendaAppointmentsMobileAvailable =
       '$apiPrefix/agenda/appointments/mobile/available';
   static const String clients = '$apiPrefix/clients/';
-  /// Catálogo de servicios (si el backend lo expone; ver `AgendaService.fetchMobileServices`).
+  /// Seguimiento por cliente (ficha): diseño/efecto/volumen aplicados.
+  static const String tracking = '$apiPrefix/tracking/';
+  /// Cierre diario: citas + comisión por profesional y fecha.
+  static const String reportsDailyClosing = '$apiPrefix/reports/daily-closing';
+  /// Catálogo de servicios.
   static const String servicesList = '$apiPrefix/services/';
+  /// Categorías de servicios — contiene el campo `is_mobile`.
+  static const String servicesCategories = '$apiPrefix/services/categories';
+
+  /// Catálogo de modelos (mismos que la app admin). Todos exponen `image`.
+  static const String catalogLashDesigns = '$apiPrefix/catalogs/lash-designs';
+  static const String catalogEyeTypes = '$apiPrefix/catalogs/eye-types';
+  static const String catalogEffects = '$apiPrefix/catalogs/effects';
+  static const String catalogVolumes = '$apiPrefix/catalogs/volumes';
 
   /// Sucursal por defecto para filtros de agenda.
   static const int defaultBranchId = 1;
+
+  /// URL absoluta para imágenes servidas por el backend (mount `/media`).
+  /// Acepta rutas `/media/...`, relativas, o URLs ya absolutas (http/https).
+  static String? mediaUrl(String? path) {
+    if (path == null) return null;
+    final p = path.trim();
+    if (p.isEmpty) return null;
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    final rel = p.startsWith('/') ? p : '/$p';
+    return '$host$rel';
+  }
 
   /// [path] puede ser `auth/login`, `/auth/login` o una ruta ya bajo `/api/`.
   static Uri uri(String path, {Map<String, dynamic>? queryParameters}) {

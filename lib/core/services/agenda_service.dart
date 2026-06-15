@@ -50,35 +50,70 @@ class AgendaService {
         .toList();
   }
 
-  /// Intenta listar servicios con categoría móvil vía `GET /api/services/`.
-  /// Si el backend no expone la ruta, deduplica desde citas móviles disponibles.
+  /// Obtiene los IDs de categorías con `is_mobile == true` desde `/api/services/categories`.
+  static Future<Set<int>> _fetchMobileCategoryIds() async {
+    final body = await ApiClient.get(ApiConfig.servicesCategories);
+    final decoded = jsonDecode(body);
+    if (decoded is! List) return {};
+    final ids = <int>{};
+    for (final e in decoded) {
+      if (e is! Map) continue;
+      final m = Map<String, dynamic>.from(e);
+      if (m['is_mobile'] == true) {
+        final id = (m['id'] as num?)?.toInt();
+        if (id != null) ids.add(id);
+      }
+    }
+    return ids;
+  }
+
+  /// Lista servicios cuya categoría tenga `is_mobile == true`.
+  /// Fuente primaria: categorías desde `/api/services/categories` + servicios desde `/api/services/`.
+  /// Fallback: deduplica servicios desde citas móviles disponibles.
   static Future<List<CatalogServiceItem>> fetchMobileServices({
     int? branchId,
     int limitAppointments = 300,
   }) async {
     try {
+      // 1. Obtener qué categorías son móviles.
+      final mobileCatIds = await _fetchMobileCategoryIds();
+
+      // 2. Obtener todos los servicios.
       final body = await ApiClient.get(
         ApiConfig.servicesList,
-        queryParameters: {
-          'skip': 0,
-          'limit': 500,
-        },
+        queryParameters: {'skip': 0, 'limit': 500},
       );
       final decoded = jsonDecode(body);
-      if (decoded is! List) {
-        throw const FormatException('Lista de servicios inválida');
-      }
+      if (decoded is! List) throw const FormatException('Lista de servicios inválida');
+
       final out = <CatalogServiceItem>[];
       for (final e in decoded) {
         if (e is! Map) continue;
         final m = Map<String, dynamic>.from(e);
+
+        // Determinar si el servicio es móvil por su categoría.
+        bool isMobile = false;
         final cat = m['category'] is Map
             ? Map<String, dynamic>.from(m['category'] as Map)
             : null;
-        final isMobile = cat?['is_mobile'] == true;
+        if (cat != null) {
+          // La respuesta incluye el objeto categoría embebido.
+          if (cat['is_mobile'] == true) {
+            isMobile = true;
+          } else if (mobileCatIds.isNotEmpty) {
+            final catId = (cat['id'] as num?)?.toInt();
+            if (catId != null && mobileCatIds.contains(catId)) isMobile = true;
+          }
+        } else if (mobileCatIds.isNotEmpty) {
+          // La respuesta solo trae category_id.
+          final catId = (m['category_id'] as num?)?.toInt();
+          if (catId != null && mobileCatIds.contains(catId)) isMobile = true;
+        }
+
         if (!isMobile) continue;
         out.add(CatalogServiceItem.fromServiceMap(m));
       }
+
       if (out.isEmpty) {
         return _mobileServicesFromAppointments(
           branchId: branchId,

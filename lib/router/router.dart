@@ -8,8 +8,12 @@ import '../screens/Home.dart';
 import '../eye_tracking_page.dart';
 import '../screens/servicio.dart';
 import '../screens/cliente.dart';
+import '../screens/catalogo.dart';
+import '../screens/mi_dia.dart';
+import '../screens/recomendacion.dart';
 import '../screens/work_assistant_screen.dart';
 import '../work_assistant_args.dart';
+import '../recommendation_args.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -55,6 +59,26 @@ final GoRouter appRouter = GoRouter(
       name: 'cliente',
       builder: (BuildContext context, GoRouterState state) =>
           const ClientePage(),
+    ),
+    GoRoute(
+      path: '/catalogo',
+      name: 'catalogo',
+      builder: (BuildContext context, GoRouterState state) =>
+          const CatalogoScreen(),
+    ),
+    GoRoute(
+      path: '/mi-dia',
+      name: 'mi-dia',
+      builder: (BuildContext context, GoRouterState state) =>
+          const MiDiaScreen(),
+    ),
+    GoRoute(
+      path: '/recomendacion',
+      name: 'recomendacion',
+      builder: (BuildContext context, GoRouterState state) {
+        final args = state.extra as RecommendationArgs;
+        return RecomendacionScreen(args: args);
+      },
     ),
     GoRoute(
       path: '/work-assistant',

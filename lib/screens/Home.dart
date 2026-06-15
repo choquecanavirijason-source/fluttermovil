@@ -184,6 +184,8 @@ class _HomePageState extends State<HomePage> {
                         }),
                         _actionButton(Icons.auto_awesome_mosaic, "Servicio", Colors.black, () => context.push('/servicio')),
                         _actionButton(Icons.person_outline, "Cliente", const Color(0xFFBFA36F), () => context.push('/cliente')),
+                        _actionButton(Icons.style, "Modelos", const Color(0xFF144C38), () => context.push('/catalogo')),
+                        _actionButton(Icons.savings_outlined, "Mi día", const Color(0xFF0C4B36), () => context.push('/mi-dia')),
                       ],
                     ),
 

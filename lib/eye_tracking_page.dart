@@ -8,9 +8,12 @@ import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'core/recommendation/eye_shape_analyzer.dart';
+import 'eye_tracking_mapping_painter.dart';
 import 'eye_tracking_model.dart';
 import 'eye_tracking_painter.dart';
 import 'native_eye_tracking_service.dart';
+import 'recommendation_args.dart';
 import 'screens/widgets/bottom_carousel.dart';
 import 'screens/widgets/eye_tracking_bottom_actions.dart';
 import 'screens/widgets/eye_tracking_design_menu_bar.dart';
@@ -62,6 +65,8 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
   ];
 
   static const List<String> _designOptions = ['Medio', 'Ligero', 'Alto', 'Medio'];
+
+  bool _showMapping = false;
 
   int _selectedFilter = 0;
   int _selectedLashIndex = 0;
@@ -190,7 +195,10 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
 
-    setState(() => _previewSession++);
+    setState(() {
+      _previewSession++;
+      _showMapping = false;
+    });
 
     await Future<void>.delayed(const Duration(milliseconds: 150));
     if (!mounted) return;
@@ -251,6 +259,31 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
     }
   }
 
+  /// Flujo IA: captura la vista actual + analiza la forma del ojo on-device
+  /// y abre la pantalla de recomendación de modelos del catálogo.
+  Future<void> _openRecommendationFlow() async {
+    if (_workAssistantOpening) return;
+    _workAssistantOpening = true;
+    if (mounted) setState(() {});
+    try {
+      final analysis = EyeShapeAnalyzer.analyze(_frame);
+      final png = await _capturePreviewPng();
+      if (!mounted) return;
+
+      await context.push(
+        '/recomendacion',
+        extra: RecommendationArgs(
+          analysis: analysis,
+          photoPngBytes: png,
+          mirrorPhoto: true,
+        ),
+      );
+    } finally {
+      _workAssistantOpening = false;
+      if (mounted) setState(() {});
+    }
+  }
+
   void _beginWorkAssistantFlow() {
     if (!Platform.isAndroid) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -262,7 +295,10 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
     }
     if (_workAssistantOpening || _assistantCountdown != null) return;
 
-    setState(() => _assistantCountdown = 3);
+    setState(() {
+      _assistantCountdown = 3;
+      _showMapping = true;
+    });
     _assistantFlowTimer?.cancel();
     _assistantFlowTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) {
@@ -339,6 +375,13 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
                         ),
                       ),
                     ),
+                    if (_showMapping)
+                      Positioned.fill(
+                        child: CustomPaint(
+                          isComplex: true,
+                          painter: LashMappingPainter(frame: _frame),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -358,6 +401,35 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
             ),
             EyeTrackingWorkAssistantButton(
               onTap: _beginWorkAssistantFlow,
+            ),
+            Positioned(
+              top: 35,
+              right: 64,
+              child: Tooltip(
+                message: 'Recomendación IA: sugerir diseño según la forma del ojo',
+                child: GestureDetector(
+                  onTap: _workAssistantOpening ? null : _openRecommendationFlow,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(80),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFBFA36F).withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(80),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Icon(
+                          Icons.auto_awesome,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
             EyeTrackingFilterRow(
               selectedFilter: _selectedFilter,

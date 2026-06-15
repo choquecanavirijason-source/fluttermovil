@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'core/services/auth_service.dart';
+import 'core/theme/app_theme.dart';
 import 'router/router.dart';
 
 void main() async {
@@ -17,9 +18,7 @@ class MyApp extends StatelessWidget {
       title: 'eLashes Operaria',
       debugShowCheckedModeBanner: false,
       routerConfig: appRouter,
-      theme: ThemeData(
-        primarySwatch: Colors.teal,
-      ),
+      theme: AppTheme.light,
     );
   }
 }
