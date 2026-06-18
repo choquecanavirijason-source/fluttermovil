@@ -1,81 +1,111 @@
 import 'package:flutter/material.dart';
 
-/// Paleta de marca eLashes (verde profundo + dorado).
-/// Fuente única de color para toda la app.
-class AppColors {
-  AppColors._();
+import 'app_colors.dart';
+import 'text_styles.dart';
 
-  static const Color brand = Color(0xFF0C4B36);
-  static const Color brandDark = Color(0xFF144C38);
-  static const Color gold = Color(0xFFBFA36F);
-  static const Color background = Color(0xFFF6F8F7);
-  static const Color surface = Colors.white;
-  static const Color danger = Color(0xFFE5484D);
-  static const Color success = Color(0xFF2E7D32);
-}
+// Re-export para que las pantallas que importan `app_theme.dart` sigan
+// accediendo a `AppColors` durante la migración.
+export 'app_colors.dart';
 
-/// Tema Material 3 de la app, derivado de [AppColors].
 class AppTheme {
   AppTheme._();
 
-  static ThemeData get light {
+  static ThemeData light() {
     final scheme = ColorScheme.fromSeed(
-      seedColor: AppColors.brand,
-      primary: AppColors.brand,
-      secondary: AppColors.gold,
-      surface: AppColors.surface,
+      seedColor: AppColors.brandPrimary,
       brightness: Brightness.light,
     );
+    return _base(scheme);
+  }
 
-    return ThemeData(
-      useMaterial3: true,
+  static ThemeData dark() {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: AppColors.brandPrimary,
+      brightness: Brightness.dark,
+    ).copyWith(
+      surface: AppColors.darkBg,
+      surfaceContainerLowest: AppColors.darkBg,
+      surfaceContainerLow: AppColors.darkCard,
+      surfaceContainer: AppColors.darkCard,
+      surfaceContainerHigh: AppColors.darkCardElevated,
+      surfaceContainerHighest: AppColors.darkCardElevated,
+      primary: AppColors.brandAccent,
+      onSurface: Colors.white,
+      onSurfaceVariant: AppColors.textFaint,
+      outline: const Color(0xFF2A2A2A),
+      outlineVariant: const Color(0xFF1E1E1E),
+    );
+    return _base(scheme).copyWith(
+      scaffoldBackgroundColor: AppColors.darkBg,
+    );
+  }
+
+  static ThemeData _base(ColorScheme scheme) {
+    final base = ThemeData(
       colorScheme: scheme,
-      scaffoldBackgroundColor: AppColors.background,
-      primaryColor: AppColors.brand,
-      appBarTheme: const AppBarTheme(
-        backgroundColor: AppColors.brand,
-        foregroundColor: Colors.white,
+      useMaterial3: true,
+      visualDensity: VisualDensity.adaptivePlatformDensity,
+    );
+
+    return base.copyWith(
+      textTheme: AppTextStyles.buildTextTheme(base.textTheme),
+      scaffoldBackgroundColor: scheme.surface,
+      appBarTheme: AppBarTheme(
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         elevation: 0,
+        scrolledUnderElevation: 0.5,
         centerTitle: false,
-        titleTextStyle: TextStyle(
-          color: Colors.white,
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-        ),
-        iconTheme: IconThemeData(color: Colors.white),
+        titleTextStyle: AppTextStyles.buildTextTheme(base.textTheme)
+            .titleLarge
+            ?.copyWith(fontWeight: FontWeight.w600, color: scheme.onSurface),
+      ),
+      cardTheme: const CardThemeData(
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: AppColors.brand,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+          backgroundColor: AppColors.goldAccent,
+          foregroundColor: Colors.black87,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+          ),
+          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12)),
           ),
         ),
       ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.brand,
-          foregroundColor: Colors.white,
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: const OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+          borderSide: BorderSide.none,
         ),
       ),
-      textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(foregroundColor: AppColors.brand),
+      dividerTheme: DividerThemeData(
+        color: scheme.outlineVariant,
+        thickness: 0.5,
+        space: 0.5,
       ),
-      progressIndicatorTheme:
-          const ProgressIndicatorThemeData(color: AppColors.brand),
-      chipTheme: const ChipThemeData(
-        selectedColor: AppColors.brand,
-        showCheckmark: false,
-      ),
-      floatingActionButtonTheme: const FloatingActionButtonThemeData(
-        backgroundColor: AppColors.brand,
-        foregroundColor: Colors.white,
-      ),
-      snackBarTheme: const SnackBarThemeData(
-        backgroundColor: AppColors.brandDark,
-        contentTextStyle: TextStyle(color: Colors.white),
+      snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
+        backgroundColor: scheme.inverseSurface,
+        contentTextStyle: TextStyle(color: scheme.onInverseSurface),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+        ),
       ),
     );
   }

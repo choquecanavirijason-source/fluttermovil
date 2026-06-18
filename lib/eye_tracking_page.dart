@@ -152,7 +152,7 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
 
   void _goHome(BuildContext context) {
     if (!context.mounted) return;
-    context.go('/home');
+    context.go('/');
   }
 
   void _onFilterSelect(int index) {

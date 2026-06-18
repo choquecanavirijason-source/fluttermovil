@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:test_face/eye_tracking_page.dart';
 
 class ProbadorScreen extends StatefulWidget {
@@ -47,74 +46,64 @@ class _ProbadorScreenState extends State<ProbadorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    const gold = Color(0xFFD4A517);
     return Scaffold(
-      backgroundColor: const Color(0xFF0C4B36),
+      backgroundColor: const Color(0xFF094732),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Ícono de espejo/cámara
-            Image.asset(
-              "assets/espejo.png",
-              width: 100,
-              height: 100,
-              errorBuilder: (context, error, stackTrace) {
-                return const Icon(
-                  Icons.camera_front,
-                  size: 100,
-                  color: Colors.white,
-                );
-              },
-            ),
-
-            const SizedBox(height: 40),
-
-            const Column(
-              children: [
-                Text(
-                  "Preparando cámara...",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                SizedBox(height: 10), // separación
-                Text(
-                  "Abriendo cámara en breve...",
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 30),
-
+            // Espejo dentro de un anillo dorado tenue.
             Container(
               width: 150,
               height: 150,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                    color: const Color.fromARGB(0, 255, 255, 255), width: 4),
+                    color: gold.withValues(alpha: 0.5), width: 2),
               ),
               child: Center(
-                child: Opacity(
-                  opacity: 0,
-                  child: Text(
-                    '$_secondsRemaining',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 60,
-                      fontWeight: FontWeight.bold,
-                    ),
+                child: Image.asset(
+                  "assets/espejo.png",
+                  width: 84,
+                  height: 84,
+                  color: Colors.white,
+                  errorBuilder: (context, error, stackTrace) => const Icon(
+                    Icons.remove_red_eye_outlined,
+                    size: 84,
+                    color: Colors.white,
                   ),
                 ),
               ),
             ),
-
-            const SizedBox(height: 40),
+            const SizedBox(height: 28),
+            const Text(
+              "Probador",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              "Estamos escaneando el modelo\nde tus ojos…",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.7),
+                fontSize: 14,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 32),
+            const SizedBox(
+              width: 26,
+              height: 26,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.4,
+                valueColor: AlwaysStoppedAnimation(gold),
+              ),
+            ),
           ],
         ),
       ),

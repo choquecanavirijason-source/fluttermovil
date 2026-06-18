@@ -1,7 +1,6 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:test_face/screens/Home.dart';
 
 class EyeTrackingBackButton extends StatelessWidget {
   final VoidCallback onTap;
@@ -17,12 +16,7 @@ class EyeTrackingBackButton extends StatelessWidget {
       top: 35,
       left: 12,
       child: GestureDetector(
-        onTap: () {
-  Navigator.push(
-    context,
-    MaterialPageRoute(builder: (context) => const HomePage()),
-  );
-},
+        onTap: onTap,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(80),
           child: BackdropFilter(

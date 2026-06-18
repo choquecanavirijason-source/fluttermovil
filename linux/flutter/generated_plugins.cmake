@@ -3,11 +3,11 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  face_detection_tflite
+  flutter_secure_storage_linux
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
-  tflite_flutter_custom
+  jni
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)
