@@ -90,7 +90,8 @@ class _Content extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
+      padding: EdgeInsets.fromLTRB(
+          16, 18, 16, 32 + MediaQuery.of(context).padding.bottom),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -2,14 +2,16 @@ import '../../../../core/config/env.dart';
 import '../../data/models/catalog_item_dto.dart';
 
 /// Tipo de modelo de catálogo (espejo de `/api/catalogs/...`).
-enum CatalogKind { lashDesign, eyeType, effect, volume }
+/// El orden y los nombres coinciden con el menú "Diseño Pestañas" del admin
+/// para mantener consistencia entre apps.
+enum CatalogKind { effect, eyeType, volume, lashDesign }
 
 extension CatalogKindX on CatalogKind {
   String get label => switch (this) {
-        CatalogKind.lashDesign => 'Diseños',
-        CatalogKind.eyeType => 'Tipos de ojo',
         CatalogKind.effect => 'Efectos',
-        CatalogKind.volume => 'Volúmenes',
+        CatalogKind.eyeType => 'Tipo de ojo',
+        CatalogKind.volume => 'Volumen',
+        CatalogKind.lashDesign => 'Diseños',
       };
 }
 

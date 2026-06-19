@@ -86,7 +86,9 @@ class _ClientesScreenState extends ConsumerState<ClientesScreen> {
                       );
                     }
                     return ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.fromLTRB(
+                          16, 4, 16, 24 + MediaQuery.of(context).padding.bottom),
                       itemCount: clients.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, i) =>

@@ -6,8 +6,10 @@ class AppRoutes {
   static const String splash = '/splash';
   static const String login = '/login';
 
-  // Shell (privado)
+  // Privado: Inicio es la pantalla central (sin barra de pestañas).
   static const String shell = '/';
+  static const String comision = '/comision';
+  static const String perfil = '/perfil';
 
   // Probador AR / IA (pantallas existentes, aún sobre la capa antigua)
   static const String camera = '/camera';

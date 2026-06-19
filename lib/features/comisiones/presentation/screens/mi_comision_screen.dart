@@ -237,7 +237,9 @@ class _Body extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(
+          16, 12, 16, 28 + MediaQuery.of(context).padding.bottom),
       children: [
         _SummaryCard(data: data, money: money),
         const SizedBox(height: 18),
@@ -352,12 +354,16 @@ class _Mini extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                   color: Colors.white,
                   fontSize: 14,
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 2),
           Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.7), fontSize: 11)),
         ],

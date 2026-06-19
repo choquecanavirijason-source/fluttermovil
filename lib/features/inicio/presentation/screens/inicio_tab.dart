@@ -6,9 +6,9 @@ import 'package:intl/intl.dart';
 import '../../../../core/router/routes.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../comisiones/presentation/providers/comisiones_provider.dart';
-import '../../../shell/presentation/providers/shell_tab_provider.dart';
 
-/// Inicio ("Descubre Tu Mejor Mirada"): hero + accesos Probador/Servicio/Cliente.
+/// Inicio ("Descubre Tu Mejor Mirada"): pantalla central de la app.
+/// Sin barra de pestañas: navegación por íconos/botones.
 class InicioTab extends ConsumerWidget {
   const InicioTab({super.key});
 
@@ -27,7 +27,7 @@ class InicioTab extends ConsumerWidget {
       body: ListView(
         padding: EdgeInsets.zero,
         children: [
-          // Hero con foto y curva inferior.
+          // Hero con foto, curva inferior y botón de perfil arriba.
           ClipPath(
             clipper: _HeroClipper(),
             child: SizedBox(
@@ -53,9 +53,17 @@ class InicioTab extends ConsumerWidget {
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
-                        colors: [Color(0x22000000), Colors.transparent],
-                        stops: [0.0, 0.4],
+                        colors: [Color(0x55000000), Colors.transparent],
+                        stops: [0.0, 0.45],
                       ),
+                    ),
+                  ),
+                  Positioned(
+                    top: MediaQuery.of(context).padding.top + 8,
+                    right: 14,
+                    child: _CircleIconButton(
+                      icon: Icons.person_outline,
+                      onTap: () => context.push(AppRoutes.perfil),
                     ),
                   ),
                 ],
@@ -68,7 +76,6 @@ class InicioTab extends ConsumerWidget {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Text(
                     'Descubre Tu Mejor Mirada',
@@ -90,42 +97,87 @@ class InicioTab extends ConsumerWidget {
                         color: cs.onSurfaceVariant),
                   ),
                   const SizedBox(height: 22),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    alignment: WrapAlignment.center,
+                  Row(
                     children: [
-                      _ActionPill(
-                        icon: Icons.remove_red_eye_outlined,
-                        label: 'Probador',
-                        background: AppColors.brandPrimary,
-                        foreground: Colors.white,
-                        onTap: () => context.push(AppRoutes.selection),
+                      Expanded(
+                        child: _ActionPill(
+                          icon: Icons.remove_red_eye_outlined,
+                          label: 'Probador',
+                          background: AppColors.brandPrimary,
+                          foreground: Colors.white,
+                          onTap: () => context.push(AppRoutes.selection),
+                        ),
                       ),
-                      _ActionPill(
-                        icon: Icons.auto_awesome_mosaic_outlined,
-                        label: 'Servicio',
-                        background: AppColors.brandSidebar,
-                        foreground: Colors.white,
-                        onTap: () => context.push(AppRoutes.servicio),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _ActionPill(
+                          icon: Icons.auto_awesome_mosaic_outlined,
+                          label: 'Servicio',
+                          background: AppColors.brandSidebar,
+                          foreground: Colors.white,
+                          onTap: () => context.push(AppRoutes.servicio),
+                        ),
                       ),
-                      _ActionPill(
-                        icon: Icons.person_outline,
-                        label: 'Cliente',
-                        background: AppColors.goldAccent,
-                        foreground: Colors.black87,
-                        onTap: () =>
-                            ref.read(shellTabProvider.notifier).state = 1,
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _ActionPill(
+                          icon: Icons.person_outline,
+                          label: 'Cliente',
+                          background: AppColors.goldAccent,
+                          foreground: Colors.black87,
+                          onTap: () => context.push(AppRoutes.cliente),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _ActionPill(
+                          icon: Icons.savings_outlined,
+                          label: 'Comisión',
+                          background: AppColors.brandAccent,
+                          foreground: Colors.white,
+                          onTap: () => context.push(AppRoutes.comision),
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 26),
-                  _CommissionStrip(commission: commission, money: _money),
+                  _CommissionStrip(
+                    commission: commission,
+                    money: _money,
+                    onTap: () => context.push(AppRoutes.comision),
+                  ),
                 ],
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CircleIconButton extends StatelessWidget {
+  const _CircleIconButton({required this.icon, required this.onTap});
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.28),
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Icon(icon, color: Colors.white, size: 24),
+        ),
       ),
     );
   }
@@ -174,15 +226,19 @@ class _ActionPill extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(30),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(icon, color: foreground, size: 20),
               const SizedBox(width: 8),
-              Text(label,
-                  style: TextStyle(
-                      color: foreground, fontWeight: FontWeight.bold)),
+              Flexible(
+                child: Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: foreground, fontWeight: FontWeight.bold)),
+              ),
             ],
           ),
         ),
@@ -192,59 +248,74 @@ class _ActionPill extends StatelessWidget {
 }
 
 class _CommissionStrip extends StatelessWidget {
-  const _CommissionStrip({required this.commission, required this.money});
+  const _CommissionStrip({
+    required this.commission,
+    required this.money,
+    required this.onTap,
+  });
 
   final AsyncValue<dynamic> commission;
   final NumberFormat money;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [AppColors.brandPrimary, AppColors.brandSidebar],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.savings_outlined,
-              color: AppColors.goldAccent, size: 26),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Comisión de hoy',
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
-                        fontSize: 13)),
-                const SizedBox(height: 2),
-                commission.when(
-                  loading: () => const Text('…',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900)),
-                  error: (_, __) => const Text('—',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900)),
-                  data: (d) => Text(money.format(d.commission),
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.w900)),
-                ),
-              ],
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [AppColors.brandPrimary, AppColors.brandSidebar],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
+            borderRadius: BorderRadius.circular(18),
           ),
-        ],
+          child: Row(
+            children: [
+              const Icon(Icons.savings_outlined,
+                  color: AppColors.goldAccent, size: 26),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Comisión de hoy',
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            fontSize: 13)),
+                    const SizedBox(height: 2),
+                    commission.when(
+                      loading: () => const Text('…',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900)),
+                      error: (e, _) => const Text('—',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900)),
+                      data: (d) => Text(money.format(d.commission),
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900)),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right,
+                  color: Colors.white.withValues(alpha: 0.7)),
+            ],
+          ),
+        ),
       ),
     );
   }

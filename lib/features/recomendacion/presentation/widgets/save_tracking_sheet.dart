@@ -259,14 +259,11 @@ class _SaveTrackingSheetState extends ConsumerState<SaveTrackingSheet> {
                 style: TextStyle(color: cs.onSurfaceVariant)),
           )
         else
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 220),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _results.length,
-              itemBuilder: (context, i) {
-                final c = _results[i];
-                return ListTile(
+          // Sin scroll anidado: la hoja (DraggableScrollableSheet) ya scrollea.
+          Column(
+            children: [
+              for (final c in _results)
+                ListTile(
                   dense: true,
                   leading: const Icon(Icons.person_outline,
                       color: AppColors.goldAccent),
@@ -277,9 +274,8 @@ class _SaveTrackingSheetState extends ConsumerState<SaveTrackingSheet> {
                           style: TextStyle(color: cs.onSurfaceVariant))
                       : null,
                   onTap: () => setState(() => _selected = c),
-                );
-              },
-            ),
+                ),
+            ],
           ),
       ],
     );

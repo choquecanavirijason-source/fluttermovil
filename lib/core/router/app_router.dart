@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 import '../../features/auth/presentation/providers/auth_state_provider.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/splash_screen.dart';
-import '../../features/shell/presentation/screens/app_shell.dart';
+import '../../features/inicio/presentation/screens/inicio_tab.dart';
+import '../../features/comisiones/presentation/screens/mi_comision_screen.dart';
+import '../../features/perfil/presentation/screens/perfil_tab.dart';
 // Pantallas existentes (capa antigua, accesibles vía puente de token).
 import '../../eye_tracking_page.dart';
 import '../../screens/probador.dart';
@@ -40,7 +42,15 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: AppRoutes.shell,
-        builder: (_, __) => const AppShell(),
+        builder: (_, __) => const InicioTab(),
+      ),
+      GoRoute(
+        path: AppRoutes.comision,
+        builder: (_, __) => const MiComisionScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.perfil,
+        builder: (_, __) => const PerfilTab(),
       ),
       GoRoute(
         path: AppRoutes.camera,

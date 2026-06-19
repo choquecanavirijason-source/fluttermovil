@@ -40,7 +40,7 @@ class EyeTrackingSideMenu extends StatelessWidget {
           const SizedBox(height: 20),
           _MenuItem(
             asset: 'assets/tecnica.png',
-            label: 'Técnica',
+            label: 'Tecnología',
             onTap: onTechniqueTap,
           ),
           const SizedBox(height: 20),
@@ -81,10 +81,12 @@ class _MenuItem extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           SizedBox(
-            width: 70,
+            width: 94,
             child: label.isNotEmpty
                 ? Text(
                     label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 14,

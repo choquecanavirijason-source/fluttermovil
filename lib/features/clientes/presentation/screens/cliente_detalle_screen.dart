@@ -31,7 +31,9 @@ class ClienteDetalleScreen extends ConsumerWidget {
                 .firstWhere((e) => e != null && e.isNotEmpty,
                     orElse: () => null);
             return ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(
+                  16, 16, 16, 28 + MediaQuery.of(context).padding.bottom),
               children: [
                 _ClientCard(client: client, eyeType: eyeType),
                 const SizedBox(height: 18),

@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show Factory;
+import 'package:flutter/gestures.dart' show OneSequenceGestureRecognizer;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/rendering.dart'
+    show RenderRepaintBoundary, PlatformViewHitTestBehavior;
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'core/recommendation/eye_shape_analyzer.dart';
@@ -137,6 +139,17 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
     setState(() {
       if (_status == 'Iniciando cámara…') {
         _status = 'Esperando detección…';
+      }
+    });
+
+    // Preview negro en frío: el PreviewView puede no tener superficie lista
+    // cuando CameraX hace el primer bind. Re-enlazamos un par de veces ya
+    // medido el AndroidView para forzar que el vídeo aparezca.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      for (final ms in const [500, 700, 900]) {
+        await Future<void>.delayed(Duration(milliseconds: ms));
+        if (!mounted) return;
+        await _service.refreshPreviewBind();
       }
     });
   }
@@ -355,9 +368,8 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
                   children: [
                     if (Platform.isAndroid)
                       Positioned.fill(
-                        child: AndroidView(
+                        child: _HybridCameraPreview(
                           key: ValueKey<String>('eye_preview_$_previewSession'),
-                          viewType: 'eye_tracking/camera_preview',
                         ),
                       )
                     else
@@ -501,6 +513,40 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Preview de cámara con **Hybrid Composition** (`initExpensiveAndroidView`).
+/// Necesario para que el vídeo de CameraX (TextureView) se renderice; con
+/// `AndroidView` simple el preview salía negro aunque el análisis sí corría.
+class _HybridCameraPreview extends StatelessWidget {
+  const _HybridCameraPreview({super.key});
+
+  static const String _viewType = 'eye_tracking/camera_preview';
+
+  @override
+  Widget build(BuildContext context) {
+    return PlatformViewLink(
+      viewType: _viewType,
+      surfaceFactory: (context, controller) => AndroidViewSurface(
+        controller: controller as AndroidViewController,
+        gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+        hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+      ),
+      onCreatePlatformView: (params) {
+        final controller = PlatformViewsService.initExpensiveAndroidView(
+          id: params.id,
+          viewType: _viewType,
+          layoutDirection: TextDirection.ltr,
+          creationParamsCodec: const StandardMessageCodec(),
+          onFocus: () => params.onFocusChanged(true),
+        );
+        controller
+          ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+          ..create();
+        return controller;
+      },
     );
   }
 }
