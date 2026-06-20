@@ -32,7 +32,8 @@ class EyeTrackingPage extends StatefulWidget {
   State<EyeTrackingPage> createState() => _EyeTrackingPageState();
 }
 
-class _EyeTrackingPageState extends State<EyeTrackingPage> {
+class _EyeTrackingPageState extends State<EyeTrackingPage>
+    with WidgetsBindingObserver {
   final NativeEyeTrackingService _service = NativeEyeTrackingService();
   final GlobalKey _previewCaptureKey = GlobalKey();
 
@@ -107,7 +108,43 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _start();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _sub?.cancel();
+      _sub = null;
+      _service.stopTracking();
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_restartCameraFromLifecycle());
+    }
+  }
+
+  Future<void> _restartCameraFromLifecycle() async {
+    if (!mounted) return;
+    setState(() => _previewSession++);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
+    _sub = _service.trackingStream.listen(
+      (frame) {
+        if (!mounted) return;
+        setState(() {
+          _frame = frame;
+          _status = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
+        });
+      },
+      onError: (Object e, StackTrace st) {
+        if (!mounted) return;
+        setState(() => _status = 'Error: $e');
+      },
+    );
+    await _service.startTracking();
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    await _service.refreshPreviewBind();
   }
 
   Future<void> _start() async {
@@ -156,6 +193,7 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _assistantFlowTimer?.cancel();
     _sub?.cancel();
     _service.stopTracking();
@@ -205,7 +243,7 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
   }
 
   Future<void> _resumeEyePreviewAfterAssistant() async {
-    await Future<void>.delayed(const Duration(milliseconds: 500));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
 
     setState(() {
@@ -213,24 +251,15 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
       _showMapping = false;
     });
 
-    await Future<void>.delayed(const Duration(milliseconds: 150));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          await Future<void>.delayed(const Duration(milliseconds: 650));
-          if (!mounted) return;
-          await _service.startTracking();
-          await Future<void>.delayed(const Duration(milliseconds: 500));
-          if (!mounted) return;
-          await _service.refreshPreviewBind();
-          await Future<void>.delayed(const Duration(milliseconds: 220));
-          if (!mounted) return;
-          setState(() {});
-        });
-      });
-    });
+    await _service.startTracking();
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
+
+    await _service.refreshPreviewBind();
+    if (mounted) setState(() {});
   }
 
   Future<void> _finishWorkAssistantOpen() async {
@@ -283,6 +312,9 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
       final png = await _capturePreviewPng();
       if (!mounted) return;
 
+      await _service.stopTracking();
+      if (!mounted) return;
+
       await context.push(
         '/recomendacion',
         extra: RecommendationArgs(
@@ -291,6 +323,9 @@ class _EyeTrackingPageState extends State<EyeTrackingPage> {
           mirrorPhoto: true,
         ),
       );
+      if (!mounted) return;
+
+      await _resumeEyePreviewAfterAssistant();
     } finally {
       _workAssistantOpening = false;
       if (mounted) setState(() {});

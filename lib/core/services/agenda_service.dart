@@ -13,6 +13,40 @@ class AgendaService {
     return '$y-$m-$day';
   }
 
+  /// Citas de hoy para [professionalId] — todos los estados.
+  static Future<List<MobileAppointment>> fetchTodayAppointments({
+    required int professionalId,
+    int? branchId,
+    DateTime? date,
+  }) async {
+    final d = date ?? DateTime.now();
+    final ymd = _ymd(DateTime(d.year, d.month, d.day));
+
+    final qp = <String, dynamic>{
+      'skip': 0,
+      'limit': 50,
+      'start_date': ymd,
+      'end_date': ymd,
+      'professional_id': professionalId,
+      'branch_id': ?branchId,
+    };
+
+    final body = await ApiClient.get(
+      ApiConfig.agendaAppointments,
+      queryParameters: qp,
+    );
+
+    final decoded = jsonDecode(body);
+    if (decoded is! List) {
+      throw const FormatException('Respuesta de citas inválida');
+    }
+
+    return decoded
+        .map((e) =>
+            MobileAppointment.fromApi(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
   /// Tickets móviles disponibles con `is_ia == true`.
   static Future<List<MobileAppointment>> fetchMobileIaTickets({
     int? branchId,
