@@ -56,6 +56,30 @@ class _InicioTabState extends ConsumerState<InicioTab>
     ref.invalidate(dailyCommissionProvider(todayOnly));
   }
 
+  Future<void> _logout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cerrar sesión'),
+        content: const Text('¿Segura que deseas cerrar sesión?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFE53935)),
+            child: const Text('Cerrar sesión'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await ref.read(authStateProvider.notifier).markSignedOut();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -74,7 +98,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
           padding: EdgeInsets.zero,
           children: [
             // ── Hero con info de operaria ─────────────────────────────
-            _HeroSection(user: user, ticketsAsync: ticketsAsync),
+            _HeroSection(user: user, ticketsAsync: ticketsAsync, onLogout: _logout),
 
             // ── Cuerpo principal ──────────────────────────────────────
             Padding(
@@ -160,10 +184,15 @@ class _InicioTabState extends ConsumerState<InicioTab>
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _HeroSection extends StatelessWidget {
-  const _HeroSection({required this.user, required this.ticketsAsync});
+  const _HeroSection({
+    required this.user,
+    required this.ticketsAsync,
+    required this.onLogout,
+  });
 
   final dynamic user;
   final AsyncValue<List<MobileAppointment>> ticketsAsync;
+  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -216,15 +245,13 @@ class _HeroSection extends StatelessWidget {
                 ),
               ),
             ),
-            // Botón perfil
+            // Botón cerrar sesión
             Positioned(
               top: topPad + 8,
               right: 14,
               child: _CircleIconButton(
-                icon: Icons.person_outline,
-                onTap: (context as Element).findAncestorWidgetOfExactType<Scaffold>() != null
-                    ? () {}
-                    : () {},
+                icon: Icons.logout,
+                onTap: onLogout,
               ),
             ),
             // Info operaria (bottom)
