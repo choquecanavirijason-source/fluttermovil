@@ -13,14 +13,14 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Positioned(
       left: 64,
-      right: 64,
+      right: 72,
       bottom: 24,
       child: SafeArea(
         top: false,
         child: GestureDetector(
           onTap: onTap,
           child: Container(
-            height: 50,
+            height: 37,
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(25),

@@ -68,7 +68,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: const Color(0xFF094732),
+      backgroundColor: const Color.fromARGB(255, 255, 255, 255),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -166,22 +166,27 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipPath(
-      clipper: _BottomCurveClipper(),
-      child: SizedBox(
-        height: 400,
-        width: double.infinity,
-        child: Image.asset(
-          'assets/chica.png',
-          fit: BoxFit.cover,
-          alignment: Alignment.topCenter,
-          errorBuilder: (_, __, ___) => const ColoredBox(
-            color: Color(0xFF094732),
-            child: Center(
-              child: Icon(Icons.person, color: Colors.white38, size: 100),
+    return SizedBox(
+      height: 320,
+      width: double.infinity,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // fondo verde con curva inferior
+          ClipPath(
+            clipper: _BottomCurveClipper(),
+            child: Container(
+              height: 1900,
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                color: Color.fromARGB(255, 255, 255, 255),
+                image: DecorationImage(
+                  image: AssetImage('assets/chica.png')
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:test_face/eye_tracking_page.dart';
-
+import 'package:go_router/go_router.dart';
 class ProbadorScreen extends StatefulWidget {
   const ProbadorScreen({super.key});
 
@@ -31,7 +30,7 @@ class _ProbadorScreenState extends State<ProbadorScreen> {
         // Espera un poco y luego navega
         Future.delayed(const Duration(milliseconds: 100), () {
           if (mounted) {
-            Navigator.push(context, MaterialPageRoute(builder: (context) => EyeTrackingPage()));
+            context.pushReplacement('/camera');
           }
         });
       }

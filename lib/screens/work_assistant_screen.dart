@@ -577,10 +577,13 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
           ],
         ),
         Positioned(
-          top: seamY + 12,
+          top: seamY,
           left: 14,
           right: 14,
-          child: _assistantFloatingBar(),
+          child: FractionalTranslation(
+            translation: const Offset(0, -1.4),
+            child: _assistantFloatingBar(),
+          ),
         ),
       ],
     );
@@ -769,33 +772,53 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     );
   }
 
-  Widget _assistantFloatingBar() {
-    return Material(
-      color: Colors.transparent,
+Widget _assistantFloatingBar() {
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(22),
+    child: BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
       child: Container(
-        padding: const EdgeInsets.only(left: 16, top: 10, bottom: 10, right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(28),
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.18),
+            width: 1,
+          ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 18,
-              offset: const Offset(0, 6),
+              color: Colors.black.withValues(alpha: 0.3),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
         child: Row(
           children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D5C41).withValues(alpha: 0.85),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.remove_red_eye_outlined,
+                color: Colors.white,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
                 _assistantMessage,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  color: Color(0xFF1A1A1A),
-                  fontSize: 14,
-                  height: 1.25,
+                  color: Colors.white,
+                  fontSize: 13,
+                  height: 1.3,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -803,33 +826,39 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
             const SizedBox(width: 8),
             GestureDetector(
               onTap: _analyzing ? null : _runAnalysis,
-              child: Container(
-                width: 46,
-                height: 46,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF0D5C41),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: _analyzing
+                      ? Colors.white.withValues(alpha: 0.15)
+                      : const Color(0xFF0D5C41),
                   shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white24),
                 ),
                 child: _analyzing
                     ? const Padding(
-                        padding: EdgeInsets.all(12),
+                        padding: EdgeInsets.all(11),
                         child: CircularProgressIndicator(
-                          strokeWidth: 2.2,
+                          strokeWidth: 2,
                           color: Colors.white,
                         ),
                       )
                     : const Icon(
                         Icons.smart_toy_outlined,
                         color: Colors.white,
-                        size: 26,
+                        size: 22,
                       ),
               ),
             ),
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
+
 
   Widget _cameraRegion(double bottomInset) {
     final c = _cameraController;

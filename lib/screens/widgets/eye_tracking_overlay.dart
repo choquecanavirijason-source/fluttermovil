@@ -19,10 +19,12 @@ class EyeTrackingOverlay {
     required VoidCallback onTechniqueTap,
     required VoidCallback onEffectTap,
     required VoidCallback onThicknessTap,
+    required VoidCallback onEyeTypeTap,
+    String? activeCategory,
   }) {
     return [
       EyeTrackingBackButton(onTap: onBack),
-      EyeTrackingHeader(title: title),
+      EyeTrackingHeader(title: title, onTap: onEyeTypeTap),
       Positioned(
         left: 12,
         top: 96,
@@ -35,6 +37,7 @@ class EyeTrackingOverlay {
         onTechniqueTap: onTechniqueTap,
         onEffectTap: onEffectTap,
         onThicknessTap: onThicknessTap,
+        activeCategory: activeCategory,
       ),
     ];
   }

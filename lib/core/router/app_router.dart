@@ -79,11 +79,6 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const CatalogoScreen(),
       ),
       GoRoute(
-        path: AppRoutes.recomendacion,
-        builder: (_, state) =>
-            RecomendacionScreen(args: state.extra as RecommendationArgs),
-      ),
-      GoRoute(
         path: AppRoutes.workAssistant,
         builder: (_, state) {
           final extra = state.extra;

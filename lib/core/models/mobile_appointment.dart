@@ -1,5 +1,6 @@
 class MobileAppointment {
   final int id;
+  final int? clientId;
   final String ticketCode;
   final bool isIa;
   final String status;
@@ -11,6 +12,7 @@ class MobileAppointment {
 
   const MobileAppointment({
     required this.id,
+    this.clientId,
     required this.ticketCode,
     required this.isIa,
     required this.status,
@@ -53,6 +55,7 @@ class MobileAppointment {
 
     return MobileAppointment(
       id: (json['id'] as num?)?.toInt() ?? 0,
+      clientId: (client?['id'] as num?)?.toInt(),
       ticketCode: json['ticket_code']?.toString() ?? '#${json['id']}',
       isIa: json['is_ia'] == true,
       status: json['status']?.toString() ?? '',

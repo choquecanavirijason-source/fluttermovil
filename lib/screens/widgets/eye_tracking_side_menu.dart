@@ -9,6 +9,7 @@ class EyeTrackingSideMenu extends StatelessWidget {
   final VoidCallback onTechniqueTap;
   final VoidCallback onEffectTap;
   final VoidCallback onThicknessTap;
+  final String? activeCategory;
 
   const EyeTrackingSideMenu({
     super.key,
@@ -18,6 +19,7 @@ class EyeTrackingSideMenu extends StatelessWidget {
     required this.onTechniqueTap,
     required this.onEffectTap,
     required this.onThicknessTap,
+    this.activeCategory,
   });
 
   @override
@@ -28,32 +30,32 @@ class EyeTrackingSideMenu extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          _MenuItem(asset: 'assets/flash.png', label: '', onTap: onFlashTap),
+          _MenuItem(asset: 'assets/flash.png', onTap: onFlashTap),
           const SizedBox(height: 20),
-          _MenuItem(asset: 'assets/rotar.png', label: '', onTap: onRotateTap),
+          _MenuItem(asset: 'assets/rotar.png', onTap: onRotateTap),
           const SizedBox(height: 20),
           _MenuItem(
             asset: 'assets/diseño.png',
-            label: 'Diseño',
             onTap: onDesignTap,
+            isActive: activeCategory == 'design',
           ),
           const SizedBox(height: 20),
           _MenuItem(
             asset: 'assets/tecnica.png',
-            label: 'Tecnología',
             onTap: onTechniqueTap,
+            isActive: activeCategory == 'tech',
           ),
           const SizedBox(height: 20),
           _MenuItem(
             asset: 'assets/efecto.png',
-            label: 'Efecto',
             onTap: onEffectTap,
+            isActive: activeCategory == 'effect',
           ),
           const SizedBox(height: 20),
           _MenuItem(
             asset: 'assets/grosor.png',
-            label: 'Grosor',
             onTap: onThicknessTap,
+            isActive: activeCategory == 'thickness',
           ),
         ],
       ),
@@ -63,65 +65,48 @@ class EyeTrackingSideMenu extends StatelessWidget {
 
 class _MenuItem extends StatelessWidget {
   final String asset;
-  final String label;
   final VoidCallback onTap;
+  final bool isActive;
 
   const _MenuItem({
     required this.asset,
-    required this.label,
     required this.onTap,
+    this.isActive = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 94,
-            child: label.isNotEmpty
-                ? Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    textAlign: TextAlign.right,
-                  )
-                : null,
-          ),
-          const SizedBox(width: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(50),
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-              child: Container(
-                padding: const EdgeInsets.all(5),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(50),
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: Image.asset(
-                  asset,
-                  width: 24,
-                  height: 24,
-                  errorBuilder: (_, __, ___) => const Icon(
-                    Icons.circle_outlined,
-                    color: Colors.white,
-                    size: 24,
-                  ),
-                ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(50),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? const Color(0xFF0D5C41).withValues(alpha: 0.85)
+                  : Colors.white.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(50),
+              border: Border.all(
+                color: isActive
+                    ? const Color(0xFF0D5C41)
+                    : Colors.white24,
+              ),
+            ),
+            child: Image.asset(
+              asset,
+              width: 24,
+              height: 24,
+              errorBuilder: (_, __, ___) => const Icon(
+                Icons.circle_outlined,
+                color: Colors.white,
+                size: 24,
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }

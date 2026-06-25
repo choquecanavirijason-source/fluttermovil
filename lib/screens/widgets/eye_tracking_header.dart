@@ -5,10 +5,12 @@ import 'package:flutter/material.dart';
 /// Estilo “glass” compacto (referencia GlassHeader).
 class EyeTrackingHeader extends StatelessWidget {
   final String title;
+  final VoidCallback? onTap;
 
   const EyeTrackingHeader({
     super.key,
     required this.title,
+    this.onTap,
   });
 
   @override
@@ -18,7 +20,9 @@ class EyeTrackingHeader extends StatelessWidget {
       left: 0,
       right: 0,
       child: Center(
-        child: ClipRRect(
+        child: GestureDetector(
+          onTap: onTap,
+          child: ClipRRect(
           borderRadius: BorderRadius.circular(18),
           child: BackdropFilter(
             filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
@@ -50,6 +54,7 @@ class EyeTrackingHeader extends StatelessWidget {
               ),
             ),
           ),
+        ),
         ),
       ),
     );
