@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
 import '../../../../core/router/routes.dart';
 import '../../../../core/services/agenda_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_state_provider.dart';
-import '../../../comisiones/presentation/providers/comisiones_provider.dart';
 import '../../../../core/models/mobile_appointment.dart';
+import '../../../../screens/probador.dart';
+import '../../../clientes/domain/entities/client.dart';
+import '../../../clientes/presentation/providers/clientes_provider.dart';
 
 final _todayTicketsProvider =
     FutureProvider.autoDispose<List<MobileAppointment>>((ref) async {
@@ -29,8 +30,6 @@ class InicioTab extends ConsumerStatefulWidget {
 
 class _InicioTabState extends ConsumerState<InicioTab>
     with WidgetsBindingObserver {
-  static final _money =
-      NumberFormat.currency(locale: 'es_BO', symbol: 'Bs ', decimalDigits: 2);
 
   @override
   void initState() {
@@ -50,10 +49,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
   }
 
   Future<void> _refresh() async {
-    final today = DateTime.now();
-    final todayOnly = DateTime(today.year, today.month, today.day);
     ref.invalidate(_todayTicketsProvider);
-    ref.invalidate(dailyCommissionProvider(todayOnly));
   }
 
   Future<void> _logout() async {
@@ -69,7 +65,12 @@ class _InicioTabState extends ConsumerState<InicioTab>
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFE53935)),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.brandPrimary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 2,
+            ),
             child: const Text('Cerrar sesión'),
           ),
         ],
@@ -83,10 +84,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final today = DateTime.now();
-    final todayOnly = DateTime(today.year, today.month, today.day);
     final user = ref.watch(authUserProvider);
-    final commission = ref.watch(dailyCommissionProvider(todayOnly));
     final ticketsAsync = ref.watch(_todayTicketsProvider);
 
     return Scaffold(
@@ -102,15 +100,13 @@ class _InicioTabState extends ConsumerState<InicioTab>
 
             // ── Cuerpo principal ──────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 20, 18, 28),
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Stats row
                   _StatsRow(
                     ticketsAsync: ticketsAsync,
-                    commission: commission,
-                    money: _money,
                     skillLevel: user?.skillLevel,
                   ),
                   const SizedBox(height: 24),
@@ -126,7 +122,11 @@ class _InicioTabState extends ConsumerState<InicioTab>
                           label: 'Probador',
                           background: AppColors.brandPrimary,
                           foreground: Colors.white,
-                          onTap: () => context.push(AppRoutes.selection),
+                          onTap: () {
+                            ref.read(sessionClientProvider.notifier).state =
+                                null;
+                            context.push(AppRoutes.selection);
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -207,7 +207,7 @@ class _HeroSection extends StatelessWidget {
     return ClipPath(
       clipper: _HeroClipper(),
       child: SizedBox(
-        height: 400 + topPad,
+        height: 420,
         width: double.infinity,
         child: Stack(
           fit: StackFit.expand,
@@ -216,7 +216,7 @@ class _HeroSection extends StatelessWidget {
             Image.asset(
               'assets/chica2.png',
               fit: BoxFit.cover,
-              alignment: const Alignment(0, 1.5),
+              alignment: const Alignment(0, 2.0),
               errorBuilder: (_, e, _) => const ColoredBox(
                 color: AppColors.brandPrimary,
                 child: Center(
@@ -225,7 +225,7 @@ class _HeroSection extends StatelessWidget {
                 ),
               ),
             ),
-            // Gradiente superior (para botón de perfil)
+            // Gradiente superior
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -235,7 +235,7 @@ class _HeroSection extends StatelessWidget {
                 ),
               ),
             ),
-            // Gradiente inferior (para info operaria)
+            // Gradiente inferior
             const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -249,10 +249,7 @@ class _HeroSection extends StatelessWidget {
             Positioned(
               top: topPad + 8,
               right: 14,
-              child: _CircleIconButton(
-                icon: Icons.logout,
-                onTap: onLogout,
-              ),
+              child: _StyledLogoutButton(onTap: onLogout),
             ),
             // Info operaria (bottom)
             Positioned(
@@ -382,14 +379,10 @@ class _StatusBadgeHero extends StatelessWidget {
 class _StatsRow extends StatelessWidget {
   const _StatsRow({
     required this.ticketsAsync,
-    required this.commission,
-    required this.money,
     required this.skillLevel,
   });
 
   final AsyncValue<List<MobileAppointment>> ticketsAsync;
-  final AsyncValue<dynamic> commission;
-  final NumberFormat money;
   final int? skillLevel;
 
   static const _activeStatuses = {'pending', 'waiting', 'confirmed', 'in_service'};
@@ -404,10 +397,6 @@ class _StatsRow extends StatelessWidget {
             ?.where((t) => t.status == 'in_service')
             .length ??
         0;
-    final commissionValue = commission.valueOrNull;
-    final commissionStr = commissionValue != null
-        ? money.format(commissionValue.commission)
-        : '—';
 
     return Row(
       children: [
@@ -428,16 +417,6 @@ class _StatsRow extends StatelessWidget {
             label: 'En servicio',
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _StatCard(
-            icon: Icons.savings_outlined,
-            iconColor: AppColors.brandAccent,
-            value: commission.isLoading ? '…' : commissionStr,
-            label: 'Comisión hoy',
-            compact: true,
-          ),
-        ),
       ],
     );
   }
@@ -449,14 +428,12 @@ class _StatCard extends StatelessWidget {
     required this.iconColor,
     required this.value,
     required this.label,
-    this.compact = false,
   });
 
   final IconData icon;
   final Color iconColor;
   final String value;
   final String label;
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -477,7 +454,7 @@ class _StatCard extends StatelessWidget {
             child: Text(
               value,
               style: TextStyle(
-                fontSize: compact ? 13 : 20,
+                fontSize: 20,
                 fontWeight: FontWeight.w900,
                 color: cs.onSurface,
               ),
@@ -523,26 +500,45 @@ class _SectionLabel extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Circle icon button (for hero top-right)
+// Styled logout button
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _CircleIconButton extends StatelessWidget {
-  const _CircleIconButton({required this.icon, required this.onTap});
+class _StyledLogoutButton extends StatelessWidget {
+  const _StyledLogoutButton({required this.onTap});
 
-  final IconData icon;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.black.withValues(alpha: 0.28),
-      shape: const CircleBorder(),
+      color: Colors.black.withValues(alpha: 0.18),
+      borderRadius: BorderRadius.circular(14),
+      elevation: 6,
       child: InkWell(
         onTap: onTap,
-        customBorder: const CircleBorder(),
+        borderRadius: BorderRadius.circular(14),
         child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Icon(icon, color: Colors.white, size: 24),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.brandPrimary.withValues(alpha: 0.18),
+                  border: Border.all(color: Colors.white24, width: 1),
+                ),
+                child: const Icon(Icons.logout, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                'Salir',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -627,14 +623,19 @@ class _ActionPill extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Client list section
+// Client list section  ← CAMBIOS AQUÍ
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _ClientListSection extends StatelessWidget {
+class _ClientListSection extends ConsumerStatefulWidget {
   const _ClientListSection({required this.ticketsAsync});
 
   final AsyncValue<List<MobileAppointment>> ticketsAsync;
 
+  @override
+  ConsumerState<_ClientListSection> createState() => _ClientListSectionState();
+}
+
+class _ClientListSectionState extends ConsumerState<_ClientListSection> {
   static const _activeStatuses = {
     'pending',
     'waiting',
@@ -643,44 +644,331 @@ class _ClientListSection extends StatelessWidget {
   };
 
   @override
+  void didUpdateWidget(covariant _ClientListSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldLatest = _extractLatestClient(oldWidget.ticketsAsync);
+    final newLatest = _extractLatestClient(widget.ticketsAsync);
+    if ((newLatest != null && oldLatest == null) ||
+        (newLatest != null && oldLatest != null && newLatest.id != oldLatest.id))
+     {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Nuevo cliente: ${newLatest.clientDisplayName}'),
+          backgroundColor: AppColors.brandPrimary,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+        ));
+      });
+    } else if (newLatest != null &&
+        oldLatest != null &&
+        newLatest.id != oldLatest.id) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+         content: Text('Nuevo cliente: ${newLatest.clientDisplayName}'),
+          backgroundColor: AppColors.brandPrimary,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+        ));
+      });
+    }
+  }
+
+  // ── devuelve el ÚLTIMO cliente asignado (active.last) ──
+  MobileAppointment? _extractLatestClient(
+      AsyncValue<List<MobileAppointment>> async) {
+    final tickets = async.valueOrNull;
+    if (tickets == null) return null;
+    final active = tickets.where((t) => _activeStatuses.contains(t.status)).toList();
+    if (active.isEmpty) return null;
+    return active.last; // ← último asignado
+  }
+
+  void _showProbadorPopup(MobileAppointment ticket) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        child: SizedBox(
+          width: double.infinity,
+          height: MediaQuery.of(context).size.height * 0.7,
+          child: Column(
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(18.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 150,
+                        height: 150,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: const Color(0xFFD4A517).withOpacity(0.5),
+                              width: 2),
+                        ),
+                        child: Center(
+                          child: Image.asset(
+                            'assets/espejo.png',
+                            width: 84,
+                            height: 84,
+                            color: Colors.black54,
+                            errorBuilder: (_, __, ___) => const Icon(
+                                Icons.remove_red_eye_outlined,
+                                size: 84),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(ticket.clientDisplayName,
+                          style: const TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Servicios: ${ticket.servicesSummary}',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 20),
+                      const Text('Probador',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      const Text('Iniciando probador…',
+                          textAlign: TextAlign.center),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text('Cerrar'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.brandPrimary),
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          if (ticket.clientId != null) {
+                            ref.read(sessionClientProvider.notifier).state =
+                                Client(
+                              id: ticket.clientId!,
+                              displayName: ticket.clientDisplayName,
+                            );
+                          }
+                          context.push(AppRoutes.selection);
+                        },
+                        child: const Text('Abrir probador',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── bottom sheet con la lista completa ──────────────────────
+  void _showAllClientsSheet(List<MobileAppointment> tickets) {
+    final active =
+        tickets.where((t) => _activeStatuses.contains(t.status)).toList();
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.55,
+          minChildSize: 0.35,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (_, scrollController) {
+            return Column(
+              children: [
+                // Handle
+                const SizedBox(height: 10),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                // Título
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Row(
+                    children: [
+                      const Text(
+                        'Todos los clientes de hoy',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 9, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColors.brandPrimary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '${active.length}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.brandPrimary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Divider(height: 1),
+                // Lista
+                Expanded(
+                  child: active.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'Sin clientes asignados para hoy',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: scrollController,
+                          padding: const EdgeInsets.fromLTRB(18, 10, 18, 24),
+                          itemCount: active.length,
+                          itemBuilder: (_, i) => InkWell(
+                            onTap: () {
+                              Navigator.of(ctx).pop();
+                              _showProbadorPopup(active[i]);
+                            },
+                            borderRadius: BorderRadius.circular(14),
+                            child: _ClientRow(ticket: active[i]),
+                          ),
+                        ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const _SectionLabel(label: 'Clientes de hoy'),
-            const Spacer(),
-            ticketsAsync.when(
-              loading: () => const SizedBox.shrink(),
-              error: (e, _) => const SizedBox.shrink(),
-              data: (tickets) {
-                final count = tickets
-                    .where((t) => _activeStatuses.contains(t.status))
-                    .length;
-                if (count == 0) return const SizedBox.shrink();
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.brandPrimary.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    '$count',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.brandPrimary,
+
+        // ── Cabecera con label + botón Ver + badge ─────────────────
+        widget.ticketsAsync.when(
+          loading: () => const _SectionLabel(label: 'Clientes de hoy'),
+          error: (_, __) => const _SectionLabel(label: 'Clientes de hoy'),
+          data: (tickets) {
+            final active = tickets
+                .where((t) => _activeStatuses.contains(t.status))
+                .toList();
+            final count = active.length;
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const _SectionLabel(label: 'Clientes de hoy'),
+                const Spacer(),
+                // Botón "Ver" — solo visible si hay más de un cliente
+                if (count > 1) ...[
+                  GestureDetector(
+                    onTap: () => _showAllClientsSheet(tickets),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color:
+                            AppColors.brandPrimary.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color:
+                              AppColors.brandPrimary.withValues(alpha: 0.3),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(Icons.list_alt_outlined,
+                              size: 13, color: AppColors.brandPrimary),
+                          SizedBox(width: 4),
+                          Text(
+                            'Ver todos',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.brandPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                );
-              },
-            ),
-          ],
+                  const SizedBox(width: 8),
+                ],
+                // Badge de conteo
+                if (count > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color:
+                          AppColors.brandPrimary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '$count',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.brandPrimary,
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 12),
-        ticketsAsync.when(
+
+        // ── solo el último cliente asignado ───────────────
+        widget.ticketsAsync.when(
           loading: () => const Center(
             child: Padding(
               padding: EdgeInsets.symmetric(vertical: 20),
@@ -691,24 +979,25 @@ class _ClientListSection extends StatelessWidget {
               ),
             ),
           ),
-          error: (_, e) => _EmptyClients(
+          error: (_, __) => _EmptyClients(
             icon: Icons.error_outline,
             message: 'No se pudo cargar los clientes',
             color: const Color(0xFFE53935),
           ),
           data: (tickets) {
-            final active = tickets
-                .where((t) => _activeStatuses.contains(t.status))
-                .toList();
-            if (active.isEmpty) {
+            final latest = _extractLatestClient(widget.ticketsAsync);
+            if (latest == null) {
               return _EmptyClients(
                 icon: Icons.event_available_outlined,
                 message: 'Sin clientes asignados para hoy',
                 color: cs.onSurfaceVariant,
               );
             }
-            return Column(
-              children: active.map((t) => _ClientRow(ticket: t)).toList(),
+            // Mostramos solo el ÚLTIMO cliente asignado
+            return InkWell(
+              onTap: () => _showProbadorPopup(latest),
+              borderRadius: BorderRadius.circular(14),
+              child: _ClientRow(ticket: latest),
             );
           },
         ),
@@ -716,6 +1005,10 @@ class _ClientListSection extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Empty clients placeholder
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _EmptyClients extends StatelessWidget {
   const _EmptyClients({
@@ -755,6 +1048,10 @@ class _EmptyClients extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client row
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _ClientRow extends StatelessWidget {
   const _ClientRow({required this.ticket});
@@ -833,7 +1130,8 @@ class _ClientRow extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
             decoration: BoxDecoration(
               color: statusColor.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(20),

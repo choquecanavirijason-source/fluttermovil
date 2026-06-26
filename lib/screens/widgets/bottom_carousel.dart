@@ -22,8 +22,8 @@ class BottomCarousel extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 25, sigmaY: 15),
         child: Container(
           width: double.infinity,
-          height: 100,
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 0),
+          height: 70,
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.zero,
@@ -38,9 +38,9 @@ class BottomCarousel extends StatelessWidget {
                   curve: Curves.easeOutBack,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 100),
-                    margin: const EdgeInsets.symmetric(horizontal: 14),
-                    width: 68,
-                    height: 68,
+                    margin: const EdgeInsets.symmetric(horizontal: 6),
+                    width: 60,
+                    height: 60,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: Colors.white.withOpacity(isSelected ? 0.95 : 0.45),
@@ -62,7 +62,7 @@ class BottomCarousel extends StatelessWidget {
                     ),
                     child: ClipOval(
                       child: Padding(
-                        padding: const EdgeInsets.all(8),
+                        padding: const EdgeInsets.all(5),
                         child: Image.asset(
                           imagePaths[index],
                           fit: BoxFit.contain,
