@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/config/env.dart';
 import '../../../../core/router/routes.dart';
 import '../../../../core/services/agenda_service.dart';
+import '../../../../core/services/notification_service.dart';
+import '../../../../core/services/ws_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_state_provider.dart';
 import '../../../../core/models/mobile_appointment.dart';
@@ -31,14 +34,29 @@ class InicioTab extends ConsumerStatefulWidget {
 class _InicioTabState extends ConsumerState<InicioTab>
     with WidgetsBindingObserver {
 
+  WsService? _wsService;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final user = ref.read(authUserProvider);
+      final branchId = user?.branchId ?? Env.defaultBranchId;
+      _wsService = WsService(
+        branchId: branchId,
+        onEvent: (event) {
+          NotificationService.showFromEvent(event);
+          _refresh();
+        },
+      )..connect();
+    });
   }
 
   @override
   void dispose() {
+    _wsService?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
