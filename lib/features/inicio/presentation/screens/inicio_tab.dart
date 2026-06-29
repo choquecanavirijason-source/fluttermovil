@@ -703,107 +703,13 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
   }
 
   void _showProbadorPopup(MobileAppointment ticket) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => Dialog(
-        insetPadding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        child: SizedBox(
-          width: double.infinity,
-          height: MediaQuery.of(context).size.height * 0.7,
-          child: Column(
-            children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(18.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 150,
-                        height: 150,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: const Color(0xFFD4A517).withOpacity(0.5),
-                              width: 2),
-                        ),
-                        child: Center(
-                          child: Image.asset(
-                            'assets/espejo.png',
-                            width: 84,
-                            height: 84,
-                            color: Colors.black54,
-                            errorBuilder: (_, __, ___) => const Icon(
-                                Icons.remove_red_eye_outlined,
-                                size: 84),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Text(ticket.clientDisplayName,
-                          style: const TextStyle(
-                              fontSize: 20, fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Servicios: ${ticket.servicesSummary}',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant),
-                      ),
-                      const SizedBox(height: 20),
-                      const Text('Probador',
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 8),
-                      const Text('Iniciando probador…',
-                          textAlign: TextAlign.center),
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.of(ctx).pop(),
-                        child: const Text('Cerrar'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton(
-                        style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.brandPrimary),
-                        onPressed: () {
-                          Navigator.of(ctx).pop();
-                          if (ticket.clientId != null) {
-                            ref.read(sessionClientProvider.notifier).state =
-                                Client(
-                              id: ticket.clientId!,
-                              displayName: ticket.clientDisplayName,
-                            );
-                          }
-                          context.push(AppRoutes.selection);
-                        },
-                        child: const Text('Abrir probador',
-                            style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    if (ticket.clientId != null) {
+      ref.read(sessionClientProvider.notifier).state = Client(
+        id: ticket.clientId!,
+        displayName: ticket.clientDisplayName,
+      );
+    }
+    context.push(AppRoutes.selection);
   }
 
   // ── bottom sheet con la lista completa ──────────────────────

@@ -8,7 +8,7 @@ typedef WsEventHandler = void Function(Map<String, dynamic> event);
 /// Servicio WebSocket para recibir eventos en tiempo real del backend.
 /// Uso: llamar [connect] al entrar a la pantalla y [dispose] al salir.
 class WsService {
-  WsWebSocketChannel? _channel;
+  WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   Timer? _reconnectTimer;
   bool _disposed = false;

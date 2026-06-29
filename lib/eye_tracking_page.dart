@@ -364,7 +364,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   Future<void> _resumeEyePreviewAfterAssistant() async {
-    await Future<void>.delayed(const Duration(milliseconds: 300));
+    // Espera extra para que el plugin `camera` libere el hardware completamente.
+    await Future<void>.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
 
     setState(() {
@@ -372,14 +373,19 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _showMapping = false;
     });
 
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // Tiempo para que el nuevo AndroidView llame a attachPreview().
+    await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
 
     await _service.startTracking();
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
 
-    await _service.refreshPreviewBind();
+    // refreshPreviewBind() es no-op si previewView==null.
+    // Múltiples intentos cubren la variación de tiempo del AndroidView.
+    for (final ms in [700, 600, 500, 400]) {
+      await Future<void>.delayed(Duration(milliseconds: ms));
+      if (!mounted) return;
+      await _service.refreshPreviewBind();
+    }
     if (mounted) setState(() {});
   }
 
@@ -834,7 +840,7 @@ class _EyeTypePickerSheet extends ConsumerWidget {
                               width: 44,
                               height: 44,
                               fit: BoxFit.cover,
-                              errorWidget: (_, __, _) =>
+                              errorWidget: (_, _, _) =>
                                   const _EyeTypeIcon(),
                             ),
                           )

@@ -2,7 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-/// Estilo “glass” compacto (referencia GlassHeader).
+/// Estilo "glass" compacto (referencia GlassHeader).
 class EyeTrackingHeader extends StatelessWidget {
   final String title;
   final VoidCallback? onTap;
