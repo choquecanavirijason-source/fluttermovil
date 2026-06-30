@@ -12,6 +12,8 @@ _$CatalogItemDtoImpl _$$CatalogItemDtoImplFromJson(Map<String, dynamic> json) =>
       name: json['name'] as String? ?? '',
       description: json['description'] as String?,
       image: json['image'] as String?,
+      model3dUrl: json['model_3d_url'] as String?,
+      tipoOjoCompatible: json['tipo_ojo_compatible'] as String?,
     );
 
 Map<String, dynamic> _$$CatalogItemDtoImplToJson(
@@ -21,4 +23,6 @@ Map<String, dynamic> _$$CatalogItemDtoImplToJson(
   'name': instance.name,
   'description': instance.description,
   'image': instance.image,
+  'model_3d_url': instance.model3dUrl,
+  'tipo_ojo_compatible': instance.tipoOjoCompatible,
 };

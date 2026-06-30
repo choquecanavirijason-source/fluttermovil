@@ -20,6 +20,13 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import io.github.sceneview.SceneView
+import io.github.sceneview.math.Position
+import io.github.sceneview.node.ModelNode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
@@ -33,7 +40,10 @@ class CameraXManager(
 ) {
     private val helper = FaceLandmarkerHelper(
         context = activity,
-        onResult = onTrackingResult,
+        onResult = { data ->
+            onTrackingResult(data)      // sigue enviando datos a Flutter
+            updateModelPosition(data)   // también mueve el nodo 3D
+        },
         onError = onError,
     )
 
@@ -46,6 +56,12 @@ class CameraXManager(
 
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
     private var previewView: PreviewView? = null
+    private var sceneView: SceneView? = null
+    @Volatile private var current3DModel: ModelNode? = null
+
+    // Posición suavizada — se acumula en el hilo de MediaPipe y se aplica en UI thread
+    private var smoothX = 0f
+    private var smoothY = 0f
 
     private var imageAnalysisUseCase: ImageAnalysis? = null
 
@@ -68,6 +84,120 @@ class CameraXManager(
             if (!stopped.get()) {
                 scheduleRebind()
             }
+        }
+    }
+
+    fun attachSceneView(view: SceneView) {
+        sceneView = view
+    }
+
+    fun detachSceneView() {
+        current3DModel?.let { old ->
+            sceneView?.removeChildNode(old)
+            old.destroy()
+            current3DModel = null
+        }
+        sceneView = null
+    }
+
+    /**
+     * Carga un archivo .glb en el [SceneView] superpuesto a la cámara.
+     *
+     * Llamado desde el hilo principal (MethodChannel corre en UI thread).
+     * La lectura del archivo ocurre en [Dispatchers.IO]; la construcción
+     * del nodo y la inserción en la escena vuelven al hilo principal.
+     */
+    fun load3DModel(path: String) {
+        val sv = sceneView ?: run {
+            android.util.Log.w("CameraXManager", "load3DModel: SceneView todavía no disponible")
+            return
+        }
+        val scope = (activity as? LifecycleOwner)?.lifecycleScope ?: run {
+            android.util.Log.w("CameraXManager", "load3DModel: Activity no es LifecycleOwner")
+            return
+        }
+
+        // Retirar y destruir el modelo previo antes de cargar el nuevo
+        current3DModel?.let { old ->
+            sv.removeChildNode(old)
+            old.destroy()
+            current3DModel = null
+        }
+
+        scope.launch {
+            try {
+                val fileUri = "file://$path"
+                android.util.Log.d("CameraXManager", "Cargando modelo 3D: $fileUri")
+
+                // La lectura del archivo .glb es I/O bloqueante → hilo IO
+                val modelInstance = withContext(Dispatchers.IO) {
+                    sv.modelLoader.createModelInstance(fileUri)
+                }
+
+                if (modelInstance == null) {
+                    android.util.Log.e("CameraXManager", "createModelInstance devolvió null — $fileUri")
+                    return@launch
+                }
+
+                // Construcción del nodo e inserción en escena → hilo principal (Filament/GL)
+                val node = ModelNode(
+                    modelInstance = modelInstance,
+                    scaleToUnits = 0.1f,   // ~10 cm; ajustar con landmarks de MediaPipe
+                    autoAnimate = true
+                )
+                sv.addChildNode(node)
+                current3DModel = node
+
+                android.util.Log.d("CameraXManager", "✅ Modelo 3D añadido a SceneView: $path")
+            } catch (e: Exception) {
+                android.util.Log.e("CameraXManager", "Error cargando modelo 3D: ${e.message}", e)
+            }
+        }
+    }
+
+    /**
+     * Mueve [current3DModel] para que siga el punto medio entre ambos iris.
+     *
+     * Llamado desde el hilo interno de MediaPipe en cada frame donde hay cara.
+     * El lerp se acumula aquí para no bloquear el UI thread con operaciones
+     * matemáticas; solo la escritura de [position] se despacha al UI thread.
+     *
+     * Sistema de coordenadas Filament: Y hacia arriba, Z negativo hacia el fondo.
+     * Los landmarks vienen ya volteados en X (bitmap espejado en [processFrame])
+     * así que no se necesita inversión adicional de eje X.
+     */
+    private fun updateModelPosition(data: Map<String, Any?>) {
+        if (data["faceDetected"] != true) return
+        if (current3DModel == null) return
+
+        val imageWidth  = (data["imageWidth"]  as? Int)?.toFloat() ?: return
+        val imageHeight = (data["imageHeight"] as? Int)?.toFloat() ?: return
+
+        val leftIris  = data["leftIris"]  as? Map<*, *> ?: return
+        val rightIris = data["rightIris"] as? Map<*, *> ?: return
+
+        val lx = (leftIris["x"]  as? Double)?.toFloat() ?: return
+        val ly = (leftIris["y"]  as? Double)?.toFloat() ?: return
+        val rx = (rightIris["x"] as? Double)?.toFloat() ?: return
+        val ry = (rightIris["y"] as? Double)?.toFloat() ?: return
+
+        // Punto medio entre ambos iris, normalizado a [0, 1]
+        val nx = ((lx + rx) * 0.5f) / imageWidth
+        val ny = ((ly + ry) * 0.5f) / imageHeight
+
+        // Espacio de Filament: X→derecha, Y→arriba → invertir Y de pantalla
+        val targetX = (nx - 0.5f) * WORLD_SCALE_X
+        val targetY = (0.5f - ny) * WORLD_SCALE_Y
+
+        // Lerp acumulado en hilo de MediaPipe (evita temblores)
+        smoothX += (targetX - smoothX) * LERP_ALPHA
+        smoothY += (targetY - smoothY) * LERP_ALPHA
+
+        val sx = smoothX
+        val sy = smoothY
+
+        mainHandler.post {
+            current3DModel?.position = Position(sx, sy, FIXED_DEPTH)
         }
     }
 
@@ -300,8 +430,18 @@ class CameraXManager(
         }
 
     private companion object {
-        private const val REBIND_DELAY_MS = 280L
-        private const val STOP_UNBIND_DELAY_MS = 220L
+        private const val REBIND_DELAY_MS       = 280L
+        private const val STOP_UNBIND_DELAY_MS  = 220L
+
+        // ── Tracking 3D ──────────────────────────────────────────────────────
+        /** Factor de suavizado lerp: 0 = congelado, 1 = sin suavizado. */
+        private const val LERP_ALPHA    = 0.15f
+        /** Ancho del espacio de mundo que cubre toda la pantalla (unidades Filament). */
+        private const val WORLD_SCALE_X = 0.6f
+        /** Alto del espacio de mundo que cubre toda la pantalla (unidades Filament). */
+        private const val WORLD_SCALE_Y = 0.8f
+        /** Profundidad fija del modelo 3D delante de la cámara (metros negativos). */
+        private const val FIXED_DEPTH   = -1.0f
 
         /**
          * Preview: pedir resolución muy alta. Importante: [ImageAnalysis] tiene su propio

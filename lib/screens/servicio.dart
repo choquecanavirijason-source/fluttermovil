@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
-import 'package:test_face/core/config/api_config.dart';
-import 'package:test_face/core/models/catalog_service_item.dart';
-import 'package:test_face/core/services/agenda_service.dart';
-import 'package:test_face/core/services/auth_service.dart';
-import 'package:test_face/screens/probador.dart';
+import 'package:Probador/core/config/api_config.dart';
+import 'package:Probador/core/models/catalog_service_item.dart';
+import 'package:Probador/core/services/agenda_service.dart';
+import 'package:Probador/core/services/auth_service.dart';
+import 'package:Probador/screens/probador.dart';
 
 class ServicioPage extends StatefulWidget {
   final String nombre;

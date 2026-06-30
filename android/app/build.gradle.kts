@@ -55,6 +55,10 @@ android {
         versionName = flutter.versionName
     }
 
+    buildFeatures {
+        viewBinding = true
+    }
+
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
@@ -76,6 +80,8 @@ dependencies {
     val mediaPipeVersion = "0.10.29"
     implementation("com.google.mediapipe:tasks-vision:$mediaPipeVersion")
     implementation("com.google.mediapipe:tasks-core:$mediaPipeVersion")
+
+    implementation("io.github.sceneview:sceneview:2.1.1")
 }
 
 flutter {

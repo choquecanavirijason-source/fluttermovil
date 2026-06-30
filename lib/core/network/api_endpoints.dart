@@ -2,6 +2,12 @@
 class ApiEndpoints {
   ApiEndpoints._();
 
+  // Base URL GCP (referencia explícita; el valor canónico vive en Env.apiBaseUrl)
+  static const String gcpBaseUrl = 'http://34.55.150.142/api';
+
+  // Catálogos — raíz general
+  static const String catalogs = '/catalogs/';
+
   // Auth
   static const String login = '/auth/login';
   static const String me = '/auth/me';

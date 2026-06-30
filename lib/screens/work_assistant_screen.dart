@@ -9,7 +9,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
-import 'package:test_face/work_assistant_args.dart';
+import 'package:Probador/work_assistant_args.dart';
 
 /// Asistente de verificación: mitad superior foto de referencia (captura automática a los 3 s);
 /// mitad inferior cámara en vivo.

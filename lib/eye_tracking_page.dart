@@ -29,6 +29,7 @@ import 'screens/widgets/eye_tracking_lash_modal.dart';
 import 'screens/widgets/eye_tracking_overlay.dart';
 import 'screens/widgets/eye_tracking_work_assistant_button.dart';
 import 'work_assistant_args.dart';
+// import 'core/storage/model_cache_service.dart'; // TODO: reactivar con Kotlin 3D
 
 class EyeTrackingPage extends ConsumerStatefulWidget {
   const EyeTrackingPage({super.key});
@@ -121,6 +122,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   String? _lashTextureAssetRequested;
   CatalogItem? _selectedEyeType;
   List<CatalogItem>? _eyeTypes;
+
+  /// Path local del .glb descargado para el item seleccionado (null = sin modelo).
+  String? _selectedModel3dPath;
+
+  /// true mientras ModelCacheService resuelve la descarga del .glb.
+  bool _isModel3dLoading = false;
 
   List<String> get _carouselImages =>
       _selectedFilter == 0 ? _compatibleImages : _explorarImages;
@@ -580,8 +587,35 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
+  void _onLashSelect(int index, List<CatalogItem> items) {
+    setState(() => _selectedLashIndex = index);
+
+    // TODO: reactivar cuando Kotlin esté listo para el renderizado 3D nativo
+    // if (index >= items.length) return;
+    // final item = items[index];
+    // if (!item.has3dModel) return;
+    // setState(() => _isModel3dLoading = true);
+    // try {
+    //   final path = await ref
+    //       .read(modelCacheServiceProvider)
+    //       .getModelPath(item.model3dUrl!);
+    //   if (path != null) {
+    //     debugPrint('[ModelCache] ✅ Modelo 3D descargado: $path');
+    //     await _service.set3DModelPath(path);
+    //   } else {
+    //     debugPrint('[ModelCache] ⚠️  getModelPath devolvió null — verifica la URL');
+    //   }
+    //   if (mounted) setState(() => _selectedModel3dPath = path);
+    // } finally {
+    //   if (mounted) setState(() => _isModel3dLoading = false);
+    // }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final lashItems = ref
+        .watch(filteredCatalogProvider(CatalogKind.lashDesign))
+        .valueOrNull ?? [];
     final carousel = _carouselImages;
     final safeLash =
         _selectedLashIndex < carousel.length ? _selectedLashIndex : 0;
@@ -621,6 +655,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       )
                     else
                       const ColoredBox(color: Colors.black),
+                    // Overlay PNG de pestañas — siempre visible.
+                    // El modelo 3D será renderizado de forma nativa por Kotlin
+                    // (CameraXManager/Filament) debajo de esta capa Flutter.
                     Positioned.fill(
                       child: RepaintBoundary(
                         child: CustomPaint(
@@ -634,6 +671,14 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         ),
                       ),
                     ),
+                    // TODO: activar cuando Kotlin esté listo para renderizar el .glb
+                    // if (_selectedModel3dPath != null)
+                    //   Positioned.fill(
+                    //     child: _Model3dAnchor(
+                    //       localPath: _selectedModel3dPath!,
+                    //       transform: Matrix4.identity(),
+                    //     ),
+                    //   ),
                     if (_showMapping)
                       Positioned.fill(
                         child: CustomPaint(
@@ -675,7 +720,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: BottomCarousel(
                     selectedLash: safeLash,
-                    onSelect: (i) => setState(() => _selectedLashIndex = i),
+                    onSelect: (i) => _onLashSelect(i, lashItems),
                     imagePaths: carousel,
                   ),
                 ),
@@ -725,6 +770,41 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         color: Colors.white,
                         size: 22,
                       ),
+                    ),
+                  ),
+                ),
+              ),
+            // Indicador de descarga del .glb (se oculta en cuanto termina).
+            if (_isModel3dLoading)
+              Positioned(
+                bottom: 140,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        Text(
+                          'Cargando modelo 3D…',
+                          style: TextStyle(color: Colors.white, fontSize: 13),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -1130,6 +1210,68 @@ class _EyeTypeIcon extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visor 3D — anclaje y placeholder
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Ancla el modelo 3D al plano AR mediante una [Matrix4] de transformación.
+///
+/// Cuando se integren los landmarks del tracking ([TrackingFrame]) actualiza
+/// [transform] con la traslación y escala derivadas de los puntos del iris o
+/// los párpados para que el modelo siga el movimiento de la cara en tiempo real.
+class _Model3dAnchor extends StatelessWidget {
+  const _Model3dAnchor({
+    required this.localPath,
+    required this.transform,
+  });
+
+  final String localPath;
+  final Matrix4 transform;
+
+  @override
+  Widget build(BuildContext context) {
+    return Transform(
+      transform: transform,
+      alignment: Alignment.center,
+      child: _Model3dViewer(localPath: localPath),
+    );
+  }
+}
+
+/// Placeholder del visor de modelos 3D (.glb / .gltf).
+///
+/// Reemplaza el [SizedBox.expand] con el widget del paquete elegido:
+///
+/// ── Opción A · model_viewer_plus (WebView, Android/iOS/Web) ─────────────────
+///   pubspec:  model_viewer_plus: ^1.x.x
+///   widget:   ModelViewer(src: 'file://$localPath', autoRotate: false)
+///
+/// ── Opción B · flutter_3d_controller (nativo Android/iOS) ──────────────────
+///   pubspec:  flutter_3d_controller: ^1.x.x
+///   widget:   Flutter3DViewer(src: localPath)
+/// ────────────────────────────────────────────────────────────────────────────
+class _Model3dViewer extends StatelessWidget {
+  const _Model3dViewer({required this.localPath});
+
+  final String localPath;
+
+  @override
+  Widget build(BuildContext context) {
+    // TODO: inyectar visor 3D — reemplaza este SizedBox con el widget del paquete.
+    //
+    // model_viewer_plus:
+    //   return ModelViewer(src: 'file://$localPath', autoRotate: false);
+    //
+    // flutter_3d_controller:
+    //   return Flutter3DViewer(src: localPath);
+    return const SizedBox.expand();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Preview de cámara nativa
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Preview de cámara con **Hybrid Composition** (`initExpensiveAndroidView`).
 /// Necesario para que el vídeo de CameraX (TextureView) se renderice; con
