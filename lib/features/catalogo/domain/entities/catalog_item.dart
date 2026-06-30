@@ -22,6 +22,8 @@ class CatalogItem {
     required this.kind,
     this.description,
     this.imagePath,
+    this.model3dUrl,
+    this.tipoOjoCompatible,
   });
 
   final int id;
@@ -30,8 +32,15 @@ class CatalogItem {
   final String? description;
   final String? imagePath;
 
+  /// URL absoluta al modelo 3D (.glb/.gltf) alojado en el backend.
+  final String? model3dUrl;
+
+  /// Clave del tipo de ojo con el que este diseño es compatible (ej. "ALMOND").
+  final String? tipoOjoCompatible;
+
   String? get imageUrl => Env.mediaUrl(imagePath);
   bool get hasImage => imageUrl != null;
+  bool get has3dModel => model3dUrl != null && model3dUrl!.isNotEmpty;
 
   factory CatalogItem.fromDto(CatalogItemDto d, CatalogKind kind) {
     final name = d.name.trim();
@@ -42,6 +51,28 @@ class CatalogItem {
       kind: kind,
       description: (desc != null && desc.isNotEmpty) ? desc : null,
       imagePath: d.image,
+      model3dUrl: d.model3dUrl,
+      tipoOjoCompatible: d.tipoOjoCompatible,
+    );
+  }
+
+  CatalogItem copyWith({
+    int? id,
+    String? name,
+    CatalogKind? kind,
+    String? description,
+    String? imagePath,
+    String? model3dUrl,
+    String? tipoOjoCompatible,
+  }) {
+    return CatalogItem(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      kind: kind ?? this.kind,
+      description: description ?? this.description,
+      imagePath: imagePath ?? this.imagePath,
+      model3dUrl: model3dUrl ?? this.model3dUrl,
+      tipoOjoCompatible: tipoOjoCompatible ?? this.tipoOjoCompatible,
     );
   }
 }

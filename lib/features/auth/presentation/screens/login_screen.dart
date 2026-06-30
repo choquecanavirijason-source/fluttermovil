@@ -166,27 +166,23 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 320,
-      width: double.infinity,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          // fondo verde con curva inferior
-          ClipPath(
-            clipper: _BottomCurveClipper(),
-            child: Container(
-              height: 1900,
-              width: double.infinity,
-              decoration: const BoxDecoration(
-                color: Color.fromARGB(255, 255, 255, 255),
-                image: DecorationImage(
-                  image: AssetImage('assets/chica.png')
-                ),
-              ),
+    return ClipPath(
+      clipper: _BottomCurveClipper(),
+      child: SizedBox(
+        height: 320,
+        width: double.infinity,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            const ColoredBox(color: AppColors.brandPrimary),
+            Image.asset(
+              'assets/chica.png',
+              fit: BoxFit.cover,
+              alignment: const Alignment(0, 0.3),
+              errorBuilder: (_, _, _) => const SizedBox.shrink(),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

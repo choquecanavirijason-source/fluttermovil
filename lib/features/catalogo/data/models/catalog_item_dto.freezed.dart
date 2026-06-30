@@ -25,6 +25,10 @@ mixin _$CatalogItemDto {
   String get name => throw _privateConstructorUsedError;
   String? get description => throw _privateConstructorUsedError;
   String? get image => throw _privateConstructorUsedError;
+  @JsonKey(name: 'model_3d_url')
+  String? get model3dUrl => throw _privateConstructorUsedError;
+  @JsonKey(name: 'tipo_ojo_compatible')
+  String? get tipoOjoCompatible => throw _privateConstructorUsedError;
 
   /// Serializes this CatalogItemDto to a JSON map.
   Map<String, dynamic> toJson() => throw _privateConstructorUsedError;
@@ -43,7 +47,14 @@ abstract class $CatalogItemDtoCopyWith<$Res> {
     $Res Function(CatalogItemDto) then,
   ) = _$CatalogItemDtoCopyWithImpl<$Res, CatalogItemDto>;
   @useResult
-  $Res call({int id, String name, String? description, String? image});
+  $Res call({
+    int id,
+    String name,
+    String? description,
+    String? image,
+    @JsonKey(name: 'model_3d_url') String? model3dUrl,
+    @JsonKey(name: 'tipo_ojo_compatible') String? tipoOjoCompatible,
+  });
 }
 
 /// @nodoc
@@ -65,6 +76,8 @@ class _$CatalogItemDtoCopyWithImpl<$Res, $Val extends CatalogItemDto>
     Object? name = null,
     Object? description = freezed,
     Object? image = freezed,
+    Object? model3dUrl = freezed,
+    Object? tipoOjoCompatible = freezed,
   }) {
     return _then(
       _value.copyWith(
@@ -84,6 +97,14 @@ class _$CatalogItemDtoCopyWithImpl<$Res, $Val extends CatalogItemDto>
                 ? _value.image
                 : image // ignore: cast_nullable_to_non_nullable
                       as String?,
+            model3dUrl: freezed == model3dUrl
+                ? _value.model3dUrl
+                : model3dUrl // ignore: cast_nullable_to_non_nullable
+                      as String?,
+            tipoOjoCompatible: freezed == tipoOjoCompatible
+                ? _value.tipoOjoCompatible
+                : tipoOjoCompatible // ignore: cast_nullable_to_non_nullable
+                      as String?,
           )
           as $Val,
     );
@@ -99,7 +120,14 @@ abstract class _$$CatalogItemDtoImplCopyWith<$Res>
   ) = __$$CatalogItemDtoImplCopyWithImpl<$Res>;
   @override
   @useResult
-  $Res call({int id, String name, String? description, String? image});
+  $Res call({
+    int id,
+    String name,
+    String? description,
+    String? image,
+    @JsonKey(name: 'model_3d_url') String? model3dUrl,
+    @JsonKey(name: 'tipo_ojo_compatible') String? tipoOjoCompatible,
+  });
 }
 
 /// @nodoc
@@ -120,6 +148,8 @@ class __$$CatalogItemDtoImplCopyWithImpl<$Res>
     Object? name = null,
     Object? description = freezed,
     Object? image = freezed,
+    Object? model3dUrl = freezed,
+    Object? tipoOjoCompatible = freezed,
   }) {
     return _then(
       _$CatalogItemDtoImpl(
@@ -139,6 +169,14 @@ class __$$CatalogItemDtoImplCopyWithImpl<$Res>
             ? _value.image
             : image // ignore: cast_nullable_to_non_nullable
                   as String?,
+        model3dUrl: freezed == model3dUrl
+            ? _value.model3dUrl
+            : model3dUrl // ignore: cast_nullable_to_non_nullable
+                  as String?,
+        tipoOjoCompatible: freezed == tipoOjoCompatible
+            ? _value.tipoOjoCompatible
+            : tipoOjoCompatible // ignore: cast_nullable_to_non_nullable
+                  as String?,
       ),
     );
   }
@@ -152,6 +190,8 @@ class _$CatalogItemDtoImpl implements _CatalogItemDto {
     this.name = '',
     this.description,
     this.image,
+    @JsonKey(name: 'model_3d_url') this.model3dUrl,
+    @JsonKey(name: 'tipo_ojo_compatible') this.tipoOjoCompatible,
   });
 
   factory _$CatalogItemDtoImpl.fromJson(Map<String, dynamic> json) =>
@@ -166,10 +206,16 @@ class _$CatalogItemDtoImpl implements _CatalogItemDto {
   final String? description;
   @override
   final String? image;
+  @override
+  @JsonKey(name: 'model_3d_url')
+  final String? model3dUrl;
+  @override
+  @JsonKey(name: 'tipo_ojo_compatible')
+  final String? tipoOjoCompatible;
 
   @override
   String toString() {
-    return 'CatalogItemDto(id: $id, name: $name, description: $description, image: $image)';
+    return 'CatalogItemDto(id: $id, name: $name, description: $description, image: $image, model3dUrl: $model3dUrl, tipoOjoCompatible: $tipoOjoCompatible)';
   }
 
   @override
@@ -181,12 +227,24 @@ class _$CatalogItemDtoImpl implements _CatalogItemDto {
             (identical(other.name, name) || other.name == name) &&
             (identical(other.description, description) ||
                 other.description == description) &&
-            (identical(other.image, image) || other.image == image));
+            (identical(other.image, image) || other.image == image) &&
+            (identical(other.model3dUrl, model3dUrl) ||
+                other.model3dUrl == model3dUrl) &&
+            (identical(other.tipoOjoCompatible, tipoOjoCompatible) ||
+                other.tipoOjoCompatible == tipoOjoCompatible));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(runtimeType, id, name, description, image);
+  int get hashCode => Object.hash(
+    runtimeType,
+    id,
+    name,
+    description,
+    image,
+    model3dUrl,
+    tipoOjoCompatible,
+  );
 
   /// Create a copy of CatalogItemDto
   /// with the given fields replaced by the non-null parameter values.
@@ -211,6 +269,8 @@ abstract class _CatalogItemDto implements CatalogItemDto {
     final String name,
     final String? description,
     final String? image,
+    @JsonKey(name: 'model_3d_url') final String? model3dUrl,
+    @JsonKey(name: 'tipo_ojo_compatible') final String? tipoOjoCompatible,
   }) = _$CatalogItemDtoImpl;
 
   factory _CatalogItemDto.fromJson(Map<String, dynamic> json) =
@@ -224,6 +284,12 @@ abstract class _CatalogItemDto implements CatalogItemDto {
   String? get description;
   @override
   String? get image;
+  @override
+  @JsonKey(name: 'model_3d_url')
+  String? get model3dUrl;
+  @override
+  @JsonKey(name: 'tipo_ojo_compatible')
+  String? get tipoOjoCompatible;
 
   /// Create a copy of CatalogItemDto
   /// with the given fields replaced by the non-null parameter values.

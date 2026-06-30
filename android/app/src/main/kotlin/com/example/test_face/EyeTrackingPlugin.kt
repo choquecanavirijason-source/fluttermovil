@@ -1,6 +1,7 @@
 package com.example.test_face
 
 import android.app.Activity
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -60,6 +61,15 @@ class EyeTrackingPlugin(
             }
             "refreshPreviewBind" -> {
                 cameraXManager?.refreshPreviewBind()
+                result.success(null)
+            }
+            "load3DModel" -> {
+                val path = call.argument<String>("path")
+                if (path != null) {
+                    cameraXManager?.load3DModel(path)
+                } else {
+                    Log.w("EyeTrackingPlugin", "load3DModel: path es null")
+                }
                 result.success(null)
             }
             else -> result.notImplemented()

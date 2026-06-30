@@ -11,6 +11,8 @@ class CatalogItemDto with _$CatalogItemDto {
     @Default('') String name,
     String? description,
     String? image,
+    @JsonKey(name: 'model_3d_url') String? model3dUrl,
+    @JsonKey(name: 'tipo_ojo_compatible') String? tipoOjoCompatible,
   }) = _CatalogItemDto;
 
   factory CatalogItemDto.fromJson(Map<String, dynamic> json) =>

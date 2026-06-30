@@ -216,7 +216,7 @@ class _HeroSection extends StatelessWidget {
             Image.asset(
               'assets/chica2.png',
               fit: BoxFit.cover,
-              alignment: const Alignment(0, 2.0),
+              alignment: const Alignment(0, 0.3),
               errorBuilder: (_, e, _) => const ColoredBox(
                 color: AppColors.brandPrimary,
                 child: Center(
