@@ -56,6 +56,18 @@ class NativeEyeTrackingService {
     } catch (_) {}
   }
 
+  /// Último frame de cámara como JPEG, ya orientado y espejado igual que el
+  /// preview. Necesario porque RepaintBoundary.toImage no puede leer el
+  /// PlatformView nativo de CameraX. Devuelve null si aún no hay frame.
+  Future<Uint8List?> captureLastCameraFrame() async {
+    try {
+      return await _methodChannel.invokeMethod<Uint8List>('captureFrame');
+    } catch (e) {
+      debugPrint('[EyeTracking] captureLastCameraFrame error: $e');
+      return null;
+    }
+  }
+
   /// Envía la ruta local del archivo .glb al lado nativo para que
   /// Kotlin cargue el modelo 3D en el motor de renderizado.
   Future<void> set3DModelPath(String path) async {

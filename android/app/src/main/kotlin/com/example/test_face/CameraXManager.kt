@@ -29,6 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -68,6 +69,10 @@ class CameraXManager(
     private val stopped = AtomicBoolean(true)
     private val bindGeneration = AtomicLong(0L)
     private var pendingBindRunnable: Runnable? = null
+
+    /** Último frame orientado/espejado del análisis; fuente de [captureFrame]. */
+    @Volatile
+    private var latestFrameBitmap: Bitmap? = null
 
     fun attachPreview(view: PreviewView) {
         previewView = view
@@ -267,6 +272,33 @@ class CameraXManager(
         }
     }
 
+    /**
+     * Devuelve el último frame de cámara como JPEG, con la misma orientación y
+     * espejo que ve la usuaria en el preview. Flutter no puede capturar el
+     * PlatformView de CameraX ([android.view.TextureView]) con
+     * RepaintBoundary.toImage, así que la foto se toma aquí.
+     *
+     * La compresión corre en [analysisExecutor]; el result se responde en el
+     * hilo principal como exige el MethodChannel.
+     */
+    fun captureFrame(result: MethodChannel.Result) {
+        val bmp = latestFrameBitmap
+        if (bmp == null || bmp.isRecycled) {
+            result.success(null)
+            return
+        }
+        analysisExecutor.execute {
+            val bytes = try {
+                val out = ByteArrayOutputStream()
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                out.toByteArray()
+            } catch (_: Exception) {
+                null
+            }
+            mainHandler.post { result.success(bytes) }
+        }
+    }
+
     private fun scheduleRebind() {
         if (stopped.get()) return
         cancelPendingBind()
@@ -410,6 +442,7 @@ class CameraXManager(
             if (oriented != bitmap) {
                 bitmap.recycle()
             }
+            latestFrameBitmap = oriented
 
             val mpImage = BitmapImageBuilder(oriented).build()
             val frameTimeMs = SystemClock.uptimeMillis()

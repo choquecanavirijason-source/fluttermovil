@@ -63,6 +63,14 @@ class EyeTrackingPlugin(
                 cameraXManager?.refreshPreviewBind()
                 result.success(null)
             }
+            "captureFrame" -> {
+                val mgr = cameraXManager
+                if (mgr == null) {
+                    result.success(null)
+                } else {
+                    mgr.captureFrame(result)
+                }
+            }
             "load3DModel" -> {
                 val path = call.argument<String>("path")
                 if (path != null) {

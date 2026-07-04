@@ -12,6 +12,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'core/recommendation/eye_shape_analyzer.dart';
 import 'features/catalogo/domain/entities/catalog_item.dart';
 import 'features/catalogo/presentation/providers/catalogo_provider.dart';
 import 'features/clientes/domain/entities/client.dart';
@@ -21,6 +22,7 @@ import 'eye_tracking_mapping_painter.dart';
 import 'eye_tracking_model.dart';
 import 'eye_tracking_painter.dart';
 import 'native_eye_tracking_service.dart';
+import 'recommendation_args.dart';
 import 'screens/widgets/bottom_carousel.dart';
 import 'screens/widgets/eye_tracking_bottom_actions.dart';
 import 'screens/widgets/eye_tracking_design_menu_bar.dart';
@@ -50,6 +52,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   Timer? _assistantFlowTimer;
   int? _assistantCountdown;
   bool _workAssistantOpening = false;
+  bool _openingRecommendation = false;
 
   static const List<String> _compatibleImages = [
     'assets/p1.png',
@@ -117,6 +120,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   /// Fuerza recreación del [AndroidView] al volver de otra pantalla que usa la cámara.
   int _previewSession = 0;
+
+  /// true mientras se re-enlaza CameraX al volver del asistente (muestra indicador).
+  bool _isResumingPreview = false;
 
   ui.Image? _lashTexture;
   String? _lashTextureAssetRequested;
@@ -345,11 +351,71 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     });
   }
 
-  /// Captura PNG del [RepaintBoundary]: vídeo nativo + [EyeTrackingPainter] (pestañas).
+  /// Foto real: frame de cámara capturado en Kotlin + overlay de pestañas.
+  ///
+  /// El preview es un PlatformView (CameraX) y RepaintBoundary.toImage no
+  /// puede leer sus píxeles (salía negro); por eso el frame viene del canal
+  /// nativo y las pestañas se pintan encima con [EyeTrackingPainter] en las
+  /// mismas coordenadas del frame (los landmarks están en píxeles del bitmap).
   Future<Uint8List?> _capturePreviewPng() async {
     if (!Platform.isAndroid) return null;
+
+    var jpeg = await _service.captureLastCameraFrame();
+    if (jpeg == null || jpeg.isEmpty) {
+      // Puede que aún no llegue el primer frame de análisis; un reintento corto.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return null;
+      jpeg = await _service.captureLastCameraFrame();
+    }
+    if (jpeg == null || jpeg.isEmpty) {
+      debugPrint('captureFrame nativo devolvió null; usando fallback (saldrá sin vídeo)');
+      return _captureBoundaryPngFallback();
+    }
+
+    ui.Image? cam;
+    try {
+      final codec = await ui.instantiateImageCodec(jpeg);
+      final camFrame = await codec.getNextFrame();
+      cam = camFrame.image;
+
+      final size = Size(cam.width.toDouble(), cam.height.toDouble());
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawImage(cam, Offset.zero, Paint());
+
+      final carousel = _carouselImages;
+      EyeTrackingPainter(
+        frame: _frame,
+        filterIndex: _selectedFilter,
+        lashVariantIndex:
+            _selectedLashIndex < carousel.length ? _selectedLashIndex : 0,
+        lashTexture: _lashTexture,
+      ).paint(canvas, size);
+
+      // Mapeo con medidas (abanico 7-13): visible durante la cuenta atrás del
+      // asistente; debe quedar en la foto igual que se ve en pantalla.
+      if (_showMapping) {
+        LashMappingPainter(frame: _frame).paint(canvas, size);
+      }
+
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(cam.width, cam.height);
+      picture.dispose();
+      final bd = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      return bd?.buffer.asUint8List();
+    } catch (e, st) {
+      debugPrint('Captura compuesta ojos: $e\n$st');
+      return _captureBoundaryPngFallback();
+    } finally {
+      cam?.dispose();
+    }
+  }
+
+  /// Plan B si el canal nativo no devuelve frame: captura del RepaintBoundary
+  /// (solo trae el overlay Flutter; el vídeo del PlatformView sale negro).
+  Future<Uint8List?> _captureBoundaryPngFallback() async {
     await WidgetsBinding.instance.endOfFrame;
-    await Future<void>.delayed(const Duration(milliseconds: 60));
     if (!mounted) return null;
 
     final boundary =
@@ -371,23 +437,26 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   Future<void> _resumeEyePreviewAfterAssistant() async {
-    await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
 
     setState(() {
       _previewSession++;
       _showMapping = false;
+      _isResumingPreview = true;
     });
 
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     if (!mounted) return;
 
     await _service.startTracking();
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
 
+    // Un rebind extra por si la superficie del PlatformView recién creado
+    // no estaba lista cuando CameraX hizo el primer bind.
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (!mounted) return;
     await _service.refreshPreviewBind();
-    if (mounted) setState(() {});
+
+    if (mounted) setState(() => _isResumingPreview = false);
   }
 
   Future<void> _finishWorkAssistantOpen() async {
@@ -409,15 +478,18 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         return;
       }
 
+      // stopTracking resuelve cuando el unbind nativo terminó; solo un
+      // margen corto para que el plugin `camera` pueda abrir el lente.
       await _service.stopTracking();
-      await Future<void>.delayed(const Duration(milliseconds: 320));
+      await Future<void>.delayed(const Duration(milliseconds: 120));
       if (!mounted) return;
 
       await context.push(
         '/work-assistant',
         extra: WorkAssistantArgs(
           panelPngBytes: png,
-          mirrorTopPanel: true,
+          // El frame nativo ya viene orientado y espejado como el preview.
+          mirrorTopPanel: false,
         ),
       );
       if (!mounted) return;
@@ -430,6 +502,30 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   
+  /// Abre la Recomendación IA con la foto actual + análisis de forma de ojo.
+  /// La cámara nativa sigue corriendo debajo: la pantalla de recomendación no
+  /// usa cámara, así que al volver el preview reaparece al instante.
+  Future<void> _openRecommendation() async {
+    if (_openingRecommendation) return;
+    _openingRecommendation = true;
+    try {
+      final analysis = EyeShapeAnalyzer.analyze(_frame);
+      final png = await _capturePreviewPng();
+      if (!mounted) return;
+      await context.push(
+        '/recomendacion',
+        extra: RecommendationArgs(
+          analysis: analysis,
+          photoPngBytes: png,
+          // El frame nativo ya viene espejado como el preview.
+          mirrorPhoto: false,
+        ),
+      );
+    } finally {
+      _openingRecommendation = false;
+    }
+  }
+
   void _beginWorkAssistantFlow() {
     if (!Platform.isAndroid) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -735,7 +831,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 onClose: () => setState(() => _showLashModal = false),
               ),
             if (!_showLashModal)
-              EyeTrackingPremiumOjoButton(onTap: () {}),
+              EyeTrackingPremiumOjoButton(
+                onTap: () => unawaited(_openRecommendation()),
+              ),
             if (!_showLashModal)
               Positioned(
                 right: 16,
@@ -797,6 +895,36 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         Text(
                           'Cargando modelo 3D…',
                           style: TextStyle(color: Colors.white, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            if (_isResumingPreview)
+              Positioned.fill(
+                child: ColoredBox(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  child: const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 28,
+                          height: 28,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        ),
+                        SizedBox(height: 14),
+                        Text(
+                          'Reanudando cámara…',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ],
                     ),

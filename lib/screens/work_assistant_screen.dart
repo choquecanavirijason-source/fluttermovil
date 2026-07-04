@@ -385,7 +385,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
   Future<void> _releasePluginCameraAsync() async {
     final c = _cameraController;
     if (c == null) {
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await Future<void>.delayed(const Duration(milliseconds: 60));
       return;
     }
 
@@ -395,8 +395,10 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     if (!mounted) return;
     setState(() => _detachingPluginCamera = true);
 
+    // Un frame + margen corto basta para que el CameraPreview salga del árbol
+    // antes del dispose; las esperas largas solo alargaban la pantalla negra.
     await WidgetsBinding.instance.endOfFrame;
-    await Future<void>.delayed(const Duration(milliseconds: 220));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
 
     try {
       if (c.value.isInitialized && _flashOn) {
@@ -406,8 +408,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     } catch (e) {
       debugPrint('WorkAssistant flash off: $e');
     }
-
-    await Future<void>.delayed(const Duration(milliseconds: 220));
 
     try {
       await c.dispose();
@@ -422,7 +422,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
       _detachingPluginCamera = false;
     }
 
-    await Future<void>.delayed(const Duration(milliseconds: 780));
+    await Future<void>.delayed(const Duration(milliseconds: 150));
   }
 
   Future<void> _exitAssistant() async {
@@ -601,7 +601,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
           Positioned.fill(
             child: Transform.flip(
               flipX: _mirrorPrefetchTopPanel,
-              flipY: true,
               child: Image.memory(
                 prefBytes,
                 fit: BoxFit.cover,
