@@ -950,12 +950,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'Captura con filtro de pestañas',
+                          'Por favor no se mueva\nhasta que se tome la foto',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.85),
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
+                            color: Colors.white.withValues(alpha: 0.9),
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            height: 1.35,
                           ),
                         ),
                       ],

@@ -655,12 +655,15 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  _autoCapturing ? 'Capturando…' : 'Foto en el panel superior',
+                  _autoCapturing
+                      ? 'Capturando…'
+                      : 'Por favor no se mueva\nhasta que se tome la foto',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.75),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withValues(alpha: 0.9),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
                   ),
                 ),
               ],
@@ -1065,9 +1068,8 @@ Widget _assistantFloatingBar() {
   Widget _stopStyleButton() {
     return GestureDetector(
       onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Detener sesión: enlaza tu flujo aquí.')),
-        );
+        if (_exitInProgress) return;
+        unawaited(_exitAssistant());
       },
       child: Container(
         width: 72,
