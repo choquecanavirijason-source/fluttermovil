@@ -52,27 +52,15 @@ class _ProbadorScreenState extends State<ProbadorScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Espejo dentro de un anillo dorado tenue.
-            Container(
-              width: 150,
-              height: 150,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: gold.withValues(alpha: 0.5), width: 2),
-              ),
-              child: Center(
-                child: Image.asset(
-                  "assets/espejo.png",
-                  width: 84,
-                  height: 84,
-                  color: Colors.white,
-                  errorBuilder: (context, error, stackTrace) => const Icon(
-                    Icons.remove_red_eye_outlined,
-                    size: 84,
-                    color: Colors.white,
-                  ),
-                ),
+            Image.asset(
+              "assets/espejo.png",
+              width: 130,
+              height: 130,
+              color: Colors.white,
+              errorBuilder: (context, error, stackTrace) => const Icon(
+                Icons.remove_red_eye_outlined,
+                size: 130,
+                color: Colors.white,
               ),
             ),
             const SizedBox(height: 28),

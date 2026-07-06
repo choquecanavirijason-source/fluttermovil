@@ -144,7 +144,10 @@ class _InicioTabState extends ConsumerState<InicioTab>
                   const SizedBox(height: 10),
                   Row(
                     children: [
+                      Expanded(flex: 1, child: const SizedBox()),
+                      const SizedBox(width: 10),
                       Expanded(
+                        flex: 2,
                         child: _ActionPill(
                           icon: Icons.person_outline,
                           label: 'Cliente',
@@ -154,15 +157,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
                         ),
                       ),
                       const SizedBox(width: 10),
-                      Expanded(
-                        child: _ActionPill(
-                          icon: Icons.savings_outlined,
-                          label: 'Comisión',
-                          background: AppColors.brandAccent,
-                          foreground: Colors.white,
-                          onTap: () => context.push(AppRoutes.comision),
-                        ),
-                      ),
+                      Expanded(flex: 1, child: const SizedBox()),
                     ],
                   ),
                   const SizedBox(height: 28),

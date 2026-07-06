@@ -11,6 +11,8 @@ import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:camera/camera.dart';
+import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import 'features/catalogo/domain/entities/catalog_item.dart';
 import 'features/catalogo/presentation/providers/catalogo_provider.dart';
@@ -47,8 +49,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   TrackingFrame? _frame;
   String _status = 'Inicializando...';
 
-  Timer? _assistantFlowTimer;
-  int? _assistantCountdown;
   bool _workAssistantOpening = false;
 
   static const List<String> _compatibleImages = [
@@ -128,6 +128,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   /// true mientras ModelCacheService resuelve la descarga del .glb.
   bool _isModel3dLoading = false;
+
+  int? _countdown;
+  Timer? _countdownTimer;
 
   List<String> get _carouselImages =>
       _selectedFilter == 0 ? _compatibleImages : _explorarImages;
@@ -249,8 +252,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   @override
   void dispose() {
+    _countdownTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    _assistantFlowTimer?.cancel();
     _sub?.cancel();
     _service.stopTracking();
     _lashTexture?.dispose();
@@ -345,31 +348,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     });
   }
 
-  /// Captura PNG del [RepaintBoundary]: vídeo nativo + [EyeTrackingPainter] (pestañas).
-  Future<Uint8List?> _capturePreviewPng() async {
-    if (!Platform.isAndroid) return null;
-    await WidgetsBinding.instance.endOfFrame;
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    if (!mounted) return null;
-
-    final boundary =
-        _previewCaptureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null || !boundary.attached) return null;
-
-    try {
-      final dpr = MediaQuery.devicePixelRatioOf(context);
-      // Mínimo 2.0: en algunos dispositivos el DPR lógico es bajo y la captura sale borrosa.
-      final captureRatio = dpr < 2.0 ? 2.0 : dpr;
-      final image = await boundary.toImage(pixelRatio: captureRatio);
-      final bd = await image.toByteData(format: ui.ImageByteFormat.png);
-      image.dispose();
-      return bd?.buffer.asUint8List();
-    } catch (e, st) {
-      debugPrint('Captura preview ojos: $e\n$st');
-      return null;
-    }
-  }
-
   Future<void> _resumeEyePreviewAfterAssistant() async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
@@ -394,31 +372,27 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (_workAssistantOpening) return;
     _workAssistantOpening = true;
     try {
-      final png = await _capturePreviewPng();
+      // 1. Activa las líneas de medición y espera un frame para que se pinten.
+      setState(() => _showMapping = true);
+      await WidgetsBinding.instance.endOfFrame;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
       if (!mounted) return;
-      if (png == null || png.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'No se pudo capturar la vista con pestañas. Reintenta.',
-              ),
-            ),
-          );
-        }
-        return;
-      }
 
+      // 2. Captura el overlay (pestañas + líneas de medición) ANTES de detener MediaPipe.
+      final overlayBytes = await _captureLashOverlay();
+
+      // 3. Detiene MediaPipe y espera que libere el sensor.
       await _service.stopTracking();
-      await Future<void>.delayed(const Duration(milliseconds: 320));
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (!mounted) return;
+
+      // 4. Toma foto real con la cámara Flutter y compone con el overlay.
+      final finalPhoto = await _captureAndComposite(overlayBytes);
       if (!mounted) return;
 
       await context.push(
         '/work-assistant',
-        extra: WorkAssistantArgs(
-          panelPngBytes: png,
-          mirrorTopPanel: true,
-        ),
+        extra: WorkAssistantArgs(panelPngBytes: finalPhoto),
       );
       if (!mounted) return;
 
@@ -429,41 +403,139 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
-  
+  /// Captura el overlay Flutter (pestañas PNG) mientras MediaPipe sigue activo.
+  /// Las áreas de cámara nativa quedan transparentes en el PNG resultante.
+  Future<Uint8List?> _captureLashOverlay() async {
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return null;
+    final boundary = _previewCaptureKey.currentContext
+        ?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null || !boundary.attached) return null;
+    try {
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final ratio = dpr < 2.0 ? 2.0 : dpr;
+      final image = await boundary.toImage(pixelRatio: ratio);
+      final bd = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      return bd?.buffer.asUint8List();
+    } catch (e) {
+      debugPrint('captureLashOverlay: $e');
+      return null;
+    }
+  }
+
+  /// Abre la cámara Flutter brevemente, toma foto de la cara y la compone
+  /// con el overlay de pestañas. Devuelve la región de ojos recortada.
+  Future<Uint8List?> _captureAndComposite(Uint8List? overlayBytes) async {
+    CameraController? ctrl;
+    try {
+      final status = await Permission.camera.request();
+      if (!status.isGranted) return overlayBytes;
+
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) return overlayBytes;
+
+      final target = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+
+      ctrl = CameraController(target, ResolutionPreset.medium, enableAudio: false);
+      await ctrl.initialize();
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+
+      final xfile = await ctrl.takePicture();
+      final faceBytes = await File(xfile.path).readAsBytes();
+
+      return _compositeAndCrop(faceBytes, overlayBytes);
+    } catch (e) {
+      debugPrint('captureAndComposite: $e');
+      return overlayBytes;
+    } finally {
+      await ctrl?.dispose();
+    }
+  }
+
+  /// Compone la foto de cara con el overlay de pestañas (alpha blend) y recorta
+  /// la zona de ojos (franja central y=22%–64%).
+  static Uint8List _compositeAndCrop(Uint8List faceRaw, Uint8List? overlayRaw) {
+    var faceImg = img.decodeImage(faceRaw);
+    if (faceImg == null) return faceRaw;
+
+    // Aplica la rotación EXIF (la foto suele guardarse apaisada + tag de giro).
+    faceImg = img.bakeOrientation(faceImg);
+
+    // La cámara frontal guarda la foto sin espejo; la invertimos para que
+    // coincida con el overlay que se renderizó sobre el preview espejado.
+    var canvas = img.flipHorizontal(faceImg);
+
+    if (overlayRaw != null) {
+      final overlayImg = img.decodeImage(overlayRaw);
+      if (overlayImg != null) {
+        // El preview usa BoxFit.cover: la pantalla solo muestra un recorte
+        // centrado de la foto. Recortamos la foto a la proporción del overlay
+        // (pantalla) ANTES de componer; si no, las pestañas quedan corridas.
+        final overlayAspect = overlayImg.width / overlayImg.height;
+        final faceAspect = canvas.width / canvas.height;
+        int cw = canvas.width, ch = canvas.height, cx = 0, cy = 0;
+        if (faceAspect > overlayAspect) {
+          // Foto más ancha que la pantalla: recorta los lados.
+          cw = (canvas.height * overlayAspect).round();
+          cx = ((canvas.width - cw) / 2).round();
+        } else if (faceAspect < overlayAspect) {
+          // Foto más alta que la pantalla: recorta arriba/abajo.
+          ch = (canvas.width / overlayAspect).round();
+          cy = ((canvas.height - ch) / 2).round();
+        }
+        canvas = img.copyCrop(canvas, x: cx, y: cy, width: cw, height: ch);
+
+        // Ahora ambas tienen la misma proporción: escala 1:1 sin deformar.
+        final overlayScaled = img.copyResize(
+          overlayImg,
+          width: canvas.width,
+          height: canvas.height,
+          interpolation: img.Interpolation.linear,
+        );
+        img.compositeImage(canvas, overlayScaled, blend: img.BlendMode.alpha);
+      }
+    }
+
+    // Recorta la zona de los ojos.
+    final y = (canvas.height * 0.22).round();
+    final h = (canvas.height * 0.42).round();
+    final cropped =
+        img.copyCrop(canvas, x: 0, y: y, width: canvas.width, height: h);
+    return Uint8List.fromList(img.encodePng(cropped));
+  }
+
+  void _startCountdown() {
+    if (_workAssistantOpening || _countdown != null) return;
+    setState(() => _countdown = 3);
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) { timer.cancel(); return; }
+      final next = (_countdown ?? 0) - 1;
+      if (next <= 0) {
+        timer.cancel();
+        setState(() => _countdown = null);
+        _beginWorkAssistantFlow();
+      } else {
+        setState(() => _countdown = next);
+      }
+    });
+  }
+
   void _beginWorkAssistantFlow() {
     if (!Platform.isAndroid) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('El asistente con captura solo está disponible en Android.'),
+          content: Text('El asistente solo está disponible en Android.'),
         ),
       );
       return;
     }
-    if (_workAssistantOpening || _assistantCountdown != null) return;
-
-    setState(() {
-      _assistantCountdown = 3;
-      _showMapping = true;
-    });
-    _assistantFlowTimer?.cancel();
-    _assistantFlowTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      final left = _assistantCountdown;
-      if (left == null) {
-        t.cancel();
-        return;
-      }
-      if (left <= 1) {
-        t.cancel();
-        setState(() => _assistantCountdown = null);
-        unawaited(_finishWorkAssistantOpen());
-        return;
-      }
-      setState(() => _assistantCountdown = left - 1);
-    });
+    if (_workAssistantOpening) return;
+    unawaited(_finishWorkAssistantOpen());
   }
 
   String _categoryTitle(String? category) => switch (category) {
@@ -673,6 +745,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     //       transform: Matrix4.identity(),
                     //     ),
                     //   ),
+                    // Óvalo guía de alineación facial
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _FaceOvalGuidePainter(),
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
+                    ),
                     if (_showMapping)
                       Positioned.fill(
                         child: CustomPaint(
@@ -698,7 +779,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               activeCategory: _activeCategory,
             ),
             EyeTrackingWorkAssistantButton(
-              onTap: _beginWorkAssistantFlow,
+              onTap: _startCountdown,
             ),
           
             EyeTrackingFilterRow(
@@ -738,33 +819,77 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               EyeTrackingPremiumOjoButton(onTap: () {}),
             if (!_showLashModal)
               Positioned(
-                right: 16,
-                bottom: 28,
-                child: SafeArea(
-                  top: false,
-                  child: GestureDetector(
-                    onTap: () {
-                      final sessionClient =
-                          ref.read(sessionClientProvider);
-                      if (sessionClient != null) {
-                        _confirmSaveForClient(sessionClient);
-                      } else {
-                        _showSaveDesignSheet();
-                      }
-                    },
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF0D5C41),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.save_alt_rounded,
-                        color: Colors.white,
-                        size: 22,
+                top: 35,
+                right: 12,
+                child: GestureDetector(
+                  onTap: () {
+                    final sessionClient = ref.read(sessionClientProvider);
+                    if (sessionClient != null) {
+                      _confirmSaveForClient(sessionClient);
+                    } else {
+                      _showSaveDesignSheet();
+                    }
+                  },
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(80),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(80),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Icon(
+                          Icons.save_alt_rounded,
+                          color: Colors.white,
+                          size: 26,
+                        ),
                       ),
                     ),
+                  ),
+                ),
+              ),
+
+            // ── Countdown overlay ─────────────────────────────────────────
+            if (_countdown != null)
+              Positioned.fill(
+                child: ColoredBox(
+                  color: Color(0xAA000000),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '$_countdown',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 96,
+                          fontWeight: FontWeight.bold,
+                          height: 1,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 36),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Color(0xDD0D5C41),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Text(
+                          'Quédate quieto para la foto',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -803,43 +928,35 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   ),
                 ),
               ),
-            if (_assistantCountdown != null)
-              Positioned.fill(
-                child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '$_assistantCountdown',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 88,
-                            fontWeight: FontWeight.w200,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Captura con filtro de pestañas',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.85),
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Óvalo guía de alineación facial
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FaceOvalGuidePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xAAFFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+
+    final rect = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height * 0.44),
+      width: size.width * 0.62,
+      height: size.height * 0.58,
+    );
+    canvas.drawOval(rect, paint);
+  }
+
+  @override
+  bool shouldRepaint(_FaceOvalGuidePainter old) => false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

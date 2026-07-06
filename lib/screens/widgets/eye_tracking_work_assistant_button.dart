@@ -13,27 +13,30 @@ class EyeTrackingWorkAssistantButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Positioned(
-      top: 35,
-      right: 12,
-      child: Tooltip(
-        message: 'Asistente IA: comparar con foto de referencia',
-        child: GestureDetector(
-          onTap: onTap,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(80),
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.14),
-                  borderRadius: BorderRadius.circular(80),
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: const Icon(
-                  Icons.smart_toy_outlined,
-                  color: Colors.white,
-                  size: 26,
+      bottom: 28,
+      right: 16,
+      child: SafeArea(
+        top: false,
+        child: Tooltip(
+          message: 'Asistente IA: comparar con foto de referencia',
+          child: GestureDetector(
+            onTap: onTap,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(80),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(80),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: const Icon(
+                    Icons.smart_toy_outlined,
+                    color: Colors.white,
+                    size: 26,
+                  ),
                 ),
               ),
             ),

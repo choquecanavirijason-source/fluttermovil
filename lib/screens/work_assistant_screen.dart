@@ -30,9 +30,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
   List<CameraDescription>? _cameras;
 
   bool _analyzing = false;
-  String? _resultSummary;
-  int? _similarityScore;
-  List<String> _tips = const [];
 
   String _assistantMessage =
       'La pestaña está caída, por favor revisa la elevación…';
@@ -49,22 +46,11 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
   /// Oculta [CameraPreview] antes de [dispose] para evitar BufferQueue abandonado (CameraX vs PlatformView).
   bool _detachingPluginCamera = false;
 
-  /// Foto automática en el panel superior (mitad de pantalla).
+  /// Foto del panel superior (capturada automáticamente al iniciar la cámara).
   Uint8List? _panelPngFromCamera;
-  bool _mirrorPrefetchTopPanel = false;
-  String? _panelSnapshotPath;
-  bool _snapshotTakenWithFrontCamera = true;
-  int? _autoCaptureCountdown;
-  bool _autoCaptureScheduled = false;
-  bool _autoCapturing = false;
-  Timer? _autoCaptureTimer;
 
-  bool get _usingFrontCamera {
-    final list = _cameras;
-    if (list == null || list.isEmpty) return true;
-    final i = _cameraIndex.clamp(0, list.length - 1);
-    return list[i].lensDirection == CameraLensDirection.front;
-  }
+  /// Indica que se está tomando la foto automática.
+  bool _isCapturing = false;
 
   @override
   void initState() {
@@ -73,10 +59,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     if (pref != null && pref.isNotEmpty) {
       _panelPngFromCamera = pref;
       _referenceBytes = pref;
-      _mirrorPrefetchTopPanel = widget.args?.mirrorTopPanel ?? false;
-      _autoCaptureScheduled = true;
-    } else {
-      unawaited(_loadAsset(_defaultRefAsset));
     }
     unawaited(_initCamera());
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -92,9 +74,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     if (!mounted) return;
     setState(() {
       _referenceBytes = data.buffer.asUint8List();
-      _resultSummary = null;
-      _similarityScore = null;
-      _tips = const [];
     });
   }
 
@@ -148,66 +127,52 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
         return;
       }
       setState(() => _cameraController = ctrl);
-      _scheduleAutoCaptureOnce();
+      // Solo auto-captura si no se recibió foto desde el probador.
+      if (_panelPngFromCamera == null) unawaited(_captureForTopPanel());
     } catch (e) {
       debugPrint('WorkAssistant camera: $e');
     }
   }
 
-  void _scheduleAutoCaptureOnce() {
-    if (_autoCaptureScheduled || !mounted) return;
-    _autoCaptureScheduled = true;
-    _autoCaptureCountdown = 3;
-    if (mounted) setState(() {});
-
-    _autoCaptureTimer?.cancel();
-    _autoCaptureTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      final left = _autoCaptureCountdown;
-      if (left == null) {
-        t.cancel();
-        return;
-      }
-      if (left <= 1) {
-        t.cancel();
-        setState(() => _autoCaptureCountdown = null);
-        unawaited(_capturePanelSnapshot());
-        return;
-      }
-      setState(() => _autoCaptureCountdown = left - 1);
-    });
-  }
-
-  Future<void> _capturePanelSnapshot() async {
-    final c = _cameraController;
-    if (c == null || !c.value.isInitialized || !mounted) return;
-    if (_autoCapturing) return;
-    _autoCapturing = true;
+  /// Toma una foto con la cámara y la muestra en el panel superior (región de ojos).
+  Future<void> _captureForTopPanel() async {
+    if (_isCapturing) return;
+    if (mounted) setState(() => _isCapturing = true);
     try {
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      if (!mounted) return;
+      final c = _cameraController;
+      if (c == null || !c.value.isInitialized) return;
       final xfile = await c.takePicture();
       if (!mounted) return;
-      final path = xfile.path;
-      final bytes = await File(path).readAsBytes();
-      final wasFront = _usingFrontCamera;
+      final raw = await File(xfile.path).readAsBytes();
+      final cropped = _cropEyeRegion(raw);
       if (!mounted) return;
       setState(() {
-        _panelSnapshotPath = path;
-        _snapshotTakenWithFrontCamera = wasFront;
-        _referenceBytes = bytes;
+        _panelPngFromCamera = cropped;
+        _referenceBytes = cropped;
       });
     } catch (e) {
-      debugPrint('WorkAssistant takePicture: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo tomar la foto: $e')),
-        );
-      }
+      debugPrint('captureForTopPanel: $e');
     } finally {
-      _autoCapturing = false;
+      if (mounted) setState(() => _isCapturing = false);
     }
+  }
+
+  /// Recorta la región de los ojos: franja central-superior de la imagen.
+  static Uint8List _cropEyeRegion(Uint8List raw) {
+    final src = img.decodeImage(raw);
+    if (src == null) return raw;
+    final y = (src.height * 0.22).round();
+    final h = (src.height * 0.42).round();
+    final cropped = img.copyCrop(src, x: 0, y: y, width: src.width, height: h);
+    return Uint8List.fromList(img.encodePng(cropped));
+  }
+
+  Future<void> _captureAndAnalyze() async {
+    await _captureForTopPanel();
+    if (!mounted || _referenceBytes == null) return;
+    await _runAnalysis();
   }
 
   Future<void> _switchCamera() async {
@@ -318,61 +283,26 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
       return;
     }
 
-    setState(() {
-      _analyzing = true;
-      _resultSummary = null;
-      _similarityScore = null;
-      _tips = const [];
-    });
+    setState(() => _analyzing = true);
 
     await Future<void>.delayed(const Duration(milliseconds: 500));
 
     final demo = await rootBundle.load('assets/chica2.png');
     final current = demo.buffer.asUint8List();
     final score = _computeVisualSimilarity(_referenceBytes, current);
-    final tips = <String>[];
-    String summary;
 
-    if (score == null) {
-      summary = 'No se pudieron decodificar las imágenes.';
-    } else {
-      summary = score >= 75
-          ? 'Muy buena coincidencia visual con la referencia.'
-          : score >= 45
-              ? 'Hay similitud; revisa detalles (simetría, grosor, terminación).'
-              : 'La imagen actual se aleja de la referencia. Revisa técnica.';
-
-      if (score < 85) {
-        tips.add('Compara la línea del párpado con la foto objetivo.');
-        tips.add('Unifica el grosor de punta a comisura.');
-      }
-      if (score < 60) {
-        tips.add('Revisa la elevación del arco respecto a la referencia.');
-        tips.add('La iluminación puede alterar el tono percibido.');
-      }
-      if (tips.isEmpty) {
-        tips.add('Mantén el mismo ángulo que en la referencia.');
-      }
-
+    if (score != null) {
       if (score < 50) {
-        _assistantMessage =
-            'La pestaña está caída, por favor revisa la elevación…';
+        _assistantMessage = 'La pestaña está caída, por favor revisa la elevación…';
       } else if (score < 75) {
-        _assistantMessage =
-            'Buen avance; ajusta simetría entre ojo derecho e izquierdo.';
+        _assistantMessage = 'Buen avance; ajusta simetría entre ojo derecho e izquierdo.';
       } else {
-        _assistantMessage =
-            'Muy alineado con el mapa de referencia. Continúa así.';
+        _assistantMessage = 'Muy alineado con el mapa de referencia. Continúa así.';
       }
     }
 
     if (!mounted) return;
-    setState(() {
-      _analyzing = false;
-      _similarityScore = score;
-      _resultSummary = summary;
-      _tips = tips;
-    });
+    setState(() => _analyzing = false);
   }
 
   String _formatElapsed() {
@@ -388,9 +318,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
       await Future<void>.delayed(const Duration(milliseconds: 120));
       return;
     }
-
-    _autoCaptureTimer?.cancel();
-    _autoCaptureTimer = null;
 
     if (!mounted) return;
     setState(() => _detachingPluginCamera = true);
@@ -452,7 +379,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
 
   @override
   void dispose() {
-    _autoCaptureTimer?.cancel();
     _tickTimer?.cancel();
     final c = _cameraController;
     _cameraController = null;
@@ -590,97 +516,53 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
   }
 
   Widget _lashGuidePanel(double topInset) {
-    final snapshotPath = _panelSnapshotPath;
-    final prefBytes = _panelPngFromCamera;
-    final hasTopImage = prefBytes != null || snapshotPath != null;
+    final photo = _panelPngFromCamera;
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (prefBytes != null)
+        // ── Foto de ojos capturada (o estado de espera) ───────────────
+        if (photo != null)
           Positioned.fill(
-            child: Transform.flip(
-              flipX: _mirrorPrefetchTopPanel,
-              flipY: true,
-              child: Image.memory(
-                prefBytes,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-                gaplessPlayback: true,
-                errorBuilder: (context, error, stackTrace) => const ColoredBox(
-                  color: Colors.black,
-                  child: Center(
-                    child: Icon(Icons.broken_image_outlined,
-                        color: Colors.white54, size: 48),
-                  ),
-                ),
-              ),
-            ),
-          )
-        else if (snapshotPath != null)
-          Positioned.fill(
-            child: Transform.flip(
-              flipX: _snapshotTakenWithFrontCamera,
-              child: Image.file(
-                File(snapshotPath),
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-                gaplessPlayback: true,
-                errorBuilder: (context, error, stackTrace) => const ColoredBox(
-                  color: Colors.black,
-                  child: Center(
-                    child: Icon(Icons.broken_image_outlined,
-                        color: Colors.white54, size: 48),
-                  ),
-                ),
-              ),
+            child: Image.memory(
+              photo,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
             ),
           )
         else
-          const ColoredBox(color: Colors.black),
-        if (_autoCaptureCountdown != null)
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '${_autoCaptureCountdown!}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 96,
-                    fontWeight: FontWeight.w200,
-                    height: 1,
+          ColoredBox(
+            color: const Color(0xFF0D0D0D),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _isCapturing
+                      ? const CircularProgressIndicator(color: Colors.white54)
+                      : const Icon(Icons.camera_alt_outlined,
+                          color: Colors.white24, size: 64),
+                  const SizedBox(height: 14),
+                  Text(
+                    _isCapturing ? 'Capturando…' : 'Iniciando cámara…',
+                    style: const TextStyle(color: Colors.white38, fontSize: 13),
                   ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _autoCapturing ? 'Capturando…' : 'Foto en el panel superior',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.75),
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        if (!hasTopImage &&
-            _autoCaptureCountdown == null &&
-            _autoCaptureScheduled &&
-            !_autoCapturing &&
-            (_cameraController == null || !_cameraController!.value.isInitialized))
-          Center(
-            child: Text(
-              'Iniciando cámara…',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
-                fontSize: 14,
+                ],
               ),
             ),
           ),
+
+        // ── Indicador de análisis en curso ────────────────────────────
+        if (_analyzing)
+          const Positioned.fill(
+            child: ColoredBox(
+              color: Color(0x66000000),
+              child: Center(
+                child: CircularProgressIndicator(color: Colors.white70),
+              ),
+            ),
+          ),
+
+        // ── Controles superiores ──────────────────────────────────────
         Positioned(
           top: topInset + 8,
           left: 10,
@@ -694,8 +576,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
         ),
         Positioned(
           top: topInset + 8,
-          left: 0,
-          right: 0,
+          left: 0, right: 0,
           child: Center(child: _almendradoPill()),
         ),
         Positioned(
@@ -825,19 +706,21 @@ Widget _assistantFloatingBar() {
             ),
             const SizedBox(width: 8),
             GestureDetector(
-              onTap: _analyzing ? null : _runAnalysis,
+              onTap: (_analyzing || _isCapturing || _panelPngFromCamera == null)
+                  ? null
+                  : _runAnalysis,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: _analyzing
-                      ? Colors.white.withValues(alpha: 0.15)
+                  color: (_analyzing || _isCapturing || _panelPngFromCamera == null)
+                      ? Colors.white.withValues(alpha: 0.12)
                       : const Color(0xFF0D5C41),
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white24),
                 ),
-                child: _analyzing
+                child: (_analyzing || _isCapturing)
                     ? const Padding(
                         padding: EdgeInsets.all(11),
                         child: CircularProgressIndicator(
@@ -845,9 +728,9 @@ Widget _assistantFloatingBar() {
                           color: Colors.white,
                         ),
                       )
-                    : const Icon(
+                    : Icon(
                         Icons.smart_toy_outlined,
-                        color: Colors.white,
+                        color: _panelPngFromCamera == null ? Colors.white30 : Colors.white,
                         size: 22,
                       ),
               ),
@@ -930,35 +813,6 @@ Widget _assistantFloatingBar() {
             ],
           ),
         ),
-        if (_similarityScore != null)
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 88 + bottomInset,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _compactResultChip(),
-                if (_tips.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  ..._tips.take(3).map(
-                        (t) => Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
-                            '· $t',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.85),
-                              fontSize: 11,
-                              height: 1.25,
-                            ),
-                          ),
-                        ),
-                      ),
-                ],
-              ],
-            ),
-          ),
         Positioned(
           left: 0,
           right: 0,
@@ -1026,50 +880,10 @@ Widget _assistantFloatingBar() {
     );
   }
 
-  Widget _compactResultChip() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            _similarityScore! >= 60
-                ? Icons.check_circle_outline
-                : Icons.info_outline,
-            color: _similarityScore! >= 60
-                ? Colors.tealAccent
-                : Colors.amber,
-            size: 22,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Coincidencia: $_similarityScore% · ${_resultSummary ?? ''}',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                height: 1.3,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _stopStyleButton() {
+    final busy = _isCapturing || _analyzing;
     return GestureDetector(
-      onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Detener sesión: enlaza tu flujo aquí.')),
-        );
-      },
+      onTap: busy ? null : () => unawaited(_captureAndAnalyze()),
       child: Container(
         width: 72,
         height: 72,
@@ -1085,17 +899,27 @@ Widget _assistantFloatingBar() {
           ],
         ),
         child: Center(
-          child: Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFF0D5C41), width: 2),
-            ),
-          ),
+          child: busy
+              ? const SizedBox(
+                  width: 28, height: 28,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: Color(0xFF0D5C41),
+                  ),
+                )
+              : Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0D5C41),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
         ),
       ),
     );
   }
 }
+
+
+
