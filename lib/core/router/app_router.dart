@@ -16,8 +16,6 @@ import '../../features/catalogo/presentation/screens/catalogo_screen.dart';
 import '../../features/clientes/presentation/screens/clientes_screen.dart';
 import '../../features/clientes/presentation/screens/cliente_detalle_screen.dart';
 import '../../features/clientes/domain/entities/client.dart';
-import '../../features/recomendacion/presentation/screens/recomendacion_screen.dart';
-import '../../recommendation_args.dart';
 import '../../work_assistant_args.dart';
 import 'guards.dart';
 import 'routes.dart';

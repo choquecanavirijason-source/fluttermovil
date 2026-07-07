@@ -17,6 +17,9 @@ class AppColors {
   // Dorado — nav pill, FAB, acciones primarias
   static const Color goldAccent = Color(0xFFD4A517);
 
+  // Verde de acción — botones del probador/asistente AR (grabar, guardar, robot)
+  static const Color actionGreen = Color(0xFF0D5C41);
+
   static const Color avatarOlive = Color(0xFF7A6520);
 
   // Online / offline

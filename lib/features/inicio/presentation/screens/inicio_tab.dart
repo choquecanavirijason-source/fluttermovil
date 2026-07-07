@@ -7,7 +7,6 @@ import '../../../../core/services/agenda_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_state_provider.dart';
 import '../../../../core/models/mobile_appointment.dart';
-import '../../../../screens/probador.dart';
 import '../../../clientes/domain/entities/client.dart';
 import '../../../clientes/presentation/providers/clientes_provider.dart';
 
@@ -704,7 +703,7 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                              color: const Color(0xFFD4A517).withOpacity(0.5),
+                              color: const Color(0xFFD4A517).withValues(alpha: 0.5),
                               width: 2),
                         ),
                         child: Center(

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:Probador/core/theme/app_colors.dart';
+
 class EyeTrackingFilterRow extends StatelessWidget {
   final int selectedFilter;
   final ValueChanged<int> onSelect;
@@ -51,7 +53,7 @@ class EyeTrackingFilterRow extends StatelessWidget {
         child: Text(
           text,
           style: TextStyle(
-            color: isSelected ? const Color(0xFF0D5C41) : Colors.white,
+            color: isSelected ? AppColors.actionGreen : Colors.white,
             fontSize: 14,
             fontWeight: FontWeight.w600,
             letterSpacing: 0.3,

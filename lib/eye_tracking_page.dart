@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show Factory;
@@ -14,6 +15,8 @@ import 'package:go_router/go_router.dart';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
+import 'core/recommendation/eye_shape_analyzer.dart';
+import 'core/theme/app_colors.dart';
 import 'features/catalogo/domain/entities/catalog_item.dart';
 import 'features/catalogo/presentation/providers/catalogo_provider.dart';
 import 'features/clientes/domain/entities/client.dart';
@@ -123,14 +126,29 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   CatalogItem? _selectedEyeType;
   List<CatalogItem>? _eyeTypes;
 
+  /// true una vez que el usuario elige el tipo de ojo manualmente desde la
+  /// hoja de selección; a partir de ahí deja de sobreescribirse con el
+  /// resultado del escaneo automático.
+  bool _eyeTypeSetManually = false;
+
   /// Path local del .glb descargado para el item seleccionado (null = sin modelo).
   String? _selectedModel3dPath;
 
   /// true mientras ModelCacheService resuelve la descarga del .glb.
   bool _isModel3dLoading = false;
 
-  int? _countdown;
-  Timer? _countdownTimer;
+  /// true mientras se muestra la guía de alineación (esperando que el usuario
+  /// ubique sus ojos en el marco antes de capturar).
+  bool _alignmentGuideActive = false;
+
+  /// true cuando ambos ojos están dentro de la zona objetivo (marcadores en verde).
+  bool _eyesAligned = false;
+
+  /// Momento en que se detectó alineación continua (para exigir estabilidad breve).
+  DateTime? _alignedSince;
+
+  /// Duración mínima que los ojos deben permanecer alineados antes de disparar la captura.
+  static const Duration _alignmentHoldDuration = Duration(milliseconds: 900);
 
   List<String> get _carouselImages =>
       _selectedFilter == 0 ? _compatibleImages : _explorarImages;
@@ -193,6 +211,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           _frame = frame;
           _status = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
         });
+        if (_alignmentGuideActive) _evaluateAlignment(frame);
+        _detectEyeTypeFromFrame(frame);
       },
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
@@ -222,6 +242,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           _frame = frame;
           _status = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
         });
+        if (_alignmentGuideActive) _evaluateAlignment(frame);
+        _detectEyeTypeFromFrame(frame);
       },
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
@@ -252,7 +274,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   @override
   void dispose() {
-    _countdownTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     _service.stopTracking();
@@ -431,10 +452,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     CameraController? ctrl;
     try {
       final status = await Permission.camera.request();
-      if (!status.isGranted) return overlayBytes;
+      if (!status.isGranted || !mounted) return overlayBytes;
 
       final cameras = await availableCameras();
-      if (cameras.isEmpty) return overlayBytes;
+      if (cameras.isEmpty || !mounted) return overlayBytes;
 
       final target = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
@@ -506,23 +527,116 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final h = (canvas.height * 0.42).round();
     final cropped =
         img.copyCrop(canvas, x: 0, y: y, width: canvas.width, height: h);
-    return Uint8List.fromList(img.encodePng(cropped));
+    final rotated = img.copyRotate(cropped, angle: 180);
+    return Uint8List.fromList(img.encodePng(rotated));
   }
 
-  void _startCountdown() {
-    if (_workAssistantOpening || _countdown != null) return;
-    setState(() => _countdown = 3);
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) { timer.cancel(); return; }
-      final next = (_countdown ?? 0) - 1;
-      if (next <= 0) {
-        timer.cancel();
-        setState(() => _countdown = null);
-        _beginWorkAssistantFlow();
-      } else {
-        setState(() => _countdown = next);
-      }
+  void _startAlignmentGuide() {
+    if (_workAssistantOpening || _alignmentGuideActive) return;
+    setState(() {
+      _alignmentGuideActive = true;
+      _eyesAligned = false;
+      _alignedSince = null;
     });
+  }
+
+  /// Centro de un ojo: usa el iris (más preciso) si está disponible,
+  /// si no, el centroide de los puntos de contorno del ojo.
+  EyePoint? _eyeAnchor(List<EyePoint> contour, EyePoint? iris) {
+    if (iris != null) return iris;
+    if (contour.isEmpty) return null;
+    double sx = 0, sy = 0;
+    for (final p in contour) {
+      sx += p.x;
+      sy += p.y;
+    }
+    return EyePoint(x: sx / contour.length, y: sy / contour.length);
+  }
+
+  /// Misma transformación imagen→pantalla que usan [EyeTrackingPainter] y
+  /// [LashMappingPainter] (BoxFit.cover), para comparar ojos detectados
+  /// contra la posición de la guía dibujada en pantalla.
+  bool _computeEyesAligned(TrackingFrame frame, Size canvasSize) {
+    if (!frame.faceDetected) return false;
+    final iw = frame.imageWidth.toDouble();
+    final ih = frame.imageHeight.toDouble();
+    if (iw <= 0 || ih <= 0) return false;
+
+    final a = _eyeAnchor(frame.leftEye, frame.leftIris);
+    final b = _eyeAnchor(frame.rightEye, frame.rightIris);
+    if (a == null || b == null) return false;
+
+    final sx = canvasSize.width / iw;
+    final sy = canvasSize.height / ih;
+    final scale = math.max(sx, sy);
+    final dx = (canvasSize.width - iw * scale) / 2;
+    final dy = (canvasSize.height - ih * scale) / 2;
+    Offset toCanvas(EyePoint p) => Offset(p.x * scale + dx, p.y * scale + dy);
+
+    final pa = toCanvas(a);
+    final pb = toCanvas(b);
+    // Asigna cada ojo detectado a la guía más cercana en X, sin asumir
+    // a qué lado de la pantalla corresponde "leftEye"/"rightEye".
+    final detectedLeft = pa.dx <= pb.dx ? pa : pb;
+    final detectedRight = pa.dx <= pb.dx ? pb : pa;
+
+    // Misma franja que _EyePositionGuidePainter y _compositeAndCrop.
+    final bandTop = canvasSize.height * 0.22;
+    final bandHeight = canvasSize.height * 0.42;
+    final eyeY = bandTop + bandHeight / 2;
+    final guideLeft = Offset(canvasSize.width * 0.32, eyeY);
+    final guideRight = Offset(canvasSize.width * 0.68, eyeY);
+    final tolerance = canvasSize.width * 0.11;
+
+    return (detectedLeft - guideLeft).distance <= tolerance &&
+        (detectedRight - guideRight).distance <= tolerance;
+  }
+
+  void _evaluateAlignment(TrackingFrame frame) {
+    if (!mounted || !_alignmentGuideActive) return;
+    final size = MediaQuery.sizeOf(context);
+    final aligned = _computeEyesAligned(frame, size);
+    final now = DateTime.now();
+
+    if (aligned) {
+      _alignedSince ??= now;
+      if (now.difference(_alignedSince!) >= _alignmentHoldDuration) {
+        setState(() {
+          _alignmentGuideActive = false;
+          _eyesAligned = false;
+          _alignedSince = null;
+        });
+        _beginWorkAssistantFlow();
+        return;
+      }
+      if (!_eyesAligned) setState(() => _eyesAligned = true);
+    } else {
+      _alignedSince = null;
+      if (_eyesAligned) setState(() => _eyesAligned = false);
+    }
+  }
+
+  /// Detecta la forma del ojo en vivo con [EyeShapeAnalyzer] y actualiza el
+  /// pill "tipo de ojo" con el item del catálogo correspondiente, mientras
+  /// el usuario no haya elegido uno manualmente.
+  void _detectEyeTypeFromFrame(TrackingFrame frame) {
+    if (_eyeTypeSetManually) return;
+    final types = _eyeTypes;
+    if (types == null || types.isEmpty) return;
+
+    final analysis = EyeShapeAnalyzer.analyze(frame);
+    if (!analysis.reliable) return;
+
+    final catalogName = analysis.shape.catalogName;
+    CatalogItem? match;
+    for (final item in types) {
+      if (item.name.trim().toLowerCase() == catalogName.toLowerCase()) {
+        match = item;
+        break;
+      }
+    }
+    if (match == null || match.id == _selectedEyeType?.id) return;
+    setState(() => _selectedEyeType = match);
   }
 
   void _beginWorkAssistantFlow() {
@@ -558,7 +672,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         selected: _selectedEyeType,
         preloadedItems: _eyeTypes,
         onSelect: (item) {
-          setState(() => _selectedEyeType = item);
+          setState(() {
+            _selectedEyeType = item;
+            _eyeTypeSetManually = true;
+          });
           Navigator.of(context).pop();
         },
       ),
@@ -579,7 +696,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF0D5C41),
+              backgroundColor: AppColors.actionGreen,
             ),
             onPressed: () {
               Navigator.of(ctx).pop();
@@ -642,7 +759,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Diseño guardado para ${client.displayName}'),
-        backgroundColor: const Color(0xFF0D5C41),
+        backgroundColor: AppColors.actionGreen,
       ));
     } catch (e) {
       if (!mounted) return;
@@ -745,15 +862,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     //       transform: Matrix4.identity(),
                     //     ),
                     //   ),
-                    // Óvalo guía de alineación facial
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: CustomPaint(
-                          painter: _FaceOvalGuidePainter(),
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                    ),
                     if (_showMapping)
                       Positioned.fill(
                         child: CustomPaint(
@@ -768,7 +876,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             ...EyeTrackingOverlay.buildSiblings(
               onBack: () => _goHome(context),
               status: _status,
-              title: _selectedEyeType?.name ?? 'Almendrado',
+              title: _selectedEyeType?.name ?? '',
               onEyeTypeTap: _showEyeTypeSheet,
               onSwitchCamera: () => _service.switchCamera(),
               onFlashTap: () {},
@@ -779,7 +887,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               activeCategory: _activeCategory,
             ),
             EyeTrackingWorkAssistantButton(
-              onTap: _startCountdown,
+              onTap: _startAlignmentGuide,
             ),
           
             EyeTrackingFilterRow(
@@ -837,7 +945,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       child: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.14),
+                          color: AppColors.actionGreen.withValues(alpha: 0.85),
                           borderRadius: BorderRadius.circular(80),
                           border: Border.all(color: Colors.white24),
                         ),
@@ -852,40 +960,44 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 ),
               ),
 
-            // ── Countdown overlay ─────────────────────────────────────────
-            if (_countdown != null)
+            // ── Guía de posición de ojos: espera alineación antes de capturar ──
+            if (_alignmentGuideActive)
               Positioned.fill(
-                child: ColoredBox(
-                  color: Color(0xAA000000),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                child: IgnorePointer(
+                  child: Stack(
+                    fit: StackFit.expand,
                     children: [
-                      Text(
-                        '$_countdown',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 96,
-                          fontWeight: FontWeight.bold,
-                          height: 1,
-                        ),
+                      CustomPaint(
+                        painter: _EyePositionGuidePainter(aligned: _eyesAligned),
                       ),
-                      const SizedBox(height: 24),
-                      Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 36),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: Color(0xDD0D5C41),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: const Text(
-                          'Quédate quieto para la foto',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                            height: 1.3,
+                      Positioned(
+                        bottom: 60,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            margin: const EdgeInsets.symmetric(horizontal: 36),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: _eyesAligned
+                                  ? const Color(0xDD1FA24A)
+                                  : const Color(0xDD0D5C41),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Text(
+                              _eyesAligned
+                                  ? '¡Perfecto! Quédate así…'
+                                  : 'Ubica tus ojos dentro del marco',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                                height: 1.3,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -936,27 +1048,45 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Óvalo guía de alineación facial
+// Guía de posición de ojos (se muestra al abrir el asistente, antes de la foto)
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _FaceOvalGuidePainter extends CustomPainter {
+class _EyePositionGuidePainter extends CustomPainter {
+  final bool aligned;
+
+  const _EyePositionGuidePainter({required this.aligned});
+
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xAAFFFFFF)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-
-    final rect = Rect.fromCenter(
-      center: Offset(size.width / 2, size.height * 0.44),
-      width: size.width * 0.62,
-      height: size.height * 0.58,
+    // Misma franja que recorta _compositeAndCrop (y=22%–64% del alto).
+    final bandRect = Rect.fromLTWH(
+      size.width * 0.08,
+      size.height * 0.22,
+      size.width * 0.84,
+      size.height * 0.42,
     );
-    canvas.drawOval(rect, paint);
+    final rrect = RRect.fromRectAndRadius(bandRect, const Radius.circular(24));
+
+    // Oscurece todo excepto la franja de ojos.
+    final outerPath = Path()..addRect(Offset.zero & size);
+    final innerPath = Path()..addRRect(rrect);
+    final maskPath =
+        Path.combine(PathOperation.difference, outerPath, innerPath);
+    canvas.drawPath(maskPath, Paint()..color = const Color(0x99000000));
+
+    // Contorno de la franja: blanco por defecto, verde cuando el usuario
+    // se posiciona correctamente. Sin marcadores de ojos independientes.
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = aligned ? const Color(0xFF2ECC71) : Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = aligned ? 3.5 : 2.5,
+    );
   }
 
   @override
-  bool shouldRepaint(_FaceOvalGuidePainter old) => false;
+  bool shouldRepaint(_EyePositionGuidePainter old) => old.aligned != aligned;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1130,20 +1260,20 @@ class _OptionTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
         decoration: BoxDecoration(
-          color: const Color(0xFF0D5C41).withValues(alpha: 0.07),
+          color: AppColors.actionGreen.withValues(alpha: 0.07),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: const Color(0xFF0D5C41).withValues(alpha: 0.2),
+            color: AppColors.actionGreen.withValues(alpha: 0.2),
           ),
         ),
         child: Row(
           children: [
-            Icon(icon, color: const Color(0xFF0D5C41), size: 22),
+            Icon(icon, color: AppColors.actionGreen, size: 22),
             const SizedBox(width: 12),
             Text(
               label,
               style: const TextStyle(
-                color: Color(0xFF0D5C41),
+                color: AppColors.actionGreen,
                 fontWeight: FontWeight.w600,
                 fontSize: 15,
               ),
@@ -1267,7 +1397,7 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                           leading: CircleAvatar(
-                            backgroundColor: const Color(0xFF0D5C41),
+                            backgroundColor: AppColors.actionGreen,
                             child: Text(
                               _initials(c.displayName),
                               style: const TextStyle(
@@ -1287,7 +1417,7 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
                               : null,
                           trailing: const Icon(
                             Icons.check_circle_outline,
-                            color: Color(0xFF0D5C41),
+                            color: AppColors.actionGreen,
                           ),
                           onTap: () => widget.onSelect(c),
                         );

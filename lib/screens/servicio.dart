@@ -176,7 +176,7 @@ class _ServicioPageState extends State<ServicioPage> {
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.05),
+                                color: Colors.black.withValues(alpha: 0.05),
                                 blurRadius: 10,
                                 offset: const Offset(0, 4),
                               )
@@ -235,7 +235,7 @@ class _ServicioPageState extends State<ServicioPage> {
 
   Widget _buildPlaceholder() {
     return Container(
-      color: const Color(0xFFBFA36F).withOpacity(0.1),
+      color: const Color(0xFFBFA36F).withValues(alpha: 0.1),
       width: double.infinity,
       child: const Icon(
         Icons.image_not_supported_outlined,

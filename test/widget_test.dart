@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:test_face/core/config/env.dart';
+import 'package:Probador/core/config/env.dart';
 
 void main() {
   test('Env.mediaUrl construye URLs absolutas', () {

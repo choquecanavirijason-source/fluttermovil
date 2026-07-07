@@ -24,7 +24,7 @@ class EyeTrackingBackButton extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.14),
+                color: Colors.white.withValues(alpha: 0.14),
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white24),
               ),

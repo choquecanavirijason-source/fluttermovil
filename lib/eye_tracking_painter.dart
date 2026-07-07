@@ -35,8 +35,8 @@ class EyeTrackingPainter extends CustomPainter {
     final dy = (canvasSize.height - ih * scale) / 2;
 
     return Matrix4.identity()
-      ..translate(dx, dy)
-      ..scale(scale);
+      ..translateByDouble(dx, dy, 0, 1)
+      ..scaleByDouble(scale, scale, 1.0, 1.0);
   }
 
   @override

@@ -9,6 +9,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:Probador/core/theme/app_colors.dart';
 import 'package:Probador/work_assistant_args.dart';
 
 /// Asistente de verificación: mitad superior foto de referencia (captura automática a los 3 s);
@@ -599,7 +600,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xFF0D5C41).withValues(alpha: 0.92),
+            color: AppColors.actionGreen.withValues(alpha: 0.92),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(
               color: const Color(0xFF062A1E).withValues(alpha: 0.6),
@@ -611,7 +612,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
               Icon(Icons.remove_red_eye, color: Colors.white, size: 20),
               SizedBox(width: 8),
               Text(
-                'drado',
+                'Almendrado',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -681,7 +682,7 @@ Widget _assistantFloatingBar() {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: const Color(0xFF0D5C41).withValues(alpha: 0.85),
+                color: AppColors.actionGreen.withValues(alpha: 0.85),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
@@ -716,7 +717,7 @@ Widget _assistantFloatingBar() {
                 decoration: BoxDecoration(
                   color: (_analyzing || _isCapturing || _panelPngFromCamera == null)
                       ? Colors.white.withValues(alpha: 0.12)
-                      : const Color(0xFF0D5C41),
+                      : AppColors.actionGreen,
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white24),
                 ),
@@ -904,14 +905,14 @@ Widget _assistantFloatingBar() {
                   width: 28, height: 28,
                   child: CircularProgressIndicator(
                     strokeWidth: 2.5,
-                    color: Color(0xFF0D5C41),
+                    color: AppColors.actionGreen,
                   ),
                 )
               : Container(
                   width: 28,
                   height: 28,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0D5C41),
+                    color: AppColors.actionGreen,
                     borderRadius: BorderRadius.circular(6),
                   ),
                 ),
