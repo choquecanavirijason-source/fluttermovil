@@ -8,13 +8,23 @@ class ProbadorScreen extends StatefulWidget {
   State<ProbadorScreen> createState() => _ProbadorScreenState();
 }
 
-class _ProbadorScreenState extends State<ProbadorScreen> {
+class _ProbadorScreenState extends State<ProbadorScreen>
+    with SingleTickerProviderStateMixin {
   late Timer _timer;
   int _secondsRemaining = 5;
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
     _startCountdown();
   }
 
@@ -40,58 +50,28 @@ class _ProbadorScreenState extends State<ProbadorScreen> {
   @override
   void dispose() {
     _timer.cancel();
+    _pulseController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    const gold = Color(0xFFD4A517);
     return Scaffold(
       backgroundColor: const Color(0xFF094732),
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Image.asset(
-              "assets/espejo.png",
-              width: 130,
-              height: 130,
+        child: ScaleTransition(
+          scale: _pulseAnimation,
+          child: Image.asset(
+            "assets/espejo.png",
+            width: 130,
+            height: 130,
+            color: Colors.white,
+            errorBuilder: (context, error, stackTrace) => const Icon(
+              Icons.remove_red_eye_outlined,
+              size: 130,
               color: Colors.white,
-              errorBuilder: (context, error, stackTrace) => const Icon(
-                Icons.remove_red_eye_outlined,
-                size: 130,
-                color: Colors.white,
-              ),
             ),
-            const SizedBox(height: 28),
-            const Text(
-              "Probador",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              "Estamos escaneando el modelo\nde tus ojos…",
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.7),
-                fontSize: 14,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 32),
-            const SizedBox(
-              width: 26,
-              height: 26,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.4,
-                valueColor: AlwaysStoppedAnimation(gold),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

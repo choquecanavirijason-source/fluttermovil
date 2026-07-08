@@ -44,27 +44,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
-      backgroundColor: AppColors.darkBg,
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.remove_red_eye, color: AppColors.goldAccent, size: 56),
-            SizedBox(height: 20),
-            Text('eLashes',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800)),
-            SizedBox(height: 24),
-            SizedBox(
-              width: 28,
-              height: 28,
-              child: CircularProgressIndicator(strokeWidth: 2.5),
-            ),
-          ],
-        ),
-      ),
+      backgroundColor: AppColors.brandPrimary,
     );
   }
 }
