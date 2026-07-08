@@ -12,6 +12,11 @@ class Env {
   /// Base de la API REST (incluye `/api`). `ApiEndpoints` agrega rutas sin `/api`.
   static const String apiBaseUrl = '$host/api';
 
+  /// Puerto directo del backend (uvicorn), usado solo por el WebSocket de
+  /// agenda para saltarse nginx (que aún no reenvía `/ws/` en producción).
+  /// El REST sigue yendo por nginx (`apiBaseUrl`, puerto 80/443) sin cambios.
+  static const int wsDirectPort = 8000;
+
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 30);
   static const Duration sendTimeout = Duration(seconds: 30);
@@ -20,6 +25,9 @@ class Env {
 
   static const String tokenStorageKey = '_tkn';
   static const String selectedBranchPrefsKey = 'selected_branch_id';
+  /// Prefijo de clave; [NewAppointmentWatcher] le agrega `_<userId>` para no
+  /// mezclar el estado entre operarias que comparten el dispositivo.
+  static const String knownAppointmentIdsPrefsKey = 'known_appointment_ids';
   static const String locale = 'es_BO';
   static const String currencyCode = 'BOB';
   static const String currencySymbol = 'Bs';

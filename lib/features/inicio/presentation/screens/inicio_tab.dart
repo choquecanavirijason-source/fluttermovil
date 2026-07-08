@@ -1,14 +1,19 @@
+import 'dart:async' show StreamSubscription, unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../../core/router/routes.dart';
 import '../../../../core/services/agenda_service.dart';
+import '../../../../core/services/agenda_ws_service.dart';
+import '../../../../core/services/local_notifications_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_state_provider.dart';
 import '../../../../core/models/mobile_appointment.dart';
 import '../../../clientes/domain/entities/client.dart';
 import '../../../clientes/presentation/providers/clientes_provider.dart';
+import '../../../clientes/presentation/providers/new_appointment_watcher.dart';
 
 final _todayTicketsProvider =
     FutureProvider.autoDispose<List<MobileAppointment>>((ref) async {
@@ -29,22 +34,50 @@ class InicioTab extends ConsumerStatefulWidget {
 
 class _InicioTabState extends ConsumerState<InicioTab>
     with WidgetsBindingObserver {
+  StreamSubscription<AgendaWsEvent>? _wsSub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(LocalNotificationsService.instance.initialize());
+    ref.read(newAppointmentWatcherProvider).start();
+
+    // Conecta al WS de agenda (/ws/branch/{branchId}) para refrescar
+    // "Clientes de hoy" y disparar la verificación de citas nuevas al
+    // instante, en vez de esperar el sondeo de 3 min.
+    final ws = ref.read(agendaWsServiceProvider);
+    _wsSub = ws.events.listen(_onAgendaWsEvent);
+    unawaited(ws.connect());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ref.read(newAppointmentWatcherProvider).stop();
+    _wsSub?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
+    if (state == AppLifecycleState.resumed) {
+      _refresh();
+      ref.read(agendaWsServiceProvider).reconnectNow();
+    }
+  }
+
+  /// Un evento de agenda en vivo (cita creada/llamada/actualizada/eliminada)
+  /// refresca "Clientes de hoy" al instante y adelanta la verificación de
+  /// clientes nuevos, sin esperar el sondeo periódico.
+  void _onAgendaWsEvent(AgendaWsEvent event) {
+    final user = ref.read(authUserProvider);
+    final belongsToMe =
+        event.professionalId == null || event.professionalId == user?.id;
+    if (!belongsToMe) return;
+
+    ref.invalidate(_todayTicketsProvider);
+    ref.read(newAppointmentWatcherProvider).checkNow();
   }
 
   Future<void> _refresh() async {
