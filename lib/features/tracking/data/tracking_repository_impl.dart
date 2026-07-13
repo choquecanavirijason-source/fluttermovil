@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/dio_client.dart';
@@ -32,6 +34,9 @@ class TrackingRepositoryImpl implements TrackingRepository {
     };
     return _api.create(body);
   }
+
+  @override
+  Future<String> aiReview(Uint8List jpegBytes) => _api.aiReview(jpegBytes);
 
   @override
   Future<List<TrackingRecord>> historyByClient(int clientId) async {

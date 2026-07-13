@@ -2,11 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show Factory;
-import 'package:flutter/gestures.dart' show OneSequenceGestureRecognizer;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart'
-    show RenderRepaintBoundary, PlatformViewHitTestBehavior;
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,6 +27,7 @@ import 'screens/widgets/eye_tracking_filter_row.dart';
 import 'screens/widgets/eye_tracking_lash_modal.dart';
 import 'screens/widgets/eye_tracking_overlay.dart';
 import 'screens/widgets/eye_tracking_work_assistant_button.dart';
+import 'screens/widgets/hybrid_camera_preview.dart';
 import 'work_assistant_args.dart';
 // import 'core/storage/model_cache_service.dart'; // TODO: reactivar con Kotlin 3D
 
@@ -478,12 +476,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         return;
       }
 
-      // stopTracking resuelve cuando el unbind nativo terminó; solo un
-      // margen corto para que el plugin `camera` pueda abrir el lente.
-      await _service.stopTracking();
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-      if (!mounted) return;
-
+      // El asistente de trabajo reutiliza la misma sesión de CameraX nativa
+      // (para tener landmarks en vivo), así que la cámara NO se apaga acá;
+      // solo cede el `previewView` — [_resumeEyePreviewAfterAssistant] lo
+      // recupera al volver.
       await context.push(
         '/work-assistant',
         extra: WorkAssistantArgs(
@@ -739,7 +735,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   children: [
                     if (Platform.isAndroid)
                       Positioned.fill(
-                        child: _HybridCameraPreview(
+                        child: HybridCameraPreview(
                           key: ValueKey<String>('eye_preview_$_previewSession'),
                         ),
                       )
@@ -1392,40 +1388,3 @@ class _Model3dViewer extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Preview de cámara nativa
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Preview de cámara con **Hybrid Composition** (`initExpensiveAndroidView`).
-/// Necesario para que el vídeo de CameraX (TextureView) se renderice; con
-/// `AndroidView` simple el preview salía negro aunque el análisis sí corría.
-class _HybridCameraPreview extends StatelessWidget {
-  const _HybridCameraPreview({super.key});
-
-  static const String _viewType = 'eye_tracking/camera_preview';
-
-  @override
-  Widget build(BuildContext context) {
-    return PlatformViewLink(
-      viewType: _viewType,
-      surfaceFactory: (context, controller) => AndroidViewSurface(
-        controller: controller as AndroidViewController,
-        gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
-        hitTestBehavior: PlatformViewHitTestBehavior.transparent,
-      ),
-      onCreatePlatformView: (params) {
-        final controller = PlatformViewsService.initExpensiveAndroidView(
-          id: params.id,
-          viewType: _viewType,
-          layoutDirection: TextDirection.ltr,
-          creationParamsCodec: const StandardMessageCodec(),
-          onFocus: () => params.onFocusChanged(true),
-        );
-        controller
-          ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
-          ..create();
-        return controller;
-      },
-    );
-  }
-}

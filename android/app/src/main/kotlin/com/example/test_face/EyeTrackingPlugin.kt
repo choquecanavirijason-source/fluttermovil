@@ -71,6 +71,22 @@ class EyeTrackingPlugin(
                     mgr.captureFrame(result)
                 }
             }
+            "startRecording" -> {
+                val mgr = cameraXManager
+                if (mgr == null) {
+                    result.error("NO_CAMERA", "La cámara no está inicializada", null)
+                } else {
+                    mgr.startRecording(result)
+                }
+            }
+            "stopRecording" -> {
+                val mgr = cameraXManager
+                if (mgr == null) {
+                    result.success(null)
+                } else {
+                    mgr.stopRecording(result)
+                }
+            }
             "load3DModel" -> {
                 val path = call.argument<String>("path")
                 if (path != null) {

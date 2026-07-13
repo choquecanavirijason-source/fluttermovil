@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'entities/tracking_record.dart';
 
 abstract class TrackingRepository {
@@ -13,4 +15,8 @@ abstract class TrackingRepository {
 
   /// Historial de aplicaciones del cliente (más reciente primero).
   Future<List<TrackingRecord>> historyByClient(int clientId);
+
+  /// Guiado de IA en vivo (Beauty Tech): envía una foto de la aplicación en
+  /// curso y devuelve un consejo breve en texto natural.
+  Future<String> aiReview(Uint8List jpegBytes);
 }

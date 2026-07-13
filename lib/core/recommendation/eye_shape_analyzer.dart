@@ -61,6 +61,11 @@ class EyeAnalysis {
   final double asymmetry; // 0..1, diferencia relativa entre ambos ojos
   final bool reliable;
 
+  /// Tilt (elevación) de cada ojo por separado — útil para detectar que un
+  /// lado quedó más caído/elevado que el otro durante la aplicación.
+  final double leftTiltDeg;
+  final double rightTiltDeg;
+
   const EyeAnalysis({
     required this.shape,
     required this.aspectRatio,
@@ -68,6 +73,8 @@ class EyeAnalysis {
     required this.openness,
     required this.asymmetry,
     required this.reliable,
+    this.leftTiltDeg = 0,
+    this.rightTiltDeg = 0,
   });
 
   /// Análisis vacío cuando no hay rostro/landmarks suficientes.
@@ -138,6 +145,8 @@ class EyeShapeAnalyzer {
       openness: openness,
       asymmetry: asymmetry,
       reliable: true,
+      leftTiltDeg: left.tiltDeg,
+      rightTiltDeg: right.tiltDeg,
     );
   }
 

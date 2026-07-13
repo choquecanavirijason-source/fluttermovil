@@ -1,248 +1,201 @@
-import 'dart:async' show Timer, unawaited;
-import 'dart:io' show File, Platform;
+import 'dart:async' show StreamSubscription, Timer, unawaited;
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show PlatformException, rootBundle;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image/image.dart' as img;
-import 'package:permission_handler/permission_handler.dart';
 import 'package:Probador/work_assistant_args.dart';
 
-/// Asistente de verificación: mitad superior foto de referencia (captura automática a los 3 s);
-/// mitad inferior cámara en vivo.
-class WorkAssistantScreen extends StatefulWidget {
+import '../core/recommendation/eye_shape_analyzer.dart';
+import '../eye_tracking_model.dart';
+import '../features/tracking/data/tracking_repository_impl.dart';
+import '../native_eye_tracking_service.dart';
+import 'widgets/hybrid_camera_preview.dart';
+
+/// Asistente de trabajo ("Beauty Tech"): mitad superior foto de referencia
+/// del diseño elegido; mitad inferior cámara nativa en vivo con guiado de IA
+/// y grabación real. Reutiliza la misma sesión de CameraX nativa que el
+/// probador (ver [NativeEyeTrackingService]) — por eso no abre ninguna
+/// cámara propia: solo se suscribe a los landmarks y captura frames.
+class WorkAssistantScreen extends ConsumerStatefulWidget {
   const WorkAssistantScreen({super.key, this.args});
 
   final WorkAssistantArgs? args;
 
   @override
-  State<WorkAssistantScreen> createState() => _WorkAssistantScreenState();
+  ConsumerState<WorkAssistantScreen> createState() =>
+      _WorkAssistantScreenState();
 }
 
-class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
+class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen> {
   static const String _defaultRefAsset = 'assets/chica.png';
+  static const double _liveAsymmetryThreshold = 0.28;
+  static const double _liveHoodedTiltDeg = -6.0;
+  static const double _liveTiltDiffThreshold = 6.0;
+
+  final NativeEyeTrackingService _service = NativeEyeTrackingService();
+  StreamSubscription<TrackingFrame>? _trackingSub;
 
   Uint8List? _referenceBytes;
-  CameraController? _cameraController;
-  List<CameraDescription>? _cameras;
+  bool _mirrorTopPanel = false;
 
   bool _analyzing = false;
-  String? _resultSummary;
-  int? _similarityScore;
-  List<String> _tips = const [];
-
   String _assistantMessage =
-      'La pestaña está caída, por favor revisa la elevación…';
+      'Centra tu rostro en cámara para recibir guía en vivo.';
+  DateTime? _aiMessageHoldUntil;
+  DateTime? _lastMessageUpdate;
 
-  bool _flashOn = false;
-  int _cameraIndex = 0;
-  final DateTime _sessionStart = DateTime.now();
+  bool _isRecording = false;
+  bool _recordingBusy = false;
+  DateTime _sessionStart = DateTime.now();
   Timer? _tickTimer;
   int _elapsedSeconds = 0;
 
-  /// Evita doble atrás mientras se libera la cámara (plugin camera vs CameraX nativo).
+  /// Evita doble atrás mientras se detiene una grabación en curso.
   bool _exitInProgress = false;
-
-  /// Oculta [CameraPreview] antes de [dispose] para evitar BufferQueue abandonado (CameraX vs PlatformView).
-  bool _detachingPluginCamera = false;
-
-  /// Foto automática en el panel superior (mitad de pantalla).
-  Uint8List? _panelPngFromCamera;
-  bool _mirrorPrefetchTopPanel = false;
-  String? _panelSnapshotPath;
-  bool _snapshotTakenWithFrontCamera = true;
-  int? _autoCaptureCountdown;
-  bool _autoCaptureScheduled = false;
-  bool _autoCapturing = false;
-  Timer? _autoCaptureTimer;
-
-  bool get _usingFrontCamera {
-    final list = _cameras;
-    if (list == null || list.isEmpty) return true;
-    final i = _cameraIndex.clamp(0, list.length - 1);
-    return list[i].lensDirection == CameraLensDirection.front;
-  }
 
   @override
   void initState() {
     super.initState();
     final pref = widget.args?.panelPngBytes;
     if (pref != null && pref.isNotEmpty) {
-      _panelPngFromCamera = pref;
       _referenceBytes = pref;
-      _mirrorPrefetchTopPanel = widget.args?.mirrorTopPanel ?? false;
-      _autoCaptureScheduled = true;
+      _mirrorTopPanel = widget.args?.mirrorTopPanel ?? false;
     } else {
       unawaited(_loadAsset(_defaultRefAsset));
     }
-    unawaited(_initCamera());
-    _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() {
-        _elapsedSeconds = DateTime.now().difference(_sessionStart).inSeconds;
-      });
-    });
+    unawaited(_service.startTracking());
+    _trackingSub = _service.trackingStream.listen(_onFrame);
   }
 
   Future<void> _loadAsset(String path) async {
     final data = await rootBundle.load(path);
     if (!mounted) return;
-    setState(() {
-      _referenceBytes = data.buffer.asUint8List();
-      _resultSummary = null;
-      _similarityScore = null;
-      _tips = const [];
-    });
+    setState(() => _referenceBytes = data.buffer.asUint8List());
   }
 
-  /// Android: [bgra8888] + [ResolutionPreset.medium] reduce avisos del allocador (qdgralloc) en Qualcomm/Xiaomi.
-  /// Si falla, se reintenta con [yuv420].
-  Future<CameraController> _createAssistantCamera(CameraDescription camera) async {
-    Future<CameraController> openWith(ImageFormatGroup format) async {
-      final c = CameraController(
-        camera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: format,
-      );
-      try {
-        await c.initialize();
-        return c;
-      } catch (e) {
-        await c.dispose();
-        rethrow;
-      }
+  void _onFrame(TrackingFrame frame) {
+    if (!mounted) return;
+    final holdUntil = _aiMessageHoldUntil;
+    if (holdUntil != null && DateTime.now().isBefore(holdUntil)) {
+      return; // no pisar un consejo de IA reciente.
     }
+    final analysis = EyeShapeAnalyzer.analyze(frame);
+    final message = _buildGuidanceMessage(analysis);
+    if (message == _assistantMessage) return;
 
-    if (Platform.isAndroid) {
-      try {
-        return await openWith(ImageFormatGroup.bgra8888);
-      } catch (e) {
-        debugPrint('WorkAssistant camera bgra8888→yuv420: $e');
-        return await openWith(ImageFormatGroup.yuv420);
-      }
+    final now = DateTime.now();
+    final last = _lastMessageUpdate;
+    if (last != null && now.difference(last) < const Duration(milliseconds: 1200)) {
+      return;
     }
-    return await openWith(ImageFormatGroup.bgra8888);
+    _lastMessageUpdate = now;
+    setState(() => _assistantMessage = message);
   }
 
-  Future<void> _initCamera() async {
+  static String _buildGuidanceMessage(EyeAnalysis a) {
+    if (!a.reliable) {
+      return 'Centra tu rostro en cámara para recibir guía en vivo.';
+    }
+    if (a.asymmetry > _liveAsymmetryThreshold) {
+      return 'Hay asimetría entre ambos ojos, revisa que la aplicación sea pareja.';
+    }
+    final tiltDiff = (a.leftTiltDeg - a.rightTiltDeg).abs();
+    if (tiltDiff > _liveTiltDiffThreshold) {
+      return 'Un ojo quedó más elevado que el otro, iguala la inclinación.';
+    }
+    final avgTilt = (a.leftTiltDeg + a.rightTiltDeg) / 2;
+    if (avgTilt <= _liveHoodedTiltDeg) {
+      return 'La mirada se ve caída, considera elevar el diseño.';
+    }
+    return 'Buena simetría y elevación. Continúa así.';
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_recordingBusy) return;
+    _recordingBusy = true;
     try {
-      final status = await Permission.camera.request();
-      if (!status.isGranted || !mounted) return;
-
-      _cameras = await availableCameras();
-      if (_cameras == null || _cameras!.isEmpty) return;
-
-      final front = _cameras!.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-        orElse: () => _cameras!.first,
-      );
-      _cameraIndex = _cameras!.indexOf(front);
-
-      final ctrl = await _createAssistantCamera(front);
-      if (!mounted) {
-        await ctrl.dispose();
-        return;
+      if (_isRecording) {
+        final path = await _service.stopRecording();
+        _tickTimer?.cancel();
+        _tickTimer = null;
+        if (!mounted) return;
+        setState(() => _isRecording = false);
+        if (path != null && mounted) {
+          final name = path.split(Platform.pathSeparator).last;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Grabación guardada: $name')),
+          );
+        }
+      } else {
+        try {
+          await _service.startRecording();
+        } on PlatformException catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'No se pudo iniciar la grabación: ${e.message ?? e.code}',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+        _sessionStart = DateTime.now();
+        _tickTimer?.cancel();
+        _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (!mounted) return;
+          setState(() {
+            _elapsedSeconds =
+                DateTime.now().difference(_sessionStart).inSeconds;
+          });
+        });
+        if (!mounted) return;
+        setState(() {
+          _isRecording = true;
+          _elapsedSeconds = 0;
+        });
       }
-      setState(() => _cameraController = ctrl);
-      _scheduleAutoCaptureOnce();
-    } catch (e) {
-      debugPrint('WorkAssistant camera: $e');
+    } finally {
+      _recordingBusy = false;
     }
   }
 
-  void _scheduleAutoCaptureOnce() {
-    if (_autoCaptureScheduled || !mounted) return;
-    _autoCaptureScheduled = true;
-    _autoCaptureCountdown = 3;
-    if (mounted) setState(() {});
-
-    _autoCaptureTimer?.cancel();
-    _autoCaptureTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      final left = _autoCaptureCountdown;
-      if (left == null) {
-        t.cancel();
-        return;
-      }
-      if (left <= 1) {
-        t.cancel();
-        setState(() => _autoCaptureCountdown = null);
-        unawaited(_capturePanelSnapshot());
-        return;
-      }
-      setState(() => _autoCaptureCountdown = left - 1);
-    });
-  }
-
-  Future<void> _capturePanelSnapshot() async {
-    final c = _cameraController;
-    if (c == null || !c.value.isInitialized || !mounted) return;
-    if (_autoCapturing) return;
-    _autoCapturing = true;
+  Future<void> _runAiReview() async {
+    if (_analyzing) return;
+    setState(() => _analyzing = true);
     try {
-      final xfile = await c.takePicture();
-      if (!mounted) return;
-      final path = xfile.path;
-      final bytes = await File(path).readAsBytes();
-      final wasFront = _usingFrontCamera;
+      final jpeg = await _service.captureLastCameraFrame();
+      if (jpeg == null || jpeg.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No se pudo capturar la cámara. Reintenta.'),
+            ),
+          );
+        }
+        return;
+      }
+      final feedback = await ref.read(trackingRepositoryProvider).aiReview(jpeg);
       if (!mounted) return;
       setState(() {
-        _panelSnapshotPath = path;
-        _snapshotTakenWithFrontCamera = wasFront;
-        _referenceBytes = bytes;
+        _assistantMessage = feedback.isNotEmpty
+            ? feedback
+            : 'La IA no devolvió un consejo esta vez.';
+        _aiMessageHoldUntil = DateTime.now().add(const Duration(seconds: 10));
       });
     } catch (e) {
-      debugPrint('WorkAssistant takePicture: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo tomar la foto: $e')),
+          SnackBar(content: Text('No se pudo obtener el consejo de IA: $e')),
         );
       }
     } finally {
-      _autoCapturing = false;
-    }
-  }
-
-  Future<void> _switchCamera() async {
-    if (_detachingPluginCamera || _exitInProgress) return;
-    if (_cameras == null || _cameras!.length < 2) return;
-    final ctrl = _cameraController;
-    if (ctrl == null) return;
-    try {
-      await ctrl.dispose();
-    } catch (_) {}
-    _cameraIndex = (_cameraIndex + 1) % _cameras!.length;
-    CameraController? next;
-    try {
-      next = await _createAssistantCamera(_cameras![_cameraIndex]);
-    } catch (e) {
-      debugPrint('WorkAssistant switch camera: $e');
-      return;
-    }
-    if (!mounted) {
-      await next.dispose();
-      return;
-    }
-    setState(() => _cameraController = next);
-  }
-
-  Future<void> _toggleFlash() async {
-    if (_detachingPluginCamera) return;
-    final c = _cameraController;
-    if (c == null) return;
-    try {
-      _flashOn = !_flashOn;
-      await c.setFlashMode(_flashOn ? FlashMode.torch : FlashMode.off);
-      if (mounted) setState(() {});
-    } catch (e) {
-      debugPrint('flash: $e');
+      if (mounted) setState(() => _analyzing = false);
     }
   }
 
@@ -280,156 +233,22 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     );
   }
 
-  static int? _computeVisualSimilarity(Uint8List? a, Uint8List? b) {
-    if (a == null || b == null) return null;
-    final img.Image? ia = img.decodeImage(a);
-    final img.Image? ib = img.decodeImage(b);
-    if (ia == null || ib == null) return null;
-
-    const int side = 64;
-    final ra = img.copyResize(ia, width: side, height: side);
-    final rb = img.copyResize(ib, width: side, height: side);
-
-    double sumSq = 0;
-    final int n = side * side;
-    for (int y = 0; y < side; y++) {
-      for (int x = 0; x < side; x++) {
-        final pa = ra.getPixel(x, y);
-        final pb = rb.getPixel(x, y);
-        final dr = pa.r - pb.r;
-        final dg = pa.g - pb.g;
-        final db = pa.b - pb.b;
-        sumSq += dr * dr + dg * dg + db * db;
-      }
-    }
-    final mse = sumSq / (n * 3.0);
-    const double maxMse = 8000.0;
-    final sim =
-        (100 * (1.0 - (mse / maxMse).clamp(0.0, 1.0))).round().clamp(0, 100);
-    return sim;
-  }
-
-  /// Usa frame de referencia vs captura estática de demo si no hay snapshot de cámara.
-  Future<void> _runAnalysis() async {
-    if (_referenceBytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay imagen de referencia.')),
-      );
-      return;
-    }
-
-    setState(() {
-      _analyzing = true;
-      _resultSummary = null;
-      _similarityScore = null;
-      _tips = const [];
-    });
-
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-
-    final demo = await rootBundle.load('assets/chica2.png');
-    final current = demo.buffer.asUint8List();
-    final score = _computeVisualSimilarity(_referenceBytes, current);
-    final tips = <String>[];
-    String summary;
-
-    if (score == null) {
-      summary = 'No se pudieron decodificar las imágenes.';
-    } else {
-      summary = score >= 75
-          ? 'Muy buena coincidencia visual con la referencia.'
-          : score >= 45
-              ? 'Hay similitud; revisa detalles (simetría, grosor, terminación).'
-              : 'La imagen actual se aleja de la referencia. Revisa técnica.';
-
-      if (score < 85) {
-        tips.add('Compara la línea del párpado con la foto objetivo.');
-        tips.add('Unifica el grosor de punta a comisura.');
-      }
-      if (score < 60) {
-        tips.add('Revisa la elevación del arco respecto a la referencia.');
-        tips.add('La iluminación puede alterar el tono percibido.');
-      }
-      if (tips.isEmpty) {
-        tips.add('Mantén el mismo ángulo que en la referencia.');
-      }
-
-      if (score < 50) {
-        _assistantMessage =
-            'La pestaña está caída, por favor revisa la elevación…';
-      } else if (score < 75) {
-        _assistantMessage =
-            'Buen avance; ajusta simetría entre ojo derecho e izquierdo.';
-      } else {
-        _assistantMessage =
-            'Muy alineado con el mapa de referencia. Continúa así.';
-      }
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _analyzing = false;
-      _similarityScore = score;
-      _resultSummary = summary;
-      _tips = tips;
-    });
-  }
-
   String _formatElapsed() {
     final m = _elapsedSeconds ~/ 60;
     final s = _elapsedSeconds % 60;
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
-  /// Quita el preview del árbol primero, luego [dispose], para no cerrar la cámara con superficie aún enlazada.
-  Future<void> _releasePluginCameraAsync() async {
-    final c = _cameraController;
-    if (c == null) {
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      return;
-    }
-
-    _autoCaptureTimer?.cancel();
-    _autoCaptureTimer = null;
-
-    if (!mounted) return;
-    setState(() => _detachingPluginCamera = true);
-
-    // Un frame + margen corto basta para que el CameraPreview salga del árbol
-    // antes del dispose; las esperas largas solo alargaban la pantalla negra.
-    await WidgetsBinding.instance.endOfFrame;
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-
-    try {
-      if (c.value.isInitialized && _flashOn) {
-        await c.setFlashMode(FlashMode.off);
-      }
-      _flashOn = false;
-    } catch (e) {
-      debugPrint('WorkAssistant flash off: $e');
-    }
-
-    try {
-      await c.dispose();
-    } catch (e) {
-      debugPrint('WorkAssistant camera dispose: $e');
-    }
-
-    _cameraController = null;
-    if (mounted) {
-      setState(() => _detachingPluginCamera = false);
-    } else {
-      _detachingPluginCamera = false;
-    }
-
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-  }
-
   Future<void> _exitAssistant() async {
     if (_exitInProgress) return;
     _exitInProgress = true;
     try {
-      await _releasePluginCameraAsync();
+      if (_isRecording) {
+        await _service.stopRecording();
+        _tickTimer?.cancel();
+        _tickTimer = null;
+        _isRecording = false;
+      }
       if (!mounted) return;
       context.pop();
     } finally {
@@ -437,27 +256,12 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     }
   }
 
-  Future<void> _disposeControllerFireAndForget(CameraController c) async {
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-    try {
-      if (c.value.isInitialized) {
-        await c.setFlashMode(FlashMode.off);
-      }
-    } catch (_) {}
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-    try {
-      await c.dispose();
-    } catch (_) {}
-  }
-
   @override
   void dispose() {
-    _autoCaptureTimer?.cancel();
     _tickTimer?.cancel();
-    final c = _cameraController;
-    _cameraController = null;
-    if (c != null) {
-      unawaited(_disposeControllerFireAndForget(c));
+    _trackingSub?.cancel();
+    if (_isRecording) {
+      unawaited(_service.stopRecording());
     }
     super.dispose();
   }
@@ -590,9 +394,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
   }
 
   Widget _lashGuidePanel(double topInset) {
-    final snapshotPath = _panelSnapshotPath;
-    final prefBytes = _panelPngFromCamera;
-    final hasTopImage = prefBytes != null || snapshotPath != null;
+    final prefBytes = _referenceBytes;
 
     return Stack(
       fit: StackFit.expand,
@@ -600,7 +402,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
         if (prefBytes != null)
           Positioned.fill(
             child: Transform.flip(
-              flipX: _mirrorPrefetchTopPanel,
+              flipX: _mirrorTopPanel,
               child: Image.memory(
                 prefBytes,
                 fit: BoxFit.cover,
@@ -617,72 +419,8 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
               ),
             ),
           )
-        else if (snapshotPath != null)
-          Positioned.fill(
-            child: Transform.flip(
-              flipX: _snapshotTakenWithFrontCamera,
-              child: Image.file(
-                File(snapshotPath),
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-                gaplessPlayback: true,
-                errorBuilder: (context, error, stackTrace) => const ColoredBox(
-                  color: Colors.black,
-                  child: Center(
-                    child: Icon(Icons.broken_image_outlined,
-                        color: Colors.white54, size: 48),
-                  ),
-                ),
-              ),
-            ),
-          )
         else
           const ColoredBox(color: Colors.black),
-        if (_autoCaptureCountdown != null)
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '${_autoCaptureCountdown!}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 96,
-                    fontWeight: FontWeight.w200,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _autoCapturing
-                      ? 'Capturando…'
-                      : 'Por favor no se mueva\nhasta que se tome la foto',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.9),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        if (!hasTopImage &&
-            _autoCaptureCountdown == null &&
-            _autoCaptureScheduled &&
-            !_autoCapturing &&
-            (_cameraController == null || !_cameraController!.value.isInitialized))
-          Center(
-            child: Text(
-              'Iniciando cámara…',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
-                fontSize: 14,
-              ),
-            ),
-          ),
         Positioned(
           top: topInset + 8,
           left: 10,
@@ -827,7 +565,7 @@ Widget _assistantFloatingBar() {
             ),
             const SizedBox(width: 8),
             GestureDetector(
-              onTap: _analyzing ? null : _runAnalysis,
+              onTap: _analyzing ? null : () => unawaited(_runAiReview()),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: 42,
@@ -863,47 +601,19 @@ Widget _assistantFloatingBar() {
 
 
   Widget _cameraRegion(double bottomInset) {
-    final c = _cameraController;
-    final showPreview =
-        c != null && c.value.isInitialized && !_detachingPluginCamera;
     return Stack(
       fit: StackFit.expand,
       children: [
-        ColoredBox(
-          color: const Color(0xFF0D0D0D),
-          child: showPreview
-              ? FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: c.value.previewSize!.height,
-                    height: c.value.previewSize!.width,
-                    child: CameraPreview(c),
-                  ),
-                )
-              : Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(color: Colors.white54),
-                      const SizedBox(height: 12),
-                      Text(
-                        _detachingPluginCamera
-                            ? 'Cerrando cámara…'
-                            : 'Iniciando cámara…',
-                        style: const TextStyle(
-                          color: Colors.white38,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+        const ColoredBox(
+          color: Color(0xFF0D0D0D),
+          child: HybridCameraPreview(),
         ),
-        Positioned(
-          top: 8,
-          left: 8,
-          child: _recordingPill(),
-        ),
+        if (_isRecording)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: _recordingPill(),
+          ),
         Positioned(
           right: 8,
           top: 64,
@@ -913,11 +623,17 @@ Widget _assistantFloatingBar() {
             children: [
               _railIconButton(
                 asset: 'assets/rotar.png',
-                onTap: _switchCamera,
+                onTap: () => unawaited(_service.switchCamera()),
               ),
               _railIconButton(
                 asset: 'assets/flash.png',
-                onTap: _toggleFlash,
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Flash: próxima versión.'),
+                    ),
+                  );
+                },
               ),
               _railIconButton(
                 icon: Icons.crop_square_outlined,
@@ -932,40 +648,11 @@ Widget _assistantFloatingBar() {
             ],
           ),
         ),
-        if (_similarityScore != null)
-          Positioned(
-            left: 8,
-            right: 8,
-            bottom: 88 + bottomInset,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _compactResultChip(),
-                if (_tips.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  ..._tips.take(3).map(
-                        (t) => Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
-                            '· $t',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.85),
-                              fontSize: 11,
-                              height: 1.25,
-                            ),
-                          ),
-                        ),
-                      ),
-                ],
-              ],
-            ),
-          ),
         Positioned(
           left: 0,
           right: 0,
           bottom: 16 + bottomInset,
-          child: Center(child: _stopStyleButton()),
+          child: Center(child: _recordButton()),
         ),
       ],
     );
@@ -1028,49 +715,11 @@ Widget _assistantFloatingBar() {
     );
   }
 
-  Widget _compactResultChip() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            _similarityScore! >= 60
-                ? Icons.check_circle_outline
-                : Icons.info_outline,
-            color: _similarityScore! >= 60
-                ? Colors.tealAccent
-                : Colors.amber,
-            size: 22,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Coincidencia: $_similarityScore% · ${_resultSummary ?? ''}',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                height: 1.3,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stopStyleButton() {
+  /// Botón real de grabar/detener: círculo rojo en reposo, cuadrado (stop)
+  /// mientras graba.
+  Widget _recordButton() {
     return GestureDetector(
-      onTap: () {
-        if (_exitInProgress) return;
-        unawaited(_exitAssistant());
-      },
+      onTap: () => unawaited(_toggleRecording()),
       child: Container(
         width: 72,
         height: 72,
@@ -1086,13 +735,13 @@ Widget _assistantFloatingBar() {
           ],
         ),
         child: Center(
-          child: Container(
-            width: 28,
-            height: 28,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: _isRecording ? 28 : 56,
+            height: _isRecording ? 28 : 56,
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFF0D5C41), width: 2),
+              color: const Color(0xFFE53935),
+              borderRadius: BorderRadius.circular(_isRecording ? 6 : 28),
             ),
           ),
         ),

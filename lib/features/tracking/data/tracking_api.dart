@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../../../core/network/api_endpoints.dart';
@@ -30,5 +32,18 @@ class TrackingApi {
         .whereType<Map<String, dynamic>>()
         .map(TrackingDto.fromJson)
         .toList();
+  }
+
+  /// `POST /tracking/ai-review` — guiado de IA en vivo sobre una foto de la
+  /// aplicación en curso. Devuelve el consejo en texto natural.
+  Future<String> aiReview(Uint8List jpegBytes) async {
+    final formData = FormData.fromMap({
+      'file': MultipartFile.fromBytes(jpegBytes, filename: 'frame.jpg'),
+    });
+    final response = await _dio.post<Map<String, dynamic>>(
+      '${ApiEndpoints.tracking}ai-review',
+      data: formData,
+    );
+    return response.data?['feedback'] as String? ?? '';
   }
 }
