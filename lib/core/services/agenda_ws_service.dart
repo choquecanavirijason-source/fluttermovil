@@ -171,3 +171,11 @@ final agendaWsServiceProvider = Provider<AgendaWsService>((ref) {
   ref.onDispose(() => unawaited(service.disconnect()));
   return service;
 });
+
+/// Expone [AgendaWsService.events] como provider para que otras pantallas
+/// (ej. "Mi comisión") puedan reaccionar en vivo sin manejar su propia
+/// suscripción/lifecycle — el stream es *broadcast*, así que puede tener
+/// varios oyentes a la vez sin pisarse.
+final agendaWsEventsProvider = StreamProvider<AgendaWsEvent>((ref) {
+  return ref.watch(agendaWsServiceProvider).events;
+});

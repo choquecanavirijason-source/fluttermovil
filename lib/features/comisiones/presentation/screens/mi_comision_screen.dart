@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../core/presentation/organisms/async_value_view.dart';
+import '../../../../core/services/agenda_ws_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../auth/presentation/providers/auth_state_provider.dart';
 import '../../domain/entities/daily_commission.dart';
 import '../providers/comisiones_provider.dart';
 
@@ -17,10 +19,34 @@ class MiComisionScreen extends ConsumerWidget {
 
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// Refresca "Mi comisión" en vivo cuando llega un evento de agenda del WS
+  /// (`/ws/branch/{branchId}`) que le pertenece a esta operaria y la fecha
+  /// que está viendo es hoy — igual que "Clientes de hoy" en el home, pero
+  /// no tiene sentido refrescar un día ya cerrado.
+  void _listenAgendaWs(WidgetRef ref, DateTime selected) {
+    ref.listen<AsyncValue<AgendaWsEvent>>(agendaWsEventsProvider,
+        (previous, next) {
+      final event = next.valueOrNull;
+      if (event == null) return;
+      if (!_isSameDay(selected, DateTime.now())) return;
+
+      final user = ref.read(authUserProvider);
+      final belongsToMe =
+          event.professionalId == null || event.professionalId == user?.id;
+      if (!belongsToMe) return;
+
+      ref.invalidate(dailyCommissionProvider(selected));
+    });
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selected = ref.watch(selectedCommissionDateProvider);
     final async = ref.watch(dailyCommissionProvider(selected));
+    _listenAgendaWs(ref, selected);
 
     return Scaffold(
       appBar: showAppBar

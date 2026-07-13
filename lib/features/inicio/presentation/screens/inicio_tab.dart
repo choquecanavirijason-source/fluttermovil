@@ -76,8 +76,33 @@ class _InicioTabState extends ConsumerState<InicioTab>
         event.professionalId == null || event.professionalId == user?.id;
     if (!belongsToMe) return;
 
+    if (event.event == 'ticket_called') {
+      _notifyTicketCalled(event);
+    }
+
     ref.invalidate(_todayTicketsProvider);
     ref.read(newAppointmentWatcherProvider).checkNow();
+  }
+
+  /// Avisa a la operaria que le llamaron una ficha (es su turno) — el
+  /// evento más urgente y accionable del WS, a diferencia de
+  /// creaciones/actualizaciones que solo refrescan la lista en silencio.
+  void _notifyTicketCalled(AgendaWsEvent event) {
+    final tickets = ref.read(_todayTicketsProvider).valueOrNull;
+    String? name;
+    if (tickets != null) {
+      for (final t in tickets) {
+        if (t.id == event.ticketId) {
+          name = t.clientDisplayName;
+          break;
+        }
+      }
+    }
+    ref.read(localNotificationsServiceProvider).show(
+          id: event.ticketId ?? 0,
+          title: 'Te llamaron',
+          body: name == null ? 'Es tu turno para atender.' : 'Es tu turno con $name.',
+        );
   }
 
   Future<void> _refresh() async {
