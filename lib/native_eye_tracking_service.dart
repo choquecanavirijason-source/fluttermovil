@@ -56,6 +56,35 @@ class NativeEyeTrackingService {
     } catch (_) {}
   }
 
+  /// Último frame de cámara como JPEG, ya orientado y espejado igual que el
+  /// preview. Necesario porque RepaintBoundary.toImage no puede leer el
+  /// PlatformView nativo de CameraX. Devuelve null si aún no hay frame.
+  Future<Uint8List?> captureLastCameraFrame() async {
+    try {
+      return await _methodChannel.invokeMethod<Uint8List>('captureFrame');
+    } catch (e) {
+      debugPrint('[EyeTracking] captureLastCameraFrame error: $e');
+      return null;
+    }
+  }
+
+  /// Arranca la grabación de video local (sin audio) sobre la misma sesión
+  /// de cámara nativa. El archivo se guarda en almacenamiento privado de la app.
+  Future<void> startRecording() async {
+    await _methodChannel.invokeMethod('startRecording');
+  }
+
+  /// Detiene la grabación en curso y devuelve la ruta local del .mp4, o null
+  /// si no había ninguna grabación activa.
+  Future<String?> stopRecording() async {
+    try {
+      return await _methodChannel.invokeMethod<String>('stopRecording');
+    } catch (e) {
+      debugPrint('[EyeTracking] stopRecording error: $e');
+      return null;
+    }
+  }
+
   /// Envía la ruta local del archivo .glb al lado nativo para que
   /// Kotlin cargue el modelo 3D en el motor de renderizado.
   Future<void> set3DModelPath(String path) async {

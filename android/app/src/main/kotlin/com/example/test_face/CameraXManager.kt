@@ -3,6 +3,7 @@ package com.example.test_face
 import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Build
@@ -17,6 +18,13 @@ import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -29,6 +37,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -65,9 +78,17 @@ class CameraXManager(
 
     private var imageAnalysisUseCase: ImageAnalysis? = null
 
+    private var videoCapture: VideoCapture<Recorder>? = null
+    @Volatile private var activeRecording: Recording? = null
+    @Volatile private var pendingStopResult: MethodChannel.Result? = null
+
     private val stopped = AtomicBoolean(true)
     private val bindGeneration = AtomicLong(0L)
     private var pendingBindRunnable: Runnable? = null
+
+    /** Último frame orientado/espejado del análisis; fuente de [captureFrame]. */
+    @Volatile
+    private var latestFrameBitmap: Bitmap? = null
 
     fun attachPreview(view: PreviewView) {
         previewView = view
@@ -221,6 +242,12 @@ class CameraXManager(
         cancelPendingBind()
         bindGeneration.incrementAndGet()
 
+        // Corta cualquier grabación en curso antes de desenlazar la cámara,
+        // para que el .mp4 quede finalizado en vez de truncado por unbindAll().
+        activeRecording?.stop()
+        activeRecording = null
+        pendingStopResult = null
+
         val phaseClear = Runnable {
             try {
                 imageAnalysisUseCase?.clearAnalyzer()
@@ -265,6 +292,94 @@ class CameraXManager(
             if (previewView == null) return@post
             scheduleRebind()
         }
+    }
+
+    /**
+     * Devuelve el último frame de cámara como JPEG, con la misma orientación y
+     * espejo que ve la usuaria en el preview. Flutter no puede capturar el
+     * PlatformView de CameraX ([android.view.TextureView]) con
+     * RepaintBoundary.toImage, así que la foto se toma aquí.
+     *
+     * La compresión corre en [analysisExecutor]; el result se responde en el
+     * hilo principal como exige el MethodChannel.
+     */
+    fun captureFrame(result: MethodChannel.Result) {
+        val bmp = latestFrameBitmap
+        if (bmp == null || bmp.isRecycled) {
+            result.success(null)
+            return
+        }
+        analysisExecutor.execute {
+            val bytes = try {
+                val out = ByteArrayOutputStream()
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                out.toByteArray()
+            } catch (_: Exception) {
+                null
+            }
+            mainHandler.post { result.success(bytes) }
+        }
+    }
+
+    /**
+     * Arranca la grabación de video local (sin audio) usando el mismo
+     * [VideoCapture] enlazado en [applyBinding]. El archivo queda en
+     * almacenamiento privado de la app (no requiere permisos en runtime).
+     */
+    fun startRecording(result: MethodChannel.Result) {
+        val vc = videoCapture
+        if (vc == null) {
+            result.error("NO_CAMERA", "La cámara aún no está lista", null)
+            return
+        }
+        if (activeRecording != null) {
+            result.success(null)
+            return
+        }
+
+        val moviesDir = activity.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+        if (moviesDir != null && !moviesDir.exists()) moviesDir.mkdirs()
+        val fileName =
+            "beauty_tech_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.mp4"
+        val outputFile = File(moviesDir, fileName)
+        val outputOptions = FileOutputOptions.Builder(outputFile).build()
+
+        try {
+            activeRecording = vc.output
+                .prepareRecording(activity, outputOptions)
+                .start(mainExecutor) { event ->
+                    if (event is VideoRecordEvent.Finalize) {
+                        activeRecording = null
+                        val stopResult = pendingStopResult
+                        pendingStopResult = null
+                        if (stopResult != null) {
+                            if (event.hasError()) {
+                                stopResult.error(
+                                    "RECORDING_FAILED",
+                                    event.cause?.message ?: "Error al finalizar la grabación",
+                                    null,
+                                )
+                            } else {
+                                stopResult.success(outputFile.absolutePath)
+                            }
+                        }
+                    }
+                }
+            result.success(null)
+        } catch (e: Exception) {
+            result.error("RECORDING_START_FAILED", e.message ?: "No se pudo iniciar la grabación", null)
+        }
+    }
+
+    /** Detiene la grabación en curso; responde cuando [VideoRecordEvent.Finalize] confirma el archivo. */
+    fun stopRecording(result: MethodChannel.Result) {
+        val rec = activeRecording
+        if (rec == null) {
+            result.success(null)
+            return
+        }
+        pendingStopResult = result
+        rec.stop()
     }
 
     private fun scheduleRebind() {
@@ -337,6 +452,15 @@ class CameraXManager(
             }
             imageAnalysisUseCase = imageAnalysis
 
+            // El Recorder/VideoCapture se crea una única vez y se reenlaza en cada
+            // rebind (misma instancia) para no perder la referencia usada por
+            // startRecording/stopRecording.
+            val vc = videoCapture ?: VideoCapture.withOutput(
+                Recorder.Builder()
+                    .setQualitySelector(QualitySelector.from(Quality.HD))
+                    .build(),
+            ).also { videoCapture = it }
+
             val selector =
                 CameraSelector.Builder()
                     .requireLensFacing(lensFacing)
@@ -355,12 +479,14 @@ class CameraXManager(
                     selector,
                     preview,
                     imageAnalysis,
+                    vc,
                 )
             } else {
                 provider.bindToLifecycle(
                     lifecycleOwner,
                     selector,
                     imageAnalysis,
+                    vc,
                 )
             }
         } catch (e: Exception) {
@@ -410,6 +536,7 @@ class CameraXManager(
             if (oriented != bitmap) {
                 bitmap.recycle()
             }
+            latestFrameBitmap = oriented
 
             val mpImage = BitmapImageBuilder(oriented).build()
             val frameTimeMs = SystemClock.uptimeMillis()

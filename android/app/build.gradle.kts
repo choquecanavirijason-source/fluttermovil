@@ -73,6 +73,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation("androidx.camera:camera-video:$cameraxVersion")
 
     // Pin versions (avoid protobuf "field ... not found" from mismatched tasks-core / tasks-vision).
     val mediaPipeVersion = "0.10.29"
