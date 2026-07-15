@@ -16,8 +16,6 @@ import '../../features/catalogo/presentation/screens/catalogo_screen.dart';
 import '../../features/clientes/presentation/screens/clientes_screen.dart';
 import '../../features/clientes/presentation/screens/cliente_detalle_screen.dart';
 import '../../features/clientes/domain/entities/client.dart';
-import '../../features/recomendacion/presentation/screens/recomendacion_screen.dart';
-import '../../recommendation_args.dart';
 import '../../work_assistant_args.dart';
 import 'guards.dart';
 import 'routes.dart';
@@ -26,11 +24,12 @@ final goRouterProvider = Provider<GoRouter>((ref) {
   final authController = ref.watch(authStateProvider.notifier);
 
   return GoRouter(
-    initialLocation: AppRoutes.splash,
+    // TEMP-DEBUG: bypass de auth para probar el tracking 3D directamente — revertir.
+    initialLocation: AppRoutes.camera,
     debugLogDiagnostics: false,
     refreshListenable: authController,
-    redirect: (context, state) =>
-        sessionRedirect(state, ref.read(authStateProvider)),
+    // redirect: (context, state) =>
+    //     sessionRedirect(state, ref.read(authStateProvider)),
     routes: [
       GoRoute(
         path: AppRoutes.splash,

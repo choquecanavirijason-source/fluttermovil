@@ -19,7 +19,7 @@ class EyeTrackingLashModal extends StatelessWidget {
         onTap: () {},
         behavior: HitTestBehavior.opaque,
         child: Container(
-          color: Colors.black.withOpacity(0.92),
+          color: Colors.black.withValues(alpha: 0.92),
           child: Column(
             children: [
               const SizedBox(height: 32),

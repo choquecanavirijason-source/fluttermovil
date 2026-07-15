@@ -47,6 +47,42 @@ class AgendaService {
         .toList();
   }
 
+  /// Citas asignadas a [professionalId] desde hoy hasta [lookAheadDays] más
+  /// adelante — todos los estados. A diferencia de [fetchTodayAppointments]
+  /// (limitada al día de hoy), esta ventana amplia permite detectar una
+  /// asignación nueva del administrador apenas ocurre, sin esperar a que
+  /// llegue el día de la cita.
+  static Future<List<MobileAppointment>> fetchAssignedAppointments({
+    required int professionalId,
+    int? branchId,
+    int lookAheadDays = 30,
+  }) async {
+    final now = DateTime.now();
+    final qp = <String, dynamic>{
+      'skip': 0,
+      'limit': 100,
+      'start_date': _ymd(now),
+      'end_date': _ymd(now.add(Duration(days: lookAheadDays))),
+      'professional_id': professionalId,
+      'branch_id': ?branchId,
+    };
+
+    final body = await ApiClient.get(
+      ApiConfig.agendaAppointments,
+      queryParameters: qp,
+    );
+
+    final decoded = jsonDecode(body);
+    if (decoded is! List) {
+      throw const FormatException('Respuesta de citas inválida');
+    }
+
+    return decoded
+        .map((e) =>
+            MobileAppointment.fromApi(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
   /// Tickets móviles disponibles con `is_ia == true`.
   static Future<List<MobileAppointment>> fetchMobileIaTickets({
     int? branchId,

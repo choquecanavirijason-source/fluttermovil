@@ -10,7 +10,7 @@ class LashMappingPainter extends CustomPainter {
 
   const LashMappingPainter({required this.frame});
 
-  /// Misma lógica de transformación que EyeTrackingPainter (BoxFit.cover / FILL_CENTER).
+  /// Misma lógica de transformación usada en el resto del tracking (BoxFit.cover / FILL_CENTER).
   Matrix4? _imageToCanvas(Size canvasSize) {
     final f = frame;
     if (f == null) return null;

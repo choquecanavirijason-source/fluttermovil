@@ -43,17 +43,17 @@ class BottomCarousel extends StatelessWidget {
                     height: 60,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white.withOpacity(isSelected ? 0.95 : 0.45),
+                      color: Colors.white.withValues(alpha: isSelected ? 0.95 : 0.45),
                       border: isSelected
                           ? Border.all(
-                              color: Colors.white.withOpacity(0.95),
+                              color: Colors.white.withValues(alpha: 0.95),
                               width: 2,
                             )
                           : null,
                       boxShadow: isSelected
                           ? [
                               BoxShadow(
-                                color: Colors.white.withOpacity(0.13),
+                                color: Colors.white.withValues(alpha: 0.13),
                                 blurRadius: 14,
                                 spreadRadius: 2,
                               ),

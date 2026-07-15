@@ -14,7 +14,7 @@ class NotificationService {
 
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidSettings);
-    await _plugin.initialize(initSettings);
+    await _plugin.initialize(settings: initSettings);
 
     // Canal de alta prioridad para Android 8+
     const channel = AndroidNotificationChannel(
@@ -63,10 +63,10 @@ class NotificationService {
     }
 
     await _plugin.show(
-      ticketId,
-      title,
-      body,
-      const NotificationDetails(
+      id: ticketId,
+      title: title,
+      body: body,
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           _channelId,
           _channelName,

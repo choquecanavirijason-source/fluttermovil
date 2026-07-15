@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:Probador/core/theme/app_colors.dart';
+
 /// Botón inferior “Ojo de muñeca” (estilo referencia; sin fila Cancelar).
 class EyeTrackingPremiumOjoButton extends StatelessWidget {
   final VoidCallback onTap;
@@ -32,7 +34,7 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
                   width: 42,
                   height: 42,
                   decoration: const BoxDecoration(
-                    color: Color(0xFF0D5C41),
+                    color: AppColors.actionGreen,
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.bookmark, color: Colors.white, size: 24),
@@ -42,7 +44,7 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
                   child: Text(
                     'Ojo de muñeca',
                     style: TextStyle(
-                      color: Color(0xFF0D5C41),
+                      color: AppColors.actionGreen,
                       fontWeight: FontWeight.w700,
                       fontSize: 18,
                     ),

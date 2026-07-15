@@ -1,18 +1,19 @@
+import 'dart:async' show StreamSubscription, unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../../core/config/env.dart';
 import '../../../../core/router/routes.dart';
 import '../../../../core/services/agenda_service.dart';
-import '../../../../core/services/notification_service.dart';
-import '../../../../core/services/ws_service.dart';
+import '../../../../core/services/agenda_ws_service.dart';
+import '../../../../core/services/local_notifications_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_state_provider.dart';
 import '../../../../core/models/mobile_appointment.dart';
-import '../../../../screens/probador.dart';
 import '../../../clientes/domain/entities/client.dart';
 import '../../../clientes/presentation/providers/clientes_provider.dart';
+import '../../../clientes/presentation/providers/new_appointment_watcher.dart';
 
 final _todayTicketsProvider =
     FutureProvider.autoDispose<List<MobileAppointment>>((ref) async {
@@ -33,37 +34,50 @@ class InicioTab extends ConsumerStatefulWidget {
 
 class _InicioTabState extends ConsumerState<InicioTab>
     with WidgetsBindingObserver {
-
-  WsService? _wsService;
+  StreamSubscription<AgendaWsEvent>? _wsSub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final user = ref.read(authUserProvider);
-      final branchId = user?.branchId ?? Env.defaultBranchId;
-      _wsService = WsService(
-        branchId: branchId,
-        onEvent: (event) {
-          NotificationService.showFromEvent(event);
-          _refresh();
-        },
-      )..connect();
-    });
+    unawaited(LocalNotificationsService.instance.initialize());
+    ref.read(newAppointmentWatcherProvider).start();
+
+    // Conecta al WS de agenda (/ws/branch/{branchId}) para refrescar
+    // "Clientes de hoy" y disparar la verificación de citas nuevas al
+    // instante, en vez de esperar el sondeo de 3 min.
+    final ws = ref.read(agendaWsServiceProvider);
+    _wsSub = ws.events.listen(_onAgendaWsEvent);
+    unawaited(ws.connect());
   }
 
   @override
   void dispose() {
-    _wsService?.dispose();
     WidgetsBinding.instance.removeObserver(this);
+    ref.read(newAppointmentWatcherProvider).stop();
+    _wsSub?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
+    if (state == AppLifecycleState.resumed) {
+      _refresh();
+      ref.read(agendaWsServiceProvider).reconnectNow();
+    }
+  }
+
+  /// Un evento de agenda en vivo (cita creada/llamada/actualizada/eliminada)
+  /// refresca "Clientes de hoy" al instante y adelanta la verificación de
+  /// clientes nuevos, sin esperar el sondeo periódico.
+  void _onAgendaWsEvent(AgendaWsEvent event) {
+    final user = ref.read(authUserProvider);
+    final belongsToMe =
+        event.professionalId == null || event.professionalId == user?.id;
+    if (!belongsToMe) return;
+
+    ref.invalidate(_todayTicketsProvider);
+    ref.read(newAppointmentWatcherProvider).checkNow();
   }
 
   Future<void> _refresh() async {
@@ -162,7 +176,10 @@ class _InicioTabState extends ConsumerState<InicioTab>
                   const SizedBox(height: 10),
                   Row(
                     children: [
+                      Expanded(flex: 1, child: const SizedBox()),
+                      const SizedBox(width: 10),
                       Expanded(
+                        flex: 2,
                         child: _ActionPill(
                           icon: Icons.person_outline,
                           label: 'Cliente',
@@ -172,15 +189,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
                         ),
                       ),
                       const SizedBox(width: 10),
-                      Expanded(
-                        child: _ActionPill(
-                          icon: Icons.savings_outlined,
-                          label: 'Comisión',
-                          background: AppColors.brandAccent,
-                          foreground: Colors.white,
-                          onTap: () => context.push(AppRoutes.comision),
-                        ),
-                      ),
+                      Expanded(flex: 1, child: const SizedBox()),
                     ],
                   ),
                   const SizedBox(height: 28),
@@ -702,7 +711,7 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
     return active.last; // ← último asignado
   }
 
-  void _showProbadorPopup(MobileAppointment ticket) {
+  void _openProbador(MobileAppointment ticket) {
     if (ticket.clientId != null) {
       ref.read(sessionClientProvider.notifier).state = Client(
         id: ticket.clientId!,
@@ -793,7 +802,7 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
                           itemBuilder: (_, i) => InkWell(
                             onTap: () {
                               Navigator.of(ctx).pop();
-                              _showProbadorPopup(active[i]);
+                              _openProbador(active[i]);
                             },
                             borderRadius: BorderRadius.circular(14),
                             child: _ClientRow(ticket: active[i]),
@@ -919,7 +928,7 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
             }
             // Mostramos solo el ÚLTIMO cliente asignado
             return InkWell(
-              onTap: () => _showProbadorPopup(latest),
+              onTap: () => _openProbador(latest),
               borderRadius: BorderRadius.circular(14),
               child: _ClientRow(ticket: latest),
             );

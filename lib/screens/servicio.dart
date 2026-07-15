@@ -66,9 +66,9 @@ class _ServicioPageState extends State<ServicioPage> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: Text(
-          "Servicios de ${widget.nombre}",
-          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        title: const Text(
+          "Probador de servicios",
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
@@ -158,7 +158,6 @@ class _ServicioPageState extends State<ServicioPage> {
                     itemCount: _servicios.length,
                     itemBuilder: (context, index) {
                       final item = _servicios[index];
-                      final costo = item.price ?? '—';
                       final urlImagen = item.imageUrl;
 
                       return InkWell(
@@ -177,7 +176,7 @@ class _ServicioPageState extends State<ServicioPage> {
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.05),
+                                color: Colors.black.withValues(alpha: 0.05),
                                 blurRadius: 10,
                                 offset: const Offset(0, 4),
                               )
@@ -217,16 +216,7 @@ class _ServicioPageState extends State<ServicioPage> {
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      costo == '—' ? costo : '\$$costo',
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w900,
-                                        color: Color(0xFFBFA36F),
-                                      ),
-                                    ),
-                                  ],
+                                                  ],
                                 ),
                               ),
                             ],
@@ -245,7 +235,7 @@ class _ServicioPageState extends State<ServicioPage> {
 
   Widget _buildPlaceholder() {
     return Container(
-      color: const Color(0xFFBFA36F).withOpacity(0.1),
+      color: const Color(0xFFBFA36F).withValues(alpha: 0.1),
       width: double.infinity,
       child: const Icon(
         Icons.image_not_supported_outlined,

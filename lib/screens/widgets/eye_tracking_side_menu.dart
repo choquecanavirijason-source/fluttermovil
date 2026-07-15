@@ -2,6 +2,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import 'package:Probador/core/theme/app_colors.dart';
+
 class EyeTrackingSideMenu extends StatelessWidget {
   final VoidCallback onFlashTap;
   final VoidCallback onRotateTap;
@@ -86,12 +88,12 @@ class _MenuItem extends StatelessWidget {
             padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(
               color: isActive
-                  ? const Color(0xFF0D5C41).withValues(alpha: 0.85)
+                  ? AppColors.actionGreen.withValues(alpha: 0.85)
                   : Colors.white.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(50),
               border: Border.all(
                 color: isActive
-                    ? const Color(0xFF0D5C41)
+                    ? AppColors.actionGreen
                     : Colors.white24,
               ),
             ),

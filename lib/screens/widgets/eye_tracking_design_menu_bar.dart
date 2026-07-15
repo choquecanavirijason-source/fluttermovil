@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:Probador/core/theme/app_colors.dart';
+
 class EyeTrackingDesignMenuBar extends StatelessWidget {
   final List<String> designImages;
   final List<String> designOptions;
@@ -18,7 +20,7 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
     required this.categoryTitle,
   });
 
-  static const _green = Color(0xFF0D5C41);
+  static const _green = AppColors.actionGreen;
 
   @override
   Widget build(BuildContext context) {

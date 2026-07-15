@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show Factory;
@@ -11,7 +12,12 @@ import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:camera/camera.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'core/recommendation/eye_shape_analyzer.dart';
+import 'core/theme/app_colors.dart';
 import 'features/catalogo/domain/entities/catalog_item.dart';
 import 'features/catalogo/presentation/providers/catalogo_provider.dart';
 import 'features/clientes/domain/entities/client.dart';
@@ -19,7 +25,6 @@ import 'features/clientes/presentation/providers/clientes_provider.dart';
 import 'features/tracking/data/tracking_repository_impl.dart';
 import 'eye_tracking_mapping_painter.dart';
 import 'eye_tracking_model.dart';
-import 'eye_tracking_painter.dart';
 import 'native_eye_tracking_service.dart';
 import 'screens/widgets/bottom_carousel.dart';
 import 'screens/widgets/eye_tracking_bottom_actions.dart';
@@ -47,8 +52,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   TrackingFrame? _frame;
   String _status = 'Inicializando...';
 
-  Timer? _assistantFlowTimer;
-  int? _assistantCountdown;
   bool _workAssistantOpening = false;
 
   static const List<String> _compatibleImages = [
@@ -118,10 +121,21 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// Fuerza recreación del [AndroidView] al volver de otra pantalla que usa la cámara.
   int _previewSession = 0;
 
-  ui.Image? _lashTexture;
-  String? _lashTextureAssetRequested;
+  /// Rutas locales (archivo) de los .glb de pestañas, resueltas una única vez
+  /// por ciclo de vida de este State (ver [_resolveEyeModelPaths]). Viajan
+  /// como `creationParams` del PlatformView (ver [_HybridCameraPreview]) para
+  /// que Kotlin cargue el modelo de forma síncrona en la misma llamada nativa
+  /// que crea el SceneView — nunca por un MethodChannel disparado con delays.
+  String? _leftModelPath;
+  String? _rightModelPath;
+
   CatalogItem? _selectedEyeType;
   List<CatalogItem>? _eyeTypes;
+
+  /// true una vez que el usuario elige el tipo de ojo manualmente desde la
+  /// hoja de selección; a partir de ahí deja de sobreescribirse con el
+  /// resultado del escaneo automático.
+  bool _eyeTypeSetManually = false;
 
   /// Path local del .glb descargado para el item seleccionado (null = sin modelo).
   String? _selectedModel3dPath;
@@ -129,24 +143,62 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// true mientras ModelCacheService resuelve la descarga del .glb.
   bool _isModel3dLoading = false;
 
+  /// true mientras se muestra la guía de alineación (esperando que el usuario
+  /// ubique sus ojos en el marco antes de capturar).
+  bool _alignmentGuideActive = false;
+
+  /// true cuando ambos ojos están dentro de la zona objetivo (marcadores en verde).
+  bool _eyesAligned = false;
+
+  /// Momento en que se detectó alineación continua (para exigir estabilidad breve).
+  DateTime? _alignedSince;
+
+  /// Duración mínima que los ojos deben permanecer alineados antes de disparar la captura.
+  static const Duration _alignmentHoldDuration = Duration(milliseconds: 900);
+
+  /// Modelos 3D (.glb) anclados nativamente por Kotlin/SceneView a cada ojo.
+  static const String _cateyeLeftModelAsset =
+      'assets/modelos/cateye/cateyeleft.glb';
+  static const String _cateyeRightModelAsset =
+      'assets/modelos/cateye/cateyeright.glb';
+
   List<String> get _carouselImages =>
       _selectedFilter == 0 ? _compatibleImages : _explorarImages;
 
-  Future<void> _loadLashTexture(String assetPath) async {
+  /// Copia un asset de Flutter (bundle) a un archivo local, ya que el lado
+  /// nativo (SceneView) carga los .glb desde una ruta de archivo real.
+  Future<String> _extractAssetToFile(String assetPath) async {
+    final byteData = await rootBundle.load(assetPath);
+    final bytes = byteData.buffer.asUint8List(
+      byteData.offsetInBytes,
+      byteData.lengthInBytes,
+    );
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/${assetPath.split('/').last}');
+    if (!await file.exists() || await file.length() != bytes.length) {
+      await file.writeAsBytes(bytes, flush: true);
+    }
+    return file.path;
+  }
+
+  /// Resuelve, una única vez, las rutas de archivo de los .glb de pestañas
+  /// (cateyeleft/cateyeright). No dispara ninguna carga en Kotlin: las rutas
+  /// se pasan como `creationParams` al crear el PlatformView, así que cada
+  /// vez que Flutter recrea el AndroidView (primera entrada, o cualquier
+  /// re-entrada a esta pantalla) el nativo carga el modelo de forma
+  /// determinista, sin depender de un segundo viaje Dart→Kotlin con timers.
+  Future<void> _resolveEyeModelPaths() async {
+    if (!Platform.isAndroid) return;
     try {
-      final data = await rootBundle.load(assetPath);
-      final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
-      final frame = await codec.getNextFrame();
-      if (!mounted) {
-        frame.image.dispose();
-        return;
-      }
+      final leftPath = await _extractAssetToFile(_cateyeLeftModelAsset);
+      final rightPath = await _extractAssetToFile(_cateyeRightModelAsset);
+      if (!mounted) return;
       setState(() {
-        _lashTexture?.dispose();
-        _lashTexture = frame.image;
+        _leftModelPath = leftPath;
+        _rightModelPath = rightPath;
       });
-    } catch (e, st) {
-      debugPrint('No se pudo cargar textura de pestañas ($assetPath): $e\n$st');
+    } catch (e) {
+      debugPrint('No se pudieron resolver los .glb de pestañas: $e');
     }
   }
 
@@ -154,8 +206,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_resolveEyeModelPaths());
     _start();
-    
+
     // Pre-carga tipos de ojo en segundo plano 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -190,6 +243,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           _frame = frame;
           _status = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
         });
+        if (_alignmentGuideActive) _evaluateAlignment(frame);
+        _detectEyeTypeFromFrame(frame);
       },
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
@@ -200,6 +255,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     await _service.refreshPreviewBind();
+    // El GLB ya no requiere recarga aquí: _leftModelPath/_rightModelPath
+    // siguen resueltos en el State, y el nuevo AndroidView (creado con la
+    // key `eye_preview_$_previewSession`) los recibe como creationParams al
+    // crearse — Kotlin los carga en el mismo create(), sin timers.
   }
 
   Future<void> _start() async {
@@ -219,6 +278,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           _frame = frame;
           _status = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
         });
+        if (_alignmentGuideActive) _evaluateAlignment(frame);
+        _detectEyeTypeFromFrame(frame);
       },
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
@@ -245,15 +306,18 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         await _service.refreshPreviewBind();
       }*/
     });
+
+    // La carga del GLB ya no depende de un retry-loop temporizado: viaja
+    // como creationParams del PlatformView (ver _HybridCameraPreview), así
+    // que Kotlin la ejecuta de forma síncrona en el mismo create() que
+    // adjunta el SceneView nuevo.
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _assistantFlowTimer?.cancel();
     _sub?.cancel();
     _service.stopTracking();
-    _lashTexture?.dispose();
     ref.read(sessionClientProvider.notifier).state = null;
     super.dispose();
   }
@@ -345,31 +409,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     });
   }
 
-  /// Captura PNG del [RepaintBoundary]: vídeo nativo + [EyeTrackingPainter] (pestañas).
-  Future<Uint8List?> _capturePreviewPng() async {
-    if (!Platform.isAndroid) return null;
-    await WidgetsBinding.instance.endOfFrame;
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    if (!mounted) return null;
-
-    final boundary =
-        _previewCaptureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null || !boundary.attached) return null;
-
-    try {
-      final dpr = MediaQuery.devicePixelRatioOf(context);
-      // Mínimo 2.0: en algunos dispositivos el DPR lógico es bajo y la captura sale borrosa.
-      final captureRatio = dpr < 2.0 ? 2.0 : dpr;
-      final image = await boundary.toImage(pixelRatio: captureRatio);
-      final bd = await image.toByteData(format: ui.ImageByteFormat.png);
-      image.dispose();
-      return bd?.buffer.asUint8List();
-    } catch (e, st) {
-      debugPrint('Captura preview ojos: $e\n$st');
-      return null;
-    }
-  }
-
   Future<void> _resumeEyePreviewAfterAssistant() async {
     // Espera extra para que el plugin `camera` libere el hardware completamente.
     await Future<void>.delayed(const Duration(milliseconds: 800));
@@ -393,6 +432,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       if (!mounted) return;
       await _service.refreshPreviewBind();
     }
+    // El nuevo AndroidView trae un SceneView nuevo (el anterior se destruyó),
+    // pero ya no hace falta recargar el GLB desde aquí: se creó con la misma
+    // key `eye_preview_$_previewSession` y las creationParams
+    // (_leftModelPath/_rightModelPath) siguen resueltas en el State — Kotlin
+    // ya cargó el modelo de forma síncrona dentro de su propio create().
     if (mounted) setState(() {});
   }
 
@@ -400,31 +444,27 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (_workAssistantOpening) return;
     _workAssistantOpening = true;
     try {
-      final png = await _capturePreviewPng();
+      // 1. Activa las líneas de medición y espera un frame para que se pinten.
+      setState(() => _showMapping = true);
+      await WidgetsBinding.instance.endOfFrame;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
       if (!mounted) return;
-      if (png == null || png.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'No se pudo capturar la vista con pestañas. Reintenta.',
-              ),
-            ),
-          );
-        }
-        return;
-      }
 
+      // 2. Captura el overlay (pestañas + líneas de medición) ANTES de detener MediaPipe.
+      final overlayBytes = await _captureLashOverlay();
+
+      // 3. Detiene MediaPipe y espera que libere el sensor.
       await _service.stopTracking();
-      await Future<void>.delayed(const Duration(milliseconds: 320));
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (!mounted) return;
+
+      // 4. Toma foto real con la cámara Flutter y compone con el overlay.
+      final finalPhoto = await _captureAndComposite(overlayBytes);
       if (!mounted) return;
 
       await context.push(
         '/work-assistant',
-        extra: WorkAssistantArgs(
-          panelPngBytes: png,
-          mirrorTopPanel: true,
-        ),
+        extra: WorkAssistantArgs(panelPngBytes: finalPhoto),
       );
       if (!mounted) return;
 
@@ -435,41 +475,232 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
-  
+  /// Captura el overlay Flutter (pestañas PNG) mientras MediaPipe sigue activo.
+  /// Las áreas de cámara nativa quedan transparentes en el PNG resultante.
+  Future<Uint8List?> _captureLashOverlay() async {
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return null;
+    final boundary = _previewCaptureKey.currentContext
+        ?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null || !boundary.attached) return null;
+    try {
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final ratio = dpr < 2.0 ? 2.0 : dpr;
+      final image = await boundary.toImage(pixelRatio: ratio);
+      final bd = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      return bd?.buffer.asUint8List();
+    } catch (e) {
+      debugPrint('captureLashOverlay: $e');
+      return null;
+    }
+  }
+
+  /// Abre la cámara Flutter brevemente, toma foto de la cara y la compone
+  /// con el overlay de pestañas. Devuelve la región de ojos recortada.
+  Future<Uint8List?> _captureAndComposite(Uint8List? overlayBytes) async {
+    CameraController? ctrl;
+    try {
+      final status = await Permission.camera.request();
+      if (!status.isGranted || !mounted) return overlayBytes;
+
+      final cameras = await availableCameras();
+      if (cameras.isEmpty || !mounted) return overlayBytes;
+
+      final target = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+
+      ctrl = CameraController(target, ResolutionPreset.medium, enableAudio: false);
+      await ctrl.initialize();
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+
+      final xfile = await ctrl.takePicture();
+      final faceBytes = await File(xfile.path).readAsBytes();
+
+      return _compositeAndCrop(faceBytes, overlayBytes);
+    } catch (e) {
+      debugPrint('captureAndComposite: $e');
+      return overlayBytes;
+    } finally {
+      await ctrl?.dispose();
+    }
+  }
+
+  /// Compone la foto de cara con el overlay de pestañas (alpha blend) y recorta
+  /// la zona de ojos (franja central y=22%–64%).
+  static Uint8List _compositeAndCrop(Uint8List faceRaw, Uint8List? overlayRaw) {
+    var faceImg = img.decodeImage(faceRaw);
+    if (faceImg == null) return faceRaw;
+
+    // Aplica la rotación EXIF (la foto suele guardarse apaisada + tag de giro).
+    faceImg = img.bakeOrientation(faceImg);
+
+    // La cámara frontal guarda la foto sin espejo; la invertimos para que
+    // coincida con el overlay que se renderizó sobre el preview espejado.
+    var canvas = img.flipHorizontal(faceImg);
+
+    if (overlayRaw != null) {
+      final overlayImg = img.decodeImage(overlayRaw);
+      if (overlayImg != null) {
+        // El preview usa BoxFit.cover: la pantalla solo muestra un recorte
+        // centrado de la foto. Recortamos la foto a la proporción del overlay
+        // (pantalla) ANTES de componer; si no, las pestañas quedan corridas.
+        final overlayAspect = overlayImg.width / overlayImg.height;
+        final faceAspect = canvas.width / canvas.height;
+        int cw = canvas.width, ch = canvas.height, cx = 0, cy = 0;
+        if (faceAspect > overlayAspect) {
+          // Foto más ancha que la pantalla: recorta los lados.
+          cw = (canvas.height * overlayAspect).round();
+          cx = ((canvas.width - cw) / 2).round();
+        } else if (faceAspect < overlayAspect) {
+          // Foto más alta que la pantalla: recorta arriba/abajo.
+          ch = (canvas.width / overlayAspect).round();
+          cy = ((canvas.height - ch) / 2).round();
+        }
+        canvas = img.copyCrop(canvas, x: cx, y: cy, width: cw, height: ch);
+
+        // Ahora ambas tienen la misma proporción: escala 1:1 sin deformar.
+        final overlayScaled = img.copyResize(
+          overlayImg,
+          width: canvas.width,
+          height: canvas.height,
+          interpolation: img.Interpolation.linear,
+        );
+        img.compositeImage(canvas, overlayScaled, blend: img.BlendMode.alpha);
+      }
+    }
+
+    // Recorta la zona de los ojos.
+    final y = (canvas.height * 0.22).round();
+    final h = (canvas.height * 0.42).round();
+    final cropped =
+        img.copyCrop(canvas, x: 0, y: y, width: canvas.width, height: h);
+    final rotated = img.copyRotate(cropped, angle: 180);
+    return Uint8List.fromList(img.encodePng(rotated));
+  }
+
+  void _startAlignmentGuide() {
+    if (_workAssistantOpening || _alignmentGuideActive) return;
+    setState(() {
+      _alignmentGuideActive = true;
+      _eyesAligned = false;
+      _alignedSince = null;
+    });
+  }
+
+  /// Centro de un ojo: usa el iris (más preciso) si está disponible,
+  /// si no, el centroide de los puntos de contorno del ojo.
+  EyePoint? _eyeAnchor(List<EyePoint> contour, EyePoint? iris) {
+    if (iris != null) return iris;
+    if (contour.isEmpty) return null;
+    double sx = 0, sy = 0;
+    for (final p in contour) {
+      sx += p.x;
+      sy += p.y;
+    }
+    return EyePoint(x: sx / contour.length, y: sy / contour.length);
+  }
+
+  /// Misma transformación imagen→pantalla que usa [LashMappingPainter]
+  /// (BoxFit.cover), para comparar ojos detectados contra la posición de
+  /// la guía dibujada en pantalla.
+  bool _computeEyesAligned(TrackingFrame frame, Size canvasSize) {
+    if (!frame.faceDetected) return false;
+    final iw = frame.imageWidth.toDouble();
+    final ih = frame.imageHeight.toDouble();
+    if (iw <= 0 || ih <= 0) return false;
+
+    final a = _eyeAnchor(frame.leftEye, frame.leftIris);
+    final b = _eyeAnchor(frame.rightEye, frame.rightIris);
+    if (a == null || b == null) return false;
+
+    final sx = canvasSize.width / iw;
+    final sy = canvasSize.height / ih;
+    final scale = math.max(sx, sy);
+    final dx = (canvasSize.width - iw * scale) / 2;
+    final dy = (canvasSize.height - ih * scale) / 2;
+    Offset toCanvas(EyePoint p) => Offset(p.x * scale + dx, p.y * scale + dy);
+
+    final pa = toCanvas(a);
+    final pb = toCanvas(b);
+    // Asigna cada ojo detectado a la guía más cercana en X, sin asumir
+    // a qué lado de la pantalla corresponde "leftEye"/"rightEye".
+    final detectedLeft = pa.dx <= pb.dx ? pa : pb;
+    final detectedRight = pa.dx <= pb.dx ? pb : pa;
+
+    // Misma franja que _EyePositionGuidePainter y _compositeAndCrop.
+    final bandTop = canvasSize.height * 0.22;
+    final bandHeight = canvasSize.height * 0.42;
+    final eyeY = bandTop + bandHeight / 2;
+    final guideLeft = Offset(canvasSize.width * 0.32, eyeY);
+    final guideRight = Offset(canvasSize.width * 0.68, eyeY);
+    final tolerance = canvasSize.width * 0.11;
+
+    return (detectedLeft - guideLeft).distance <= tolerance &&
+        (detectedRight - guideRight).distance <= tolerance;
+  }
+
+  void _evaluateAlignment(TrackingFrame frame) {
+    if (!mounted || !_alignmentGuideActive) return;
+    final size = MediaQuery.sizeOf(context);
+    final aligned = _computeEyesAligned(frame, size);
+    final now = DateTime.now();
+
+    if (aligned) {
+      _alignedSince ??= now;
+      if (now.difference(_alignedSince!) >= _alignmentHoldDuration) {
+        setState(() {
+          _alignmentGuideActive = false;
+          _eyesAligned = false;
+          _alignedSince = null;
+        });
+        _beginWorkAssistantFlow();
+        return;
+      }
+      if (!_eyesAligned) setState(() => _eyesAligned = true);
+    } else {
+      _alignedSince = null;
+      if (_eyesAligned) setState(() => _eyesAligned = false);
+    }
+  }
+
+  /// Detecta la forma del ojo en vivo con [EyeShapeAnalyzer] y actualiza el
+  /// pill "tipo de ojo" con el item del catálogo correspondiente, mientras
+  /// el usuario no haya elegido uno manualmente.
+  void _detectEyeTypeFromFrame(TrackingFrame frame) {
+    if (_eyeTypeSetManually) return;
+    final types = _eyeTypes;
+    if (types == null || types.isEmpty) return;
+
+    final analysis = EyeShapeAnalyzer.analyze(frame);
+    if (!analysis.reliable) return;
+
+    final catalogName = analysis.shape.catalogName;
+    CatalogItem? match;
+    for (final item in types) {
+      if (item.name.trim().toLowerCase() == catalogName.toLowerCase()) {
+        match = item;
+        break;
+      }
+    }
+    if (match == null || match.id == _selectedEyeType?.id) return;
+    setState(() => _selectedEyeType = match);
+  }
+
   void _beginWorkAssistantFlow() {
     if (!Platform.isAndroid) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('El asistente con captura solo está disponible en Android.'),
+          content: Text('El asistente solo está disponible en Android.'),
         ),
       );
       return;
     }
-    if (_workAssistantOpening || _assistantCountdown != null) return;
-
-    setState(() {
-      _assistantCountdown = 3;
-      _showMapping = true;
-    });
-    _assistantFlowTimer?.cancel();
-    _assistantFlowTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      final left = _assistantCountdown;
-      if (left == null) {
-        t.cancel();
-        return;
-      }
-      if (left <= 1) {
-        t.cancel();
-        setState(() => _assistantCountdown = null);
-        unawaited(_finishWorkAssistantOpen());
-        return;
-      }
-      setState(() => _assistantCountdown = left - 1);
-    });
+    if (_workAssistantOpening) return;
+    unawaited(_finishWorkAssistantOpen());
   }
 
   String _categoryTitle(String? category) => switch (category) {
@@ -492,7 +723,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         selected: _selectedEyeType,
         preloadedItems: _eyeTypes,
         onSelect: (item) {
-          setState(() => _selectedEyeType = item);
+          setState(() {
+            _selectedEyeType = item;
+            _eyeTypeSetManually = true;
+          });
           Navigator.of(context).pop();
         },
       ),
@@ -513,7 +747,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF0D5C41),
+              backgroundColor: AppColors.actionGreen,
             ),
             onPressed: () {
               Navigator.of(ctx).pop();
@@ -576,7 +810,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Diseño guardado para ${client.displayName}'),
-        backgroundColor: const Color(0xFF0D5C41),
+        backgroundColor: AppColors.actionGreen,
       ));
     } catch (e) {
       if (!mounted) return;
@@ -619,15 +853,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final carousel = _carouselImages;
     final safeLash =
         _selectedLashIndex < carousel.length ? _selectedLashIndex : 0;
-    final lashAssetPath = carousel[safeLash];
-    if (_lashTextureAssetRequested != lashAssetPath) {
-      _lashTextureAssetRequested = lashAssetPath;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _lashTextureAssetRequested == lashAssetPath) {
-          unawaited(_loadLashTexture(lashAssetPath));
-        }
-      });
-    }
 
     return PopScope(
       canPop: true,
@@ -647,30 +872,22 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (Platform.isAndroid)
+                    if (Platform.isAndroid &&
+                        _leftModelPath != null &&
+                        _rightModelPath != null)
                       Positioned.fill(
                         child: _HybridCameraPreview(
                           key: ValueKey<String>('eye_preview_$_previewSession'),
+                          leftModelPath: _leftModelPath!,
+                          rightModelPath: _rightModelPath!,
                         ),
                       )
                     else
                       const ColoredBox(color: Colors.black),
-                    // Overlay PNG de pestañas — siempre visible.
-                    // El modelo 3D será renderizado de forma nativa por Kotlin
-                    // (CameraXManager/Filament) debajo de esta capa Flutter.
-                    Positioned.fill(
-                      child: RepaintBoundary(
-                        child: CustomPaint(
-                          isComplex: true,
-                          painter: EyeTrackingPainter(
-                            frame: _frame,
-                            filterIndex: _selectedFilter,
-                            lashVariantIndex: safeLash,
-                            lashTexture: _lashTexture,
-                          ),
-                        ),
-                      ),
-                    ),
+                    // Las pestañas ya no se dibujan como overlay PNG en Flutter:
+                    // se renderizan de forma nativa por Kotlin (CameraXManager/
+                    // SceneView-Filament) como modelos 3D (.glb) anclados a cada
+                    // ojo, dentro de _HybridCameraPreview.
                     // TODO: activar cuando Kotlin esté listo para renderizar el .glb
                     // if (_selectedModel3dPath != null)
                     //   Positioned.fill(
@@ -693,7 +910,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             ...EyeTrackingOverlay.buildSiblings(
               onBack: () => _goHome(context),
               status: _status,
-              title: _selectedEyeType?.name ?? 'Almendrado',
+              title: _selectedEyeType?.name ?? '',
               onEyeTypeTap: _showEyeTypeSheet,
               onSwitchCamera: () => _service.switchCamera(),
               onFlashTap: () {},
@@ -704,7 +921,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               activeCategory: _activeCategory,
             ),
             EyeTrackingWorkAssistantButton(
-              onTap: _beginWorkAssistantFlow,
+              onTap: _startAlignmentGuide,
             ),
           
             EyeTrackingFilterRow(
@@ -744,33 +961,81 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               EyeTrackingPremiumOjoButton(onTap: () {}),
             if (!_showLashModal)
               Positioned(
-                right: 16,
-                bottom: 28,
-                child: SafeArea(
-                  top: false,
-                  child: GestureDetector(
-                    onTap: () {
-                      final sessionClient =
-                          ref.read(sessionClientProvider);
-                      if (sessionClient != null) {
-                        _confirmSaveForClient(sessionClient);
-                      } else {
-                        _showSaveDesignSheet();
-                      }
-                    },
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF0D5C41),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.save_alt_rounded,
-                        color: Colors.white,
-                        size: 22,
+                top: 35,
+                right: 12,
+                child: GestureDetector(
+                  onTap: () {
+                    final sessionClient = ref.read(sessionClientProvider);
+                    if (sessionClient != null) {
+                      _confirmSaveForClient(sessionClient);
+                    } else {
+                      _showSaveDesignSheet();
+                    }
+                  },
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(80),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.actionGreen.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(80),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Icon(
+                          Icons.save_alt_rounded,
+                          color: Colors.white,
+                          size: 26,
+                        ),
                       ),
                     ),
+                  ),
+                ),
+              ),
+
+            // ── Guía de posición de ojos: espera alineación antes de capturar ──
+            if (_alignmentGuideActive)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CustomPaint(
+                        painter: _EyePositionGuidePainter(aligned: _eyesAligned),
+                      ),
+                      Positioned(
+                        bottom: 60,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            margin: const EdgeInsets.symmetric(horizontal: 36),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: _eyesAligned
+                                  ? const Color(0xDD1FA24A)
+                                  : const Color(0xDD0D5C41),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Text(
+                              _eyesAligned
+                                  ? '¡Perfecto! Quédate así…'
+                                  : 'Ubica tus ojos dentro del marco',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -809,43 +1074,53 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   ),
                 ),
               ),
-            if (_assistantCountdown != null)
-              Positioned.fill(
-                child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '$_assistantCountdown',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 88,
-                            fontWeight: FontWeight.w200,
-                            height: 1,
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Captura con filtro de pestañas',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.85),
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Guía de posición de ojos (se muestra al abrir el asistente, antes de la foto)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _EyePositionGuidePainter extends CustomPainter {
+  final bool aligned;
+
+  const _EyePositionGuidePainter({required this.aligned});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Misma franja que recorta _compositeAndCrop (y=22%–64% del alto).
+    final bandRect = Rect.fromLTWH(
+      size.width * 0.08,
+      size.height * 0.22,
+      size.width * 0.84,
+      size.height * 0.42,
+    );
+    final rrect = RRect.fromRectAndRadius(bandRect, const Radius.circular(24));
+
+    // Oscurece todo excepto la franja de ojos.
+    final outerPath = Path()..addRect(Offset.zero & size);
+    final innerPath = Path()..addRRect(rrect);
+    final maskPath =
+        Path.combine(PathOperation.difference, outerPath, innerPath);
+    canvas.drawPath(maskPath, Paint()..color = const Color(0x99000000));
+
+    // Contorno de la franja: blanco por defecto, verde cuando el usuario
+    // se posiciona correctamente. Sin marcadores de ojos independientes.
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = aligned ? const Color(0xFF2ECC71) : Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = aligned ? 3.5 : 2.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_EyePositionGuidePainter old) => old.aligned != aligned;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1019,20 +1294,20 @@ class _OptionTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
         decoration: BoxDecoration(
-          color: const Color(0xFF0D5C41).withValues(alpha: 0.07),
+          color: AppColors.actionGreen.withValues(alpha: 0.07),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: const Color(0xFF0D5C41).withValues(alpha: 0.2),
+            color: AppColors.actionGreen.withValues(alpha: 0.2),
           ),
         ),
         child: Row(
           children: [
-            Icon(icon, color: const Color(0xFF0D5C41), size: 22),
+            Icon(icon, color: AppColors.actionGreen, size: 22),
             const SizedBox(width: 12),
             Text(
               label,
               style: const TextStyle(
-                color: Color(0xFF0D5C41),
+                color: AppColors.actionGreen,
                 fontWeight: FontWeight.w600,
                 fontSize: 15,
               ),
@@ -1156,7 +1431,7 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                           leading: CircleAvatar(
-                            backgroundColor: const Color(0xFF0D5C41),
+                            backgroundColor: AppColors.actionGreen,
                             child: Text(
                               _initials(c.displayName),
                               style: const TextStyle(
@@ -1176,7 +1451,7 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
                               : null,
                           trailing: const Icon(
                             Icons.check_circle_outline,
-                            color: Color(0xFF0D5C41),
+                            color: AppColors.actionGreen,
                           ),
                           onTap: () => widget.onSelect(c),
                         );
@@ -1276,8 +1551,21 @@ class _Model3dViewer extends StatelessWidget {
 /// Preview de cámara con **Hybrid Composition** (`initExpensiveAndroidView`).
 /// Necesario para que el vídeo de CameraX (TextureView) se renderice; con
 /// `AndroidView` simple el preview salía negro aunque el análisis sí corría.
+///
+/// [leftModelPath]/[rightModelPath] viajan como `creationParams`: Kotlin los
+/// recibe en el mismo `create()` que instancia el SceneView y carga el GLB
+/// ahí mismo, de forma síncrona — así la recreación de este PlatformView
+/// (al volver a la pantalla, o al forzar `_previewSession++`) nunca depende
+/// de que Flutter dispare una segunda llamada por MethodChannel a tiempo.
 class _HybridCameraPreview extends StatelessWidget {
-  const _HybridCameraPreview({super.key});
+  const _HybridCameraPreview({
+    super.key,
+    required this.leftModelPath,
+    required this.rightModelPath,
+  });
+
+  final String leftModelPath;
+  final String rightModelPath;
 
   static const String _viewType = 'eye_tracking/camera_preview';
 
@@ -1295,6 +1583,10 @@ class _HybridCameraPreview extends StatelessWidget {
           id: params.id,
           viewType: _viewType,
           layoutDirection: TextDirection.ltr,
+          creationParams: <String, dynamic>{
+            'leftModelPath': leftModelPath,
+            'rightModelPath': rightModelPath,
+          },
           creationParamsCodec: const StandardMessageCodec(),
           onFocus: () => params.onFocusChanged(true),
         );
