@@ -16,7 +16,10 @@ import '../../features/catalogo/presentation/screens/catalogo_screen.dart';
 import '../../features/clientes/presentation/screens/clientes_screen.dart';
 import '../../features/clientes/presentation/screens/cliente_detalle_screen.dart';
 import '../../features/clientes/domain/entities/client.dart';
+import '../../features/recomendacion/presentation/screens/recomendacion_screen.dart';
 import '../../work_assistant_args.dart';
+import '../../recommendation_args.dart';
+import '../recommendation/eye_shape_analyzer.dart';
 import 'guards.dart';
 import 'routes.dart';
 
@@ -83,6 +86,16 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           return WorkAssistantScreen(
             args: extra is WorkAssistantArgs ? extra : null,
           );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.recomendacion,
+        builder: (_, state) {
+          final extra = state.extra;
+          final args = extra is RecommendationArgs
+              ? extra
+              : const RecommendationArgs(analysis: EyeAnalysis.none);
+          return RecomendacionScreen(args: args);
         },
       ),
     ],

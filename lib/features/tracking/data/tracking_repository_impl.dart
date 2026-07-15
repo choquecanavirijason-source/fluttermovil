@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/dio_client.dart';
+import '../domain/entities/lash_ai_recommendation.dart';
 import '../domain/entities/tracking_record.dart';
 import '../domain/tracking_repository.dart';
 import 'tracking_api.dart';
@@ -32,6 +35,23 @@ class TrackingRepositoryImpl implements TrackingRepository {
     };
     return _api.create(body);
   }
+
+  @override
+  Future<String> aiReview(Uint8List jpegBytes) => _api.aiReview(jpegBytes);
+
+  @override
+  Future<String> aiCompare({
+    required Uint8List beforeJpegBytes,
+    required Uint8List afterJpegBytes,
+  }) =>
+      _api.aiCompare(
+        beforeJpegBytes: beforeJpegBytes,
+        afterJpegBytes: afterJpegBytes,
+      );
+
+  @override
+  Future<LashAiRecommendation> aiRecommend(Uint8List jpegBytes) =>
+      _api.aiRecommend(jpegBytes);
 
   @override
   Future<List<TrackingRecord>> historyByClient(int clientId) async {

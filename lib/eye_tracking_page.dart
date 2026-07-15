@@ -33,6 +33,7 @@ import 'screens/widgets/eye_tracking_filter_row.dart';
 import 'screens/widgets/eye_tracking_lash_modal.dart';
 import 'screens/widgets/eye_tracking_overlay.dart';
 import 'screens/widgets/eye_tracking_work_assistant_button.dart';
+import 'recommendation_args.dart';
 import 'work_assistant_args.dart';
 // import 'core/storage/model_cache_service.dart'; // TODO: reactivar con Kotlin 3D
 
@@ -53,6 +54,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   String _status = 'Inicializando...';
 
   bool _workAssistantOpening = false;
+  bool _openingRecommendation = false;
 
   static const List<String> _compatibleImages = [
     'assets/p1.png',
@@ -420,6 +422,45 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       await _resumeEyePreviewAfterAssistant();
     } finally {
       _workAssistantOpening = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// Abre el probador con IA: mismo pipeline de captura que el asistente de
+  /// trabajo (overlay + foto real compuesta, con las líneas de medición
+  /// horneadas en la imagen), pero navega a `/recomendacion` con el análisis
+  /// de forma de ojo ya calculado.
+  Future<void> _openRecommendation() async {
+    if (_openingRecommendation || _workAssistantOpening) return;
+    _openingRecommendation = true;
+    try {
+      setState(() => _showMapping = true);
+      await WidgetsBinding.instance.endOfFrame;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (!mounted) return;
+
+      final overlayBytes = await _captureLashOverlay();
+      final analysis = EyeShapeAnalyzer.analyze(_frame);
+
+      await _service.stopTracking();
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (!mounted) return;
+
+      final finalPhoto = await _captureAndComposite(overlayBytes);
+      if (!mounted) return;
+
+      await context.push(
+        '/recomendacion',
+        extra: RecommendationArgs(
+          analysis: analysis,
+          photoPngBytes: finalPhoto,
+        ),
+      );
+      if (!mounted) return;
+
+      await _resumeEyePreviewAfterAssistant();
+    } finally {
+      _openingRecommendation = false;
       if (mounted) setState(() {});
     }
   }
@@ -924,7 +965,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 onClose: () => setState(() => _showLashModal = false),
               ),
             if (!_showLashModal)
-              EyeTrackingPremiumOjoButton(onTap: () {}),
+              EyeTrackingPremiumOjoButton(
+                onTap: () => unawaited(_openRecommendation()),
+              ),
             if (!_showLashModal)
               Positioned(
                 top: 35,

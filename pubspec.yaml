@@ -45,6 +45,7 @@ dependencies:
   camera: ^0.11.0
   permission_handler: ^11.3.1
   image: ^4.3.0   # puro Dart (decodificación para el asistente de trabajo)
+  flutter_tts: ^4.2.0  # voz de la IA en el asistente de trabajo (Beauty Tech)
 
   # --- Stack de app (mismo sistema que la app admin) ---
   flutter_riverpod: ^2.5.1          # estado

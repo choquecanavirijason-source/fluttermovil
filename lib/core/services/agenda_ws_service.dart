@@ -86,16 +86,17 @@ class AgendaWsService {
       return;
     }
 
-    // Se conecta directo al backend (puerto `Env.wsDirectPort`), sin pasar
-    // por nginx: nginx en producción todavía no reenvía `/ws/` (solo
-    // `/api/`), así que ir por el puerto 80 devuelve el HTML de la SPA en
-    // vez de hacer el upgrade a websocket. El REST sigue usando nginx
-    // (`Env.apiBaseUrl`) sin cambios; esto solo afecta esta conexión.
+    // Va por nginx (mismo host/puerto que `Env.apiBaseUrl`): el bloque
+    // `location /ws/` de `nginx-elashes-fullstack.conf` ya reenvía el
+    // upgrade a websocket hacia uvicorn (127.0.0.1:8000) con los headers
+    // `Upgrade`/`Connection` correctos. El puerto directo de uvicorn (8000)
+    // no está expuesto por el firewall de la VM, así que conectarse ahí
+    // directo (como se hacía antes) falla con "Connection refused".
     final httpUri = Uri.parse(Env.host);
     final uri = Uri(
       scheme: httpUri.scheme == 'https' ? 'wss' : 'ws',
       host: httpUri.host,
-      port: Env.wsDirectPort,
+      port: httpUri.hasPort ? httpUri.port : null,
       path: '/ws/branch/$branchId',
       queryParameters: {'token': token},
     );

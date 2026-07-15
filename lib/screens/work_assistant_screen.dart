@@ -6,38 +6,60 @@ import 'dart:ui' as ui;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:Probador/core/theme/app_colors.dart';
 import 'package:Probador/work_assistant_args.dart';
 
+import '../features/tracking/data/tracking_repository_impl.dart';
+
 /// Asistente de verificación: mitad superior foto de referencia (captura automática a los 3 s);
-/// mitad inferior cámara en vivo.
-class WorkAssistantScreen extends StatefulWidget {
+/// mitad inferior cámara en vivo. Incluye guiado de IA en vivo (Beauty Tech):
+/// un ciclo automático que pide consejos periódicos a la IA y los lee en voz
+/// alta con el motor de texto-a-voz del celular.
+class WorkAssistantScreen extends ConsumerStatefulWidget {
   const WorkAssistantScreen({super.key, this.args});
 
   final WorkAssistantArgs? args;
 
   @override
-  State<WorkAssistantScreen> createState() => _WorkAssistantScreenState();
+  ConsumerState<WorkAssistantScreen> createState() =>
+      _WorkAssistantScreenState();
 }
 
-class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
+class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
+    with WidgetsBindingObserver {
   static const String _defaultRefAsset = 'assets/chica.png';
 
-  Uint8List? _referenceBytes;
+  /// Cada cuánto se pide un consejo nuevo mientras el guiado está activo.
+  /// Además del ciclo automático, el botón de cámara en la barra del
+  /// asistente permite pedir un consejo inmediato en cualquier momento
+  /// (p. ej. justo después de corregir algo), sin esperar este intervalo.
+  static const Duration _aiCycleInterval = Duration(seconds: 15);
+
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
 
   bool _analyzing = false;
 
+  final FlutterTts _tts = FlutterTts();
+
+  /// true mientras el ciclo automático de guiado de IA está corriendo.
+  bool _aiGuidanceActive = false;
+  Timer? _aiCycleTimer;
+
   String _assistantMessage =
-      'La pestaña está caída, por favor revisa la elevación…';
+      'Toca "Iniciar" para que la IA te guíe en vivo mientras aplicas.';
 
   bool _flashOn = false;
   int _cameraIndex = 0;
-  final DateTime _sessionStart = DateTime.now();
+
+  /// true mientras se está grabando video real con la cámara.
+  bool _isRecordingVideo = false;
+  DateTime _recordingStart = DateTime.now();
   Timer? _tickTimer;
   int _elapsedSeconds = 0;
 
@@ -50,31 +72,113 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
   /// Foto del panel superior (capturada automáticamente al iniciar la cámara).
   Uint8List? _panelPngFromCamera;
 
+  /// Última foto (sin recortar) que la IA evaluó. Si ya hay una, la próxima
+  /// evaluación compara "antes" (esta) vs "después" (la nueva) para decir
+  /// si mejoró, en vez de dar un consejo genérico aislado.
+  Uint8List? _lastEvaluatedPhoto;
+
   /// Indica que se está tomando la foto automática.
   bool _isCapturing = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final pref = widget.args?.panelPngBytes;
     if (pref != null && pref.isNotEmpty) {
       _panelPngFromCamera = pref;
-      _referenceBytes = pref;
     }
     unawaited(_initCamera());
-    _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() {
-        _elapsedSeconds = DateTime.now().difference(_sessionStart).inSeconds;
-      });
-    });
+    unawaited(_tts.setLanguage('es-MX'));
+    unawaited(_tts.setSpeechRate(0.46));
+    unawaited(_configureSpanishFemaleVoice());
+  }
+
+  /// Busca entre las voces instaladas en el celular una en español marcada
+  /// como femenina y la fija para el TTS. La disponibilidad y el formato del
+  /// nombre dependen del motor de voz de cada equipo (normalmente el de
+  /// Google), así que si no se encuentra ninguna con ese indicio en el
+  /// nombre, se deja la voz por defecto del idioma pero con un pitch un
+  /// poco más alto para acercarse a un tono femenino.
+  Future<void> _configureSpanishFemaleVoice() async {
+    try {
+      final voices = await _tts.getVoices;
+      if (voices is List) {
+        final esVoices = voices.whereType<Map>().where((v) {
+          final locale = (v['locale'] ?? '').toString().toLowerCase();
+          return locale.startsWith('es');
+        }).toList();
+        debugPrint(
+          'WorkAssistant TTS voces es disponibles (${esVoices.length}): $esVoices',
+        );
+
+        final female = esVoices.cast<Map?>().firstWhere(
+          (v) {
+            final name = (v?['name'] ?? '').toString().toLowerCase();
+            return name.contains('female') ||
+                name.contains('#female') ||
+                name.contains('-f-') ||
+                name.contains('_f_');
+          },
+          orElse: () => null,
+        );
+
+        if (female != null) {
+          await _tts.setVoice({
+            'name': (female['name'] ?? '').toString(),
+            'locale': (female['locale'] ?? '').toString(),
+          });
+          await _tts.setPitch(1.0);
+          debugPrint('WorkAssistant TTS voz femenina elegida: ${female['name']}');
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('WorkAssistant TTS getVoices/setVoice error: $e');
+    }
+    // No se pudo identificar una voz femenina explícita entre las
+    // instaladas; se sube un poco el pitch para acercarse a ese tono.
+    await _tts.setPitch(1.15);
+  }
+
+  /// Detiene el ciclo de IA al pasar a segundo plano: el plugin `camera`
+  /// puede liberar el `CameraController` cuando la app pierde el foco, y
+  /// sin esto el `Timer.periodic` seguía disparando `takePicture()` sobre un
+  /// controller ya destruido ("CameraController was used after being
+  /// disposed") al volver.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _aiCycleTimer?.cancel();
+      _aiCycleTimer = null;
+      if (_aiGuidanceActive && mounted) {
+        setState(() => _aiGuidanceActive = false);
+      } else {
+        _aiGuidanceActive = false;
+      }
+      if (_isRecordingVideo) {
+        _tickTimer?.cancel();
+        _tickTimer = null;
+        _isRecordingVideo = false;
+        final c = _cameraController;
+        if (c != null) {
+          unawaited(
+            c.stopVideoRecording().catchError((Object e) {
+              debugPrint('WorkAssistant stopVideoRecording en background: $e');
+              return XFile('');
+            }),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _loadAsset(String path) async {
     final data = await rootBundle.load(path);
     if (!mounted) return;
     setState(() {
-      _referenceBytes = data.buffer.asUint8List();
+      _panelPngFromCamera = data.buffer.asUint8List();
     });
   }
 
@@ -129,18 +233,38 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
       }
       setState(() => _cameraController = ctrl);
       // Solo auto-captura si no se recibió foto desde el probador.
-      if (_panelPngFromCamera == null) unawaited(_captureForTopPanel());
+      if (_panelPngFromCamera == null) {
+        unawaited(_captureForTopPanel(initialSettleDelay: true));
+      }
     } catch (e) {
       debugPrint('WorkAssistant camera: $e');
     }
   }
 
   /// Toma una foto con la cámara y la muestra en el panel superior (región de ojos).
-  Future<void> _captureForTopPanel() async {
-    if (_isCapturing) return;
+  ///
+  /// [initialSettleDelay] da tiempo a que la superficie de la cámara recién
+  /// creada esté lista (solo hace falta en la auto-captura al abrir la
+  /// pantalla); en una retoma manual la cámara ya está estable, así que se
+  /// omite para que responda al toque sin demora artificial.
+  Future<void> _captureForTopPanel({bool initialSettleDelay = false}) async {
+    if (_isRecordingVideo) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Detén la grabación para tomar una foto.')),
+      );
+      return;
+    }
+    if (_isCapturing || _analyzing) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Espera un momento, la cámara está ocupada…')),
+      );
+      return;
+    }
     if (mounted) setState(() => _isCapturing = true);
     try {
-      await Future<void>.delayed(const Duration(milliseconds: 700));
+      if (initialSettleDelay) {
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+      }
       if (!mounted) return;
       final c = _cameraController;
       if (c == null || !c.value.isInitialized) return;
@@ -149,10 +273,7 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
       final raw = await File(xfile.path).readAsBytes();
       final cropped = _cropEyeRegion(raw);
       if (!mounted) return;
-      setState(() {
-        _panelPngFromCamera = cropped;
-        _referenceBytes = cropped;
-      });
+      setState(() => _panelPngFromCamera = cropped);
     } catch (e) {
       debugPrint('captureForTopPanel: $e');
     } finally {
@@ -170,17 +291,193 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     return Uint8List.fromList(img.encodePng(cropped));
   }
 
-  Future<void> _captureAndAnalyze() async {
-    await _captureForTopPanel();
-    if (!mounted || _referenceBytes == null) return;
-    await _runAnalysis();
+  /// Inicia/detiene una grabación de video real (sin audio) con el plugin
+  /// `camera`. Es independiente de la foto del panel de referencia (que se
+  /// toma una sola vez, automáticamente) y del guiado de IA (su propio
+  /// botón en la barra del asistente).
+  Future<void> _toggleVideoRecording() async {
+    if (_isCapturing || _exitInProgress) return;
+    final c = _cameraController;
+    if (c == null || !c.value.isInitialized) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Espera a que la cámara esté lista.')),
+      );
+      return;
+    }
+
+    if (_isRecordingVideo) {
+      _tickTimer?.cancel();
+      _tickTimer = null;
+      try {
+        final xfile = await c.stopVideoRecording();
+        if (!mounted) return;
+        setState(() => _isRecordingVideo = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Grabación guardada: ${xfile.name}')),
+        );
+      } catch (e) {
+        debugPrint('WorkAssistant stopVideoRecording: $e');
+        if (mounted) {
+          setState(() => _isRecordingVideo = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No se pudo guardar la grabación: $e')),
+          );
+        }
+      }
+      return;
+    }
+
+    try {
+      await c.startVideoRecording();
+      if (!mounted) return;
+      _recordingStart = DateTime.now();
+      _tickTimer?.cancel();
+      _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        setState(() {
+          _elapsedSeconds = DateTime.now().difference(_recordingStart).inSeconds;
+        });
+      });
+      setState(() {
+        _isRecordingVideo = true;
+        _elapsedSeconds = 0;
+      });
+    } catch (e) {
+      debugPrint('WorkAssistant startVideoRecording: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo iniciar la grabación: $e')),
+        );
+      }
+    }
+  }
+
+  /// Enciende/apaga el ciclo de guiado de IA en vivo: al activarlo pide un
+  /// primer consejo y luego repite cada [_aiCycleInterval] hasta detenerlo.
+  void _toggleAiGuidance() {
+    if (!_aiGuidanceActive) {
+      final c = _cameraController;
+      if (c == null || !c.value.isInitialized) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Espera a que la cámara esté lista.')),
+        );
+        return;
+      }
+      if (_isRecordingVideo) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Detén la grabación de video para pedir guiado de IA.'),
+          ),
+        );
+        return;
+      }
+      setState(() => _aiGuidanceActive = true);
+      unawaited(_runAiReview());
+      _aiCycleTimer?.cancel();
+      _aiCycleTimer = Timer.periodic(_aiCycleInterval, (_) {
+        if (!mounted || !_aiGuidanceActive) return;
+        unawaited(_runAiReview());
+      });
+    } else {
+      _aiCycleTimer?.cancel();
+      _aiCycleTimer = null;
+      setState(() => _aiGuidanceActive = false);
+    }
+  }
+
+  /// Captura el frame actual de la cámara en vivo y pide un consejo real a
+  /// la IA (backend `POST /tracking/ai-review`); lo lee en voz alta al llegar.
+  Future<void> _runAiReview() async {
+    // `_isCapturing` es compartido con `_captureForTopPanel` y con
+    // `_switchCamera`: el plugin `camera` no admite dos `takePicture()`
+    // simultáneos sobre el mismo controller, y tampoco que se lo dispose
+    // mientras hay una captura en curso. Chequear y marcar acá, de forma
+    // síncrona (sin `await` de por medio), cierra esa ventana de carrera.
+    if (_analyzing || _isCapturing || _isRecordingVideo) return;
+    final c = _cameraController;
+    if (c == null || !c.value.isInitialized) return;
+
+    setState(() {
+      _analyzing = true;
+      _isCapturing = true;
+    });
+    try {
+      final xfile = await c.takePicture();
+      final bytes = await File(xfile.path).readAsBytes();
+
+      // Actualiza la foto de arriba con este mismo estado ya, sin esperar
+      // la respuesta de la IA — así cada toque de este botón deja ver de
+      // inmediato "cómo va" y, al repetirlo más tarde, la mejora respecto
+      // a la captura anterior.
+      if (mounted) {
+        setState(() => _panelPngFromCamera = _cropEyeRegion(bytes));
+      }
+
+      // Si ya evaluamos una foto antes en esta sesión, comparamos "antes"
+      // vs "después" para que la IA diga si mejoró; si es la primera vez,
+      // pedimos un consejo simple sobre esta única foto.
+      final previous = _lastEvaluatedPhoto;
+      final repo = ref.read(trackingRepositoryProvider);
+      final feedback = previous != null
+          ? await repo.aiCompare(beforeJpegBytes: previous, afterJpegBytes: bytes)
+          : await repo.aiReview(bytes);
+      _lastEvaluatedPhoto = bytes;
+
+      if (!mounted) return;
+      final text = feedback.trim().isNotEmpty
+          ? feedback.trim()
+          : 'La IA no devolvió un consejo esta vez.';
+      setState(() => _assistantMessage = text);
+      unawaited(_speak(text));
+    } catch (e) {
+      debugPrint('WorkAssistant _runAiReview: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo obtener el consejo de IA: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _analyzing = false;
+          _isCapturing = false;
+        });
+      } else {
+        _analyzing = false;
+        _isCapturing = false;
+      }
+    }
+  }
+
+  /// Lee [text] en voz alta con el motor de texto-a-voz del celular.
+  Future<void> _speak(String text) async {
+    if (text.trim().isEmpty) return;
+    await _tts.stop();
+    await _tts.speak(text);
   }
 
   Future<void> _switchCamera() async {
     if (_detachingPluginCamera || _exitInProgress) return;
+    if (_isRecordingVideo) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Detén la grabación antes de cambiar de cámara.')),
+      );
+      return;
+    }
+    if (_isCapturing) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Espera a que termine la captura actual.')),
+      );
+      return;
+    }
     if (_cameras == null || _cameras!.length < 2) return;
     final ctrl = _cameraController;
     if (ctrl == null) return;
+    // Se invalida la referencia ANTES de destruir el controller: si algo
+    // (guiado de IA, captura del panel) lee `_cameraController` mientras el
+    // nuevo todavía se está creando, ve null y aborta en vez de usar un
+    // controller ya destruido.
+    setState(() => _cameraController = null);
     try {
       await ctrl.dispose();
     } catch (_) {}
@@ -212,6 +509,9 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     }
   }
 
+  /// Opciones secundarias para la foto de referencia (mantener presionado
+  /// el botón de la cámara). La acción principal — tomar una foto nueva —
+  /// vive directo en el toque simple de ese botón, sin pasar por acá.
   Future<void> _pickReferenceSheet() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -246,66 +546,6 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     );
   }
 
-  static int? _computeVisualSimilarity(Uint8List? a, Uint8List? b) {
-    if (a == null || b == null) return null;
-    final img.Image? ia = img.decodeImage(a);
-    final img.Image? ib = img.decodeImage(b);
-    if (ia == null || ib == null) return null;
-
-    const int side = 64;
-    final ra = img.copyResize(ia, width: side, height: side);
-    final rb = img.copyResize(ib, width: side, height: side);
-
-    double sumSq = 0;
-    final int n = side * side;
-    for (int y = 0; y < side; y++) {
-      for (int x = 0; x < side; x++) {
-        final pa = ra.getPixel(x, y);
-        final pb = rb.getPixel(x, y);
-        final dr = pa.r - pb.r;
-        final dg = pa.g - pb.g;
-        final db = pa.b - pb.b;
-        sumSq += dr * dr + dg * dg + db * db;
-      }
-    }
-    final mse = sumSq / (n * 3.0);
-    const double maxMse = 8000.0;
-    final sim =
-        (100 * (1.0 - (mse / maxMse).clamp(0.0, 1.0))).round().clamp(0, 100);
-    return sim;
-  }
-
-  /// Usa frame de referencia vs captura estática de demo si no hay snapshot de cámara.
-  Future<void> _runAnalysis() async {
-    if (_referenceBytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay imagen de referencia.')),
-      );
-      return;
-    }
-
-    setState(() => _analyzing = true);
-
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-
-    final demo = await rootBundle.load('assets/chica2.png');
-    final current = demo.buffer.asUint8List();
-    final score = _computeVisualSimilarity(_referenceBytes, current);
-
-    if (score != null) {
-      if (score < 50) {
-        _assistantMessage = 'La pestaña está caída, por favor revisa la elevación…';
-      } else if (score < 75) {
-        _assistantMessage = 'Buen avance; ajusta simetría entre ojo derecho e izquierdo.';
-      } else {
-        _assistantMessage = 'Muy alineado con el mapa de referencia. Continúa así.';
-      }
-    }
-
-    if (!mounted) return;
-    setState(() => _analyzing = false);
-  }
-
   String _formatElapsed() {
     final m = _elapsedSeconds ~/ 60;
     final s = _elapsedSeconds % 60;
@@ -318,6 +558,17 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
     if (c == null) {
       await Future<void>.delayed(const Duration(milliseconds: 120));
       return;
+    }
+
+    if (_isRecordingVideo) {
+      _tickTimer?.cancel();
+      _tickTimer = null;
+      _isRecordingVideo = false;
+      try {
+        await c.stopVideoRecording();
+      } catch (e) {
+        debugPrint('WorkAssistant stopVideoRecording al salir: $e');
+      }
     }
 
     if (!mounted) return;
@@ -380,7 +631,10 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tickTimer?.cancel();
+    _aiCycleTimer?.cancel();
+    unawaited(_tts.stop());
     final c = _cameraController;
     _cameraController = null;
     if (c != null) {
@@ -584,8 +838,11 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
           top: topInset + 8,
           right: 10,
           child: _circleIconButton(
-            icon: Icons.photo_library_outlined,
-            onTap: _pickReferenceSheet,
+            icon: Icons.camera_alt_outlined,
+            // Toque simple = acción principal (tomar foto ya). Mantener
+            // presionado = opciones secundarias (foto de ejemplo, etc.).
+            onTap: () => unawaited(_captureForTopPanel()),
+            onLongPress: _pickReferenceSheet,
           ),
         ),
       ],
@@ -630,11 +887,13 @@ class _WorkAssistantScreenState extends State<WorkAssistantScreen> {
   Widget _circleIconButton({
     required IconData icon,
     required VoidCallback onTap,
+    VoidCallback? onLongPress,
   }) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         customBorder: const CircleBorder(),
         child: ClipOval(
           child: BackdropFilter(
@@ -705,23 +964,70 @@ Widget _assistantFloatingBar() {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             GestureDetector(
-              onTap: (_analyzing || _isCapturing || _panelPngFromCamera == null)
+              onTap: () => unawaited(_speak(_assistantMessage)),
+              child: Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: const Icon(
+                  Icons.volume_up_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            // "Tomar foto y analizar": captura el estado actual, lo deja
+            // como foto de referencia arriba Y pide un consejo nuevo a la
+            // IA, sin esperar al ciclo automático. Pensado para repetirse
+            // varias veces mientras se corrige: cada toque muestra "cómo
+            // va" y compara contra la corrección anterior.
+            GestureDetector(
+              onTap: (_analyzing || _isCapturing || _isRecordingVideo)
                   ? null
-                  : _runAnalysis,
+                  : () => unawaited(_runAiReview()),
+              child: Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: (_analyzing || _isCapturing || _isRecordingVideo)
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.white.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: Icon(
+                  Icons.camera_alt_outlined,
+                  color: (_analyzing || _isCapturing || _isRecordingVideo)
+                      ? Colors.white30
+                      : Colors.white,
+                  size: 17,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: _isCapturing ? null : _toggleAiGuidance,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: (_analyzing || _isCapturing || _panelPngFromCamera == null)
+                  color: _isCapturing
                       ? Colors.white.withValues(alpha: 0.12)
-                      : AppColors.actionGreen,
+                      : (_aiGuidanceActive
+                          ? const Color(0xFFE53935)
+                          : AppColors.actionGreen),
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white24),
                 ),
-                child: (_analyzing || _isCapturing)
+                child: _analyzing
                     ? const Padding(
                         padding: EdgeInsets.all(11),
                         child: CircularProgressIndicator(
@@ -730,8 +1036,10 @@ Widget _assistantFloatingBar() {
                         ),
                       )
                     : Icon(
-                        Icons.smart_toy_outlined,
-                        color: _panelPngFromCamera == null ? Colors.white30 : Colors.white,
+                        _aiGuidanceActive
+                            ? Icons.stop_rounded
+                            : Icons.play_arrow_rounded,
+                        color: Colors.white,
                         size: 22,
                       ),
               ),
@@ -781,11 +1089,12 @@ Widget _assistantFloatingBar() {
                   ),
                 ),
         ),
-        Positioned(
-          top: 8,
-          left: 8,
-          child: _recordingPill(),
-        ),
+        if (_isRecordingVideo)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: _recordingPill(),
+          ),
         Positioned(
           right: 8,
           top: 64,
@@ -881,10 +1190,13 @@ Widget _assistantFloatingBar() {
     );
   }
 
+  /// Botón real de grabar/detener video: círculo rojo en reposo, cuadrado
+  /// (stop) mientras graba. Independiente de la foto del panel superior
+  /// (automática, una sola vez) y del guiado de IA (botón propio).
   Widget _stopStyleButton() {
     final busy = _isCapturing || _analyzing;
     return GestureDetector(
-      onTap: busy ? null : () => unawaited(_captureAndAnalyze()),
+      onTap: busy ? null : () => unawaited(_toggleVideoRecording()),
       child: Container(
         width: 72,
         height: 72,
@@ -905,15 +1217,17 @@ Widget _assistantFloatingBar() {
                   width: 28, height: 28,
                   child: CircularProgressIndicator(
                     strokeWidth: 2.5,
-                    color: AppColors.actionGreen,
+                    color: Color(0xFFE53935),
                   ),
                 )
-              : Container(
-                  width: 28,
-                  height: 28,
+              : AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: _isRecordingVideo ? 26 : 56,
+                  height: _isRecordingVideo ? 26 : 56,
                   decoration: BoxDecoration(
-                    color: AppColors.actionGreen,
-                    borderRadius: BorderRadius.circular(6),
+                    color: const Color(0xFFE53935),
+                    borderRadius:
+                        BorderRadius.circular(_isRecordingVideo ? 6 : 28),
                   ),
                 ),
         ),

@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../../../core/network/api_endpoints.dart';
+import '../domain/entities/lash_ai_recommendation.dart';
 import 'models/tracking_dto.dart';
 
 class TrackingApi {
@@ -30,5 +33,48 @@ class TrackingApi {
         .whereType<Map<String, dynamic>>()
         .map(TrackingDto.fromJson)
         .toList();
+  }
+
+  /// `POST /tracking/ai-review` — guiado de IA en vivo sobre una foto de la
+  /// aplicación en curso. Devuelve el consejo en texto natural.
+  Future<String> aiReview(Uint8List jpegBytes) async {
+    final formData = FormData.fromMap({
+      'file': MultipartFile.fromBytes(jpegBytes, filename: 'frame.jpg'),
+    });
+    final response = await _dio.post<Map<String, dynamic>>(
+      '${ApiEndpoints.tracking}ai-review',
+      data: formData,
+    );
+    return response.data?['feedback'] as String? ?? '';
+  }
+
+  /// `POST /tracking/ai-compare` — compara la foto "antes" y "después" de
+  /// una corrección en la misma aplicación. Devuelve el consejo comparativo.
+  Future<String> aiCompare({
+    required Uint8List beforeJpegBytes,
+    required Uint8List afterJpegBytes,
+  }) async {
+    final formData = FormData.fromMap({
+      'before': MultipartFile.fromBytes(beforeJpegBytes, filename: 'before.jpg'),
+      'after': MultipartFile.fromBytes(afterJpegBytes, filename: 'after.jpg'),
+    });
+    final response = await _dio.post<Map<String, dynamic>>(
+      '${ApiEndpoints.tracking}ai-compare',
+      data: formData,
+    );
+    return response.data?['feedback'] as String? ?? '';
+  }
+
+  /// `POST /tracking/ai-recommend` — probador con IA: analiza la foto del
+  /// ojo y recomienda diseño/efecto/volumen del catálogo real del salón.
+  Future<LashAiRecommendation> aiRecommend(Uint8List jpegBytes) async {
+    final formData = FormData.fromMap({
+      'file': MultipartFile.fromBytes(jpegBytes, filename: 'eye.jpg'),
+    });
+    final response = await _dio.post<Map<String, dynamic>>(
+      '${ApiEndpoints.tracking}ai-recommend',
+      data: formData,
+    );
+    return LashAiRecommendation.fromJson(response.data ?? const {});
   }
 }
