@@ -215,10 +215,7 @@ class LashRenderer(
     // ── Carga de modelos ──────────────────────────────────────────────────────
 
     private fun loadIntoSlot(slot: EyeModelSlot, path: String?, eye: String) {
-        if (path == slot.path && slot.node != null) {
-            Log.d(TAG, "loadIntoSlot[$eye] SKIP — ya cargado node=${System.identityHashCode(slot.node)} path=$path")
-            return
-        }
+       
 
         val sv = sceneView ?: run {
             // Si esto se ve en logcat, la carga se descarta silenciosamente:
