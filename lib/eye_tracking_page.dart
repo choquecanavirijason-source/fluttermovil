@@ -35,7 +35,6 @@ import 'screens/widgets/eye_tracking_overlay.dart';
 import 'screens/widgets/eye_tracking_work_assistant_button.dart';
 import 'recommendation_args.dart';
 import 'work_assistant_args.dart';
-// import 'core/storage/model_cache_service.dart'; // TODO: reactivar con Kotlin 3D
 
 class EyeTrackingPage extends ConsumerStatefulWidget {
   const EyeTrackingPage({super.key});
@@ -78,7 +77,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     'assets/p4.png',
   ];
 
-  static const List<String> _designOptions = ['Medio', 'Ligero', 'Alto', 'Medio'];
+  static const List<String> _designOptions = [
+    'Medio',
+    'Ligero',
+    'Alto',
+    'Medio',
+  ];
 
   static const List<String> _techImages = [
     'assets/p1.png',
@@ -87,7 +91,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     'assets/p4.png',
   ];
 
-  static const List<String> _techOptions = ['Clásica', 'Volumen', 'Mega Vol.', 'Híbrido'];
+  static const List<String> _techOptions = [
+    'Clásica',
+    'Volumen',
+    'Mega Vol.',
+    'Híbrido',
+  ];
 
   static const List<String> _effectImages = [
     'assets/p1.png',
@@ -96,7 +105,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     'assets/p4.png',
   ];
 
-  static const List<String> _effectOptions = ['Natural', 'Cat Eye', 'Muñeca', 'Abierto'];
+  static const List<String> _effectOptions = [
+    'Natural',
+    'Cat Eye',
+    'Muñeca',
+    'Abierto',
+  ];
 
   static const List<String> _thicknessImages = [
     'assets/p1.png',
@@ -105,7 +119,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     'assets/p4.png',
   ];
 
-  static const List<String> _thicknessOptions = ['0.05mm', '0.07mm', '0.10mm', '0.15mm'];
+  static const List<String> _thicknessOptions = [
+    '0.05mm',
+    '0.07mm',
+    '0.10mm',
+    '0.15mm',
+  ];
 
   bool _showMapping = false;
 
@@ -116,6 +135,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   int _selectedEffectIndex = 0;
   int _selectedThicknessIndex = 0;
   bool _showTransparentMenu = true;
+
   /// Categoría activa del menú inferior: 'design', 'tech', 'effect', 'thickness', o null.
   String? _activeCategory;
   bool _showLashModal = false;
@@ -138,12 +158,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// hoja de selección; a partir de ahí deja de sobreescribirse con el
   /// resultado del escaneo automático.
   bool _eyeTypeSetManually = false;
-
-  /// Path local del .glb descargado para el item seleccionado (null = sin modelo).
-  String? _selectedModel3dPath;
-
-  /// true mientras ModelCacheService resuelve la descarga del .glb.
-  bool _isModel3dLoading = false;
 
   /// true mientras se muestra la guía de alineación (esperando que el usuario
   /// ubique sus ojos en el marco antes de capturar).
@@ -211,16 +225,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     unawaited(_resolveEyeModelPaths());
     _start();
 
-    // Pre-carga tipos de ojo en segundo plano 
+    // Pre-carga tipos de ojo en segundo plano
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       try {
-        final items = await ref.read(catalogListProvider(CatalogKind.eyeType).future);
+        final items = await ref.read(
+          catalogListProvider(CatalogKind.eyeType).future,
+        );
         if (mounted) setState(() => _eyeTypes = items);
       } catch (_) {}
     });
   }
-
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -300,7 +315,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // Preview negro en frío: el PreviewView puede no tener superficie lista
     // cuando CameraX hace el primer bind. Re-enlazamos un par de veces ya
     // medido el AndroidView para forzar que el vídeo aparezca.
-    
+
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       /*for (final ms in const [500, 700, 900]) {
         await Future<void>.delayed(Duration(milliseconds: ms));
@@ -522,8 +537,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await WidgetsBinding.instance.endOfFrame;
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!mounted) return null;
-    final boundary = _previewCaptureKey.currentContext
-        ?.findRenderObject() as RenderRepaintBoundary?;
+    final boundary =
+        _previewCaptureKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
     if (boundary == null || !boundary.attached) return null;
     try {
       final dpr = MediaQuery.devicePixelRatioOf(context);
@@ -554,7 +570,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         orElse: () => cameras.first,
       );
 
-      ctrl = CameraController(target, ResolutionPreset.medium, enableAudio: false);
+      ctrl = CameraController(
+        target,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
       await ctrl.initialize();
       await Future<void>.delayed(const Duration(milliseconds: 350));
 
@@ -617,8 +637,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // Recorta la zona de los ojos.
     final y = (canvas.height * 0.22).round();
     final h = (canvas.height * 0.42).round();
-    final cropped =
-        img.copyCrop(canvas, x: 0, y: y, width: canvas.width, height: h);
+    final cropped = img.copyCrop(
+      canvas,
+      x: 0,
+      y: y,
+      width: canvas.width,
+      height: h,
+    );
     final rotated = img.copyRotate(cropped, angle: 180);
     return Uint8List.fromList(img.encodePng(rotated));
   }
@@ -745,11 +770,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   String _categoryTitle(String? category) => switch (category) {
-    'design'    => 'Diseño',
-    'tech'      => 'Tecnología',
-    'effect'    => 'Efecto',
+    'design' => 'Diseño',
+    'tech' => 'Tecnología',
+    'effect' => 'Efecto',
     'thickness' => 'Grosor',
-    _           => '',
+    _ => '',
   };
 
   void _showEyeTypeSheet() {
@@ -843,57 +868,44 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     ].join(' | ');
 
     try {
-      await ref.read(trackingRepositoryProvider).create(
+      await ref
+          .read(trackingRepositoryProvider)
+          .create(
             clientId: client.id,
             eyeTypeId: _selectedEyeType?.id,
             designNotes: notes,
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Diseño guardado para ${client.displayName}'),
-        backgroundColor: AppColors.actionGreen,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Diseño guardado para ${client.displayName}'),
+          backgroundColor: AppColors.actionGreen,
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Error al guardar: $e'),
-        backgroundColor: Colors.red,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al guardar: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
-  void _onLashSelect(int index, List<CatalogItem> items) {
+  void _onLashSelect(int index) {
     setState(() => _selectedLashIndex = index);
-
-    // TODO: reactivar cuando Kotlin esté listo para el renderizado 3D nativo
-    // if (index >= items.length) return;
-    // final item = items[index];
-    // if (!item.has3dModel) return;
-    // setState(() => _isModel3dLoading = true);
-    // try {
-    //   final path = await ref
-    //       .read(modelCacheServiceProvider)
-    //       .getModelPath(item.model3dUrl!);
-    //   if (path != null) {
-    //     debugPrint('[ModelCache] ✅ Modelo 3D descargado: $path');
-    //     await _service.set3DModelPath(path);
-    //   } else {
-    //     debugPrint('[ModelCache] ⚠️  getModelPath devolvió null — verifica la URL');
-    //   }
-    //   if (mounted) setState(() => _selectedModel3dPath = path);
-    // } finally {
-    //   if (mounted) setState(() => _isModel3dLoading = false);
-    // }
   }
 
   @override
   Widget build(BuildContext context) {
-    final lashItems = ref
-        .watch(filteredCatalogProvider(CatalogKind.lashDesign))
-        .valueOrNull ?? [];
+    // Se mantiene el watch (sin guardar el resultado) para que esta pantalla
+    // se reconstruya si el catálogo de diseños de pestañas cambia en remoto.
+    ref.watch(filteredCatalogProvider(CatalogKind.lashDesign));
     final carousel = _carouselImages;
-    final safeLash =
-        _selectedLashIndex < carousel.length ? _selectedLashIndex : 0;
+    final safeLash = _selectedLashIndex < carousel.length
+        ? _selectedLashIndex
+        : 0;
 
     return PopScope(
       canPop: true,
@@ -929,14 +941,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     // se renderizan de forma nativa por Kotlin (CameraXManager/
                     // SceneView-Filament) como modelos 3D (.glb) anclados a cada
                     // ojo, dentro de _HybridCameraPreview.
-                    // TODO: activar cuando Kotlin esté listo para renderizar el .glb
-                    // if (_selectedModel3dPath != null)
-                    //   Positioned.fill(
-                    //     child: _Model3dAnchor(
-                    //       localPath: _selectedModel3dPath!,
-                    //       transform: Matrix4.identity(),
-                    //     ),
-                    //   ),
                     if (_showMapping)
                       Positioned.fill(
                         child: CustomPaint(
@@ -961,10 +965,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               onThicknessTap: () => _onCategoryTap('thickness'),
               activeCategory: _activeCategory,
             ),
-            EyeTrackingWorkAssistantButton(
-              onTap: _startAlignmentGuide,
-            ),
-          
+            EyeTrackingWorkAssistantButton(onTap: _startAlignmentGuide),
+
             EyeTrackingFilterRow(
               selectedFilter: _selectedFilter,
               onSelect: _onFilterSelect,
@@ -978,7 +980,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: BottomCarousel(
                     selectedLash: safeLash,
-                    onSelect: (i) => _onLashSelect(i, lashItems),
+                    onSelect: _onLashSelect,
                     imagePaths: carousel,
                   ),
                 ),
@@ -1045,7 +1047,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     fit: StackFit.expand,
                     children: [
                       CustomPaint(
-                        painter: _EyePositionGuidePainter(aligned: _eyesAligned),
+                        painter: _EyePositionGuidePainter(
+                          aligned: _eyesAligned,
+                        ),
                       ),
                       Positioned(
                         bottom: 60,
@@ -1056,7 +1060,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                             duration: const Duration(milliseconds: 200),
                             margin: const EdgeInsets.symmetric(horizontal: 36),
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 20, vertical: 12),
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
                             decoration: BoxDecoration(
                               color: _eyesAligned
                                   ? const Color(0xDD1FA24A)
@@ -1079,41 +1085,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         ),
                       ),
                     ],
-                  ),
-                ),
-              ),
-            // Indicador de descarga del .glb (se oculta en cuanto termina).
-            if (_isModel3dLoading)
-              Positioned(
-                bottom: 140,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.65),
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        ),
-                        SizedBox(width: 10),
-                        Text(
-                          'Cargando modelo 3D…',
-                          style: TextStyle(color: Colors.white, fontSize: 13),
-                        ),
-                      ],
-                    ),
                   ),
                 ),
               ),
@@ -1147,8 +1118,11 @@ class _EyePositionGuidePainter extends CustomPainter {
     // Oscurece todo excepto la franja de ojos.
     final outerPath = Path()..addRect(Offset.zero & size);
     final innerPath = Path()..addRRect(rrect);
-    final maskPath =
-        Path.combine(PathOperation.difference, outerPath, innerPath);
+    final maskPath = Path.combine(
+      PathOperation.difference,
+      outerPath,
+      innerPath,
+    );
     canvas.drawPath(maskPath, Paint()..color = const Color(0x99000000));
 
     // Contorno de la franja: blanco por defecto, verde cuando el usuario
@@ -1184,8 +1158,8 @@ class _EyeTypePickerSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncItems = preloadedItems != null
-    ? AsyncValue.data(preloadedItems!)
-    : ref.watch(catalogListProvider(CatalogKind.eyeType));
+        ? AsyncValue.data(preloadedItems!)
+        : ref.watch(catalogListProvider(CatalogKind.eyeType));
 
     return DraggableScrollableSheet(
       initialChildSize: 0.45,
@@ -1228,8 +1202,10 @@ class _EyeTypePickerSheet extends ConsumerWidget {
                   final item = items[i];
                   final isSelected = selected?.id == item.id;
                   return ListTile(
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 4,
+                    ),
                     leading: item.hasImage
                         ? ClipRRect(
                             borderRadius: BorderRadius.circular(8),
@@ -1238,15 +1214,16 @@ class _EyeTypePickerSheet extends ConsumerWidget {
                               width: 44,
                               height: 44,
                               fit: BoxFit.cover,
-                              errorWidget: (_, _, _) =>
-                                  const _EyeTypeIcon(),
+                              errorWidget: (_, _, _) => const _EyeTypeIcon(),
                             ),
                           )
                         : const _EyeTypeIcon(),
                     title: Text(
                       item.name,
                       style: const TextStyle(
-                          fontWeight: FontWeight.w600, fontSize: 14),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
                     ),
                     subtitle: item.description != null
                         ? Text(
@@ -1257,8 +1234,10 @@ class _EyeTypePickerSheet extends ConsumerWidget {
                           )
                         : null,
                     trailing: isSelected
-                        ? const Icon(Icons.check_circle,
-                            color: Color(0xFF094732))
+                        ? const Icon(
+                            Icons.check_circle,
+                            color: Color(0xFF094732),
+                          )
                         : null,
                     onTap: () => onSelect(item),
                   );
@@ -1285,7 +1264,11 @@ class _SaveOptionsSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.fromLTRB(
-          20, 16, 20, 24 + MediaQuery.of(context).padding.bottom),
+        20,
+        16,
+        20,
+        24 + MediaQuery.of(context).padding.bottom,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1446,9 +1429,12 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
                 hintText: 'Buscar cliente…',
                 prefixIcon: const Icon(Icons.search),
                 border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 10),
+                  horizontal: 12,
+                  vertical: 10,
+                ),
               ),
             ),
           ),
@@ -1456,8 +1442,7 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
           const Divider(height: 1),
           Expanded(
             child: asyncClients.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('Error: $e')),
               data: (clients) => clients.isEmpty
                   ? const Center(child: Text('Sin clientes encontrados'))
@@ -1465,8 +1450,7 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
                       controller: scrollController,
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                       itemCount: clients.length,
-                      separatorBuilder: (_, _) =>
-                          const SizedBox(height: 6),
+                      separatorBuilder: (_, _) => const SizedBox(height: 6),
                       itemBuilder: (_, i) {
                         final c = clients[i];
                         return ListTile(
@@ -1486,12 +1470,9 @@ class _ClientPickerForSaveState extends ConsumerState<_ClientPickerForSave> {
                           ),
                           title: Text(
                             c.displayName,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w600),
+                            style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
-                          subtitle: c.phone.isNotEmpty
-                              ? Text(c.phone)
-                              : null,
+                          subtitle: c.phone.isNotEmpty ? Text(c.phone) : null,
                           trailing: const Icon(
                             Icons.check_circle_outline,
                             color: AppColors.actionGreen,
@@ -1526,64 +1507,6 @@ class _EyeTypeIcon extends StatelessWidget {
         size: 22,
       ),
     );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Visor 3D — anclaje y placeholder
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Ancla el modelo 3D al plano AR mediante una [Matrix4] de transformación.
-///
-/// Cuando se integren los landmarks del tracking ([TrackingFrame]) actualiza
-/// [transform] con la traslación y escala derivadas de los puntos del iris o
-/// los párpados para que el modelo siga el movimiento de la cara en tiempo real.
-class _Model3dAnchor extends StatelessWidget {
-  const _Model3dAnchor({
-    required this.localPath,
-    required this.transform,
-  });
-
-  final String localPath;
-  final Matrix4 transform;
-
-  @override
-  Widget build(BuildContext context) {
-    return Transform(
-      transform: transform,
-      alignment: Alignment.center,
-      child: _Model3dViewer(localPath: localPath),
-    );
-  }
-}
-
-/// Placeholder del visor de modelos 3D (.glb / .gltf).
-///
-/// Reemplaza el [SizedBox.expand] con el widget del paquete elegido:
-///
-/// ── Opción A · model_viewer_plus (WebView, Android/iOS/Web) ─────────────────
-///   pubspec:  model_viewer_plus: ^1.x.x
-///   widget:   ModelViewer(src: 'file://$localPath', autoRotate: false)
-///
-/// ── Opción B · flutter_3d_controller (nativo Android/iOS) ──────────────────
-///   pubspec:  flutter_3d_controller: ^1.x.x
-///   widget:   Flutter3DViewer(src: localPath)
-/// ────────────────────────────────────────────────────────────────────────────
-class _Model3dViewer extends StatelessWidget {
-  const _Model3dViewer({required this.localPath});
-
-  final String localPath;
-
-  @override
-  Widget build(BuildContext context) {
-    // TODO: inyectar visor 3D — reemplaza este SizedBox con el widget del paquete.
-    //
-    // model_viewer_plus:
-    //   return ModelViewer(src: 'file://$localPath', autoRotate: false);
-    //
-    // flutter_3d_controller:
-    //   return Flutter3DViewer(src: localPath);
-    return const SizedBox.expand();
   }
 }
 
