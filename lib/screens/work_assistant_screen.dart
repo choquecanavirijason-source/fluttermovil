@@ -77,6 +77,13 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   /// Evita doble atrás mientras se detiene una grabación en curso.
   bool _exitInProgress = false;
 
+  /// Rutas locales (archivo) del .glb de pestañas, resueltas una única vez.
+  /// Mismo mecanismo y mismo modelo por defecto que usa el probador (ver
+  /// [HybridCameraPreview]): viajan como `creationParams` del PlatformView,
+  /// así que solo se crea la vista de cámara una vez ambas están listas.
+  String? _leftModelPath;
+  String? _rightModelPath;
+
   @override
   void initState() {
     super.initState();
@@ -88,11 +95,27 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     } else {
       unawaited(_loadAsset(_defaultRefAsset));
     }
+    unawaited(_resolveEyeModelPaths());
     unawaited(_service.startTracking());
     _trackingSub = _service.trackingStream.listen(_onFrame);
     unawaited(_tts.setLanguage('es-MX'));
     unawaited(_tts.setSpeechRate(0.46));
     unawaited(_configureSpanishFemaleVoice());
+  }
+
+  Future<void> _resolveEyeModelPaths() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final leftPath = await extractEyeModelAssetToFile(defaultLeftEyeModelAsset);
+      final rightPath = await extractEyeModelAssetToFile(defaultRightEyeModelAsset);
+      if (!mounted) return;
+      setState(() {
+        _leftModelPath = leftPath;
+        _rightModelPath = rightPath;
+      });
+    } catch (e) {
+      debugPrint('WorkAssistant: no se pudieron resolver los .glb de pestañas: $e');
+    }
   }
 
   /// Busca entre las voces instaladas en el celular una en español marcada
@@ -791,12 +814,24 @@ Widget _assistantFloatingBar() {
 
 
   Widget _cameraRegion(double bottomInset) {
+    final leftPath = _leftModelPath;
+    final rightPath = _rightModelPath;
     return Stack(
       fit: StackFit.expand,
       children: [
-        const ColoredBox(
-          color: Color(0xFF0D0D0D),
-          child: HybridCameraPreview(),
+        ColoredBox(
+          color: const Color(0xFF0D0D0D),
+          // Solo se crea la vista nativa una vez resueltas ambas rutas del
+          // .glb: viajan como `creationParams` en la creación del
+          // PlatformView (ver [HybridCameraPreview]), así que Kotlin las
+          // recibe siempre con datos reales, sin depender de un segundo
+          // viaje Dart→Kotlin por MethodChannel.
+          child: (leftPath != null && rightPath != null)
+              ? HybridCameraPreview(
+                  leftModelPath: leftPath,
+                  rightModelPath: rightPath,
+                )
+              : const SizedBox.expand(),
         ),
         if (_isRecording)
           Positioned(
