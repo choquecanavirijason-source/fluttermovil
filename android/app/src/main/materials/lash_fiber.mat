@@ -1,0 +1,50 @@
+// Material Filament de fibra de pestaña — shading model ANISOTRÓPICO real,
+// no el PBR metallic-roughness genérico que importa SceneView del glTF por
+// defecto (ver auditoría del motor de render, sección Filament/PBR).
+//
+// PREREQUISITO: el .glb debe tener atributo TANGENT (ver
+// tools/blender/generate_lash_cards.py, export_tangents=True) — sin
+// tangentes, `material.anisotropyDirection` no tiene espacio tangente
+// válido donde expresarse y el shading anisotrópico no tiene efecto visible
+// distinto de un PBR normal.
+//
+// CÓMO COMPILAR (no se puede ejecutar desde este entorno — requiere el
+// binario `matc` del Filament SDK, https://google.github.io/filament/):
+//
+//   matc -a opengl -p mobile -o \
+//     android/app/src/main/assets/materials/lash_fiber.filamat \
+//     android/app/src/main/materials/lash_fiber.mat
+//
+// El .filamat compilado va en assets/materials/ — MaterialManager.kt lo
+// carga desde ahí vía sceneView.materialLoader.createMaterial(...) y cae de
+// vuelta al PBR genérico si el archivo todavía no existe (no rompe el build
+// ni el render mientras este paso manual no se haya corrido).
+
+material {
+    name : "LashFiber",
+    shadingModel : anisotropic,
+    blending : masked,
+    maskThreshold : 0.3,
+    doubleSided : true,
+    requires : [ uv0 ],
+    parameters : [
+        { type : sampler2d, name : baseColorAlpha },
+        { type : float, name : roughness, default : 0.3 },
+        { type : float, name : anisotropy, default : 0.85 },
+        // Espacio TANGENTE (no mundo): x=1,y=0,z=0 = a lo largo de la fibra,
+        // coincide con la U del UV que genera el script de Blender.
+        { type : float3, name : anisotropyDirection, default : [1.0, 0.0, 0.0] }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec4 baseColorAlpha = texture(materialParams_baseColorAlpha, getUV0());
+        material.baseColor = baseColorAlpha;
+        material.roughness = materialParams.roughness;
+        material.anisotropy = materialParams.anisotropy;
+        material.anisotropyDirection = materialParams.anisotropyDirection;
+    }
+}

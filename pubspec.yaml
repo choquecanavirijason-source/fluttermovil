@@ -58,7 +58,8 @@ dependencies:
   google_fonts: ^6.2.1             # tipografía Inter
   cached_network_image: ^3.4.1     # imágenes catálogo
   intl: ^0.20.2                    # fechas/moneda es_BO
-  path_provider: ^2.1.5            # caché local de modelos 3D
+  flutter_slidable: ^3.0.0
+  path_provider: ^2.1.5             # caché local de modelos 3D
   flutter_local_notifications: ^22.0.1  # aviso de clientes nuevos
   web_socket_channel: ^3.0.3
 
@@ -109,6 +110,12 @@ flutter:
     - assets/p4.png
     - assets/p5.png
     - assets/p6.png
+
+    - assets/modelos/cateye/cateyeleft.glb
+    - assets/modelos/cateye/cateyeright.glb
+
+    - assets/modelos/wispy/wispy_left.glb
+    - assets/modelos/wispy/wispy_right.glb
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

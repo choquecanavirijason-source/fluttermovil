@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'core/recommendation/eye_shape_analyzer.dart';
 import 'core/theme/app_colors.dart';
@@ -24,7 +25,6 @@ import 'features/clientes/presentation/providers/clientes_provider.dart';
 import 'features/tracking/data/tracking_repository_impl.dart';
 import 'eye_tracking_mapping_painter.dart';
 import 'eye_tracking_model.dart';
-import 'eye_tracking_painter.dart';
 import 'native_eye_tracking_service.dart';
 import 'screens/widgets/bottom_carousel.dart';
 import 'screens/widgets/eye_tracking_bottom_actions.dart';
@@ -123,8 +123,14 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// Fuerza recreación del [AndroidView] al volver de otra pantalla que usa la cámara.
   int _previewSession = 0;
 
-  ui.Image? _lashTexture;
-  String? _lashTextureAssetRequested;
+  /// Rutas locales (archivo) de los .glb de pestañas, resueltas una única vez
+  /// por ciclo de vida de este State (ver [_resolveEyeModelPaths]). Viajan
+  /// como `creationParams` del PlatformView (ver [_HybridCameraPreview]) para
+  /// que Kotlin cargue el modelo de forma síncrona en la misma llamada nativa
+  /// que crea el SceneView — nunca por un MethodChannel disparado con delays.
+  String? _leftModelPath;
+  String? _rightModelPath;
+
   CatalogItem? _selectedEyeType;
   List<CatalogItem>? _eyeTypes;
 
@@ -152,24 +158,49 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// Duración mínima que los ojos deben permanecer alineados antes de disparar la captura.
   static const Duration _alignmentHoldDuration = Duration(milliseconds: 900);
 
+  /// Modelos 3D (.glb) anclados nativamente por Kotlin/SceneView a cada ojo.
+  static const String _cateyeLeftModelAsset =
+      'assets/modelos/cateye/cateyeleft.glb';
+  static const String _cateyeRightModelAsset =
+      'assets/modelos/cateye/cateyeright.glb';
+
   List<String> get _carouselImages =>
       _selectedFilter == 0 ? _compatibleImages : _explorarImages;
 
-  Future<void> _loadLashTexture(String assetPath) async {
+  /// Copia un asset de Flutter (bundle) a un archivo local, ya que el lado
+  /// nativo (SceneView) carga los .glb desde una ruta de archivo real.
+  Future<String> _extractAssetToFile(String assetPath) async {
+    final byteData = await rootBundle.load(assetPath);
+    final bytes = byteData.buffer.asUint8List(
+      byteData.offsetInBytes,
+      byteData.lengthInBytes,
+    );
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/${assetPath.split('/').last}');
+    if (!await file.exists() || await file.length() != bytes.length) {
+      await file.writeAsBytes(bytes, flush: true);
+    }
+    return file.path;
+  }
+
+  /// Resuelve, una única vez, las rutas de archivo de los .glb de pestañas
+  /// (cateyeleft/cateyeright). No dispara ninguna carga en Kotlin: las rutas
+  /// se pasan como `creationParams` al crear el PlatformView, así que cada
+  /// vez que Flutter recrea el AndroidView (primera entrada, o cualquier
+  /// re-entrada a esta pantalla) el nativo carga el modelo de forma
+  /// determinista, sin depender de un segundo viaje Dart→Kotlin con timers.
+  Future<void> _resolveEyeModelPaths() async {
+    if (!Platform.isAndroid) return;
     try {
-      final data = await rootBundle.load(assetPath);
-      final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
-      final frame = await codec.getNextFrame();
-      if (!mounted) {
-        frame.image.dispose();
-        return;
-      }
+      final leftPath = await _extractAssetToFile(_cateyeLeftModelAsset);
+      final rightPath = await _extractAssetToFile(_cateyeRightModelAsset);
+      if (!mounted) return;
       setState(() {
-        _lashTexture?.dispose();
-        _lashTexture = frame.image;
+        _leftModelPath = leftPath;
+        _rightModelPath = rightPath;
       });
-    } catch (e, st) {
-      debugPrint('No se pudo cargar textura de pestañas ($assetPath): $e\n$st');
+    } catch (e) {
+      debugPrint('No se pudieron resolver los .glb de pestañas: $e');
     }
   }
 
@@ -177,8 +208,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_resolveEyeModelPaths());
     _start();
-    
+
     // Pre-carga tipos de ojo en segundo plano 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -225,6 +257,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     await _service.refreshPreviewBind();
+    // El GLB ya no requiere recarga aquí: _leftModelPath/_rightModelPath
+    // siguen resueltos en el State, y el nuevo AndroidView (creado con la
+    // key `eye_preview_$_previewSession`) los recibe como creationParams al
+    // crearse — Kotlin los carga en el mismo create(), sin timers.
   }
 
   Future<void> _start() async {
@@ -272,6 +308,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         await _service.refreshPreviewBind();
       }*/
     });
+
+    // La carga del GLB ya no depende de un retry-loop temporizado: viaja
+    // como creationParams del PlatformView (ver _HybridCameraPreview), así
+    // que Kotlin la ejecuta de forma síncrona en el mismo create() que
+    // adjunta el SceneView nuevo.
   }
 
   @override
@@ -279,7 +320,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     _service.stopTracking();
-    _lashTexture?.dispose();
     ref.read(sessionClientProvider.notifier).state = null;
     super.dispose();
   }
@@ -372,7 +412,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   Future<void> _resumeEyePreviewAfterAssistant() async {
-    await Future<void>.delayed(const Duration(milliseconds: 300));
+    // Espera extra para que el plugin `camera` libere el hardware completamente.
+    await Future<void>.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
 
     setState(() {
@@ -380,14 +421,24 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _showMapping = false;
     });
 
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // Tiempo para que el nuevo AndroidView llame a attachPreview().
+    await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
 
     await _service.startTracking();
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
 
-    await _service.refreshPreviewBind();
+    // refreshPreviewBind() es no-op si previewView==null.
+    // Múltiples intentos cubren la variación de tiempo del AndroidView.
+    for (final ms in [700, 600, 500, 400]) {
+      await Future<void>.delayed(Duration(milliseconds: ms));
+      if (!mounted) return;
+      await _service.refreshPreviewBind();
+    }
+    // El nuevo AndroidView trae un SceneView nuevo (el anterior se destruyó),
+    // pero ya no hace falta recargar el GLB desde aquí: se creó con la misma
+    // key `eye_preview_$_previewSession` y las creationParams
+    // (_leftModelPath/_rightModelPath) siguen resueltas en el State — Kotlin
+    // ya cargó el modelo de forma síncrona dentro de su propio create().
     if (mounted) setState(() {});
   }
 
@@ -594,9 +645,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     return EyePoint(x: sx / contour.length, y: sy / contour.length);
   }
 
-  /// Misma transformación imagen→pantalla que usan [EyeTrackingPainter] y
-  /// [LashMappingPainter] (BoxFit.cover), para comparar ojos detectados
-  /// contra la posición de la guía dibujada en pantalla.
+  /// Misma transformación imagen→pantalla que usa [LashMappingPainter]
+  /// (BoxFit.cover), para comparar ojos detectados contra la posición de
+  /// la guía dibujada en pantalla.
   bool _computeEyesAligned(TrackingFrame frame, Size canvasSize) {
     if (!frame.faceDetected) return false;
     final iw = frame.imageWidth.toDouble();
@@ -843,15 +894,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final carousel = _carouselImages;
     final safeLash =
         _selectedLashIndex < carousel.length ? _selectedLashIndex : 0;
-    final lashAssetPath = carousel[safeLash];
-    if (_lashTextureAssetRequested != lashAssetPath) {
-      _lashTextureAssetRequested = lashAssetPath;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _lashTextureAssetRequested == lashAssetPath) {
-          unawaited(_loadLashTexture(lashAssetPath));
-        }
-      });
-    }
 
     return PopScope(
       canPop: true,
@@ -871,30 +913,22 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (Platform.isAndroid)
+                    if (Platform.isAndroid &&
+                        _leftModelPath != null &&
+                        _rightModelPath != null)
                       Positioned.fill(
                         child: _HybridCameraPreview(
                           key: ValueKey<String>('eye_preview_$_previewSession'),
+                          leftModelPath: _leftModelPath!,
+                          rightModelPath: _rightModelPath!,
                         ),
                       )
                     else
                       const ColoredBox(color: Colors.black),
-                    // Overlay PNG de pestañas — siempre visible.
-                    // El modelo 3D será renderizado de forma nativa por Kotlin
-                    // (CameraXManager/Filament) debajo de esta capa Flutter.
-                    Positioned.fill(
-                      child: RepaintBoundary(
-                        child: CustomPaint(
-                          isComplex: true,
-                          painter: EyeTrackingPainter(
-                            frame: _frame,
-                            filterIndex: _selectedFilter,
-                            lashVariantIndex: safeLash,
-                            lashTexture: _lashTexture,
-                          ),
-                        ),
-                      ),
-                    ),
+                    // Las pestañas ya no se dibujan como overlay PNG en Flutter:
+                    // se renderizan de forma nativa por Kotlin (CameraXManager/
+                    // SceneView-Filament) como modelos 3D (.glb) anclados a cada
+                    // ojo, dentro de _HybridCameraPreview.
                     // TODO: activar cuando Kotlin esté listo para renderizar el .glb
                     // if (_selectedModel3dPath != null)
                     //   Positioned.fill(
@@ -1560,8 +1594,21 @@ class _Model3dViewer extends StatelessWidget {
 /// Preview de cámara con **Hybrid Composition** (`initExpensiveAndroidView`).
 /// Necesario para que el vídeo de CameraX (TextureView) se renderice; con
 /// `AndroidView` simple el preview salía negro aunque el análisis sí corría.
+///
+/// [leftModelPath]/[rightModelPath] viajan como `creationParams`: Kotlin los
+/// recibe en el mismo `create()` que instancia el SceneView y carga el GLB
+/// ahí mismo, de forma síncrona — así la recreación de este PlatformView
+/// (al volver a la pantalla, o al forzar `_previewSession++`) nunca depende
+/// de que Flutter dispare una segunda llamada por MethodChannel a tiempo.
 class _HybridCameraPreview extends StatelessWidget {
-  const _HybridCameraPreview({super.key});
+  const _HybridCameraPreview({
+    super.key,
+    required this.leftModelPath,
+    required this.rightModelPath,
+  });
+
+  final String leftModelPath;
+  final String rightModelPath;
 
   static const String _viewType = 'eye_tracking/camera_preview';
 
@@ -1579,6 +1626,10 @@ class _HybridCameraPreview extends StatelessWidget {
           id: params.id,
           viewType: _viewType,
           layoutDirection: TextDirection.ltr,
+          creationParams: <String, dynamic>{
+            'leftModelPath': leftModelPath,
+            'rightModelPath': rightModelPath,
+          },
           creationParamsCodec: const StandardMessageCodec(),
           onFocus: () => params.onFocusChanged(true),
         );

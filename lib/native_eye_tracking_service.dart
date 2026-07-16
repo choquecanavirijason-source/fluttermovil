@@ -85,19 +85,22 @@ class NativeEyeTrackingService {
     }
   }
 
-  /// Envía la ruta local del archivo .glb al lado nativo para que
-  /// Kotlin cargue el modelo 3D en el motor de renderizado.
-  Future<void> set3DModelPath(String path) async {
+  /// Envía al lado nativo las rutas locales de los .glb de pestañas para
+  /// que Kotlin los cargue en el motor de renderizado (SceneView/Filament),
+  /// uno anclado a cada ojo. `null` en cualquiera de los dos deja ese ojo
+  /// sin modelo. Llamar varias veces con las mismas rutas es seguro: Kotlin
+  /// evita recargar si el modelo ya está cargado.
+  Future<void> loadEyeModels({String? leftPath, String? rightPath}) async {
     try {
       await _methodChannel.invokeMethod<void>(
-        'load3DModel',
-        <String, dynamic>{'path': path},
+        'loadEyeModels',
+        <String, dynamic>{'leftPath': leftPath, 'rightPath': rightPath},
       );
     } on PlatformException catch (e) {
-      debugPrint('[EyeTracking] set3DModelPath PlatformException: ${e.code} — ${e.message}');
+      debugPrint('[EyeTracking] loadEyeModels PlatformException: ${e.code} — ${e.message}');
     } catch (e) {
       // MissingPluginException u otro error inesperado del canal.
-      debugPrint('[EyeTracking] set3DModelPath error: $e');
+      debugPrint('[EyeTracking] loadEyeModels error: $e');
     }
   }
 }

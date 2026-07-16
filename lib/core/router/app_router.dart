@@ -27,11 +27,12 @@ final goRouterProvider = Provider<GoRouter>((ref) {
   final authController = ref.watch(authStateProvider.notifier);
 
   return GoRouter(
-    initialLocation: AppRoutes.splash,
+    // TEMP-DEBUG: bypass de auth para probar el tracking 3D directamente — revertir.
+    initialLocation: AppRoutes.camera,
     debugLogDiagnostics: false,
     refreshListenable: authController,
-    redirect: (context, state) =>
-        sessionRedirect(state, ref.read(authStateProvider)),
+    // redirect: (context, state) =>
+    //     sessionRedirect(state, ref.read(authStateProvider)),
     routes: [
       GoRoute(
         path: AppRoutes.splash,

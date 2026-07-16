@@ -6,10 +6,14 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 
 class FaceLandmarkerHelper(
     private val context: Context,
-    private val onResult: (Map<String, Any?>) -> Unit,
+    /** [Map] con el contrato 2D que ya consume Flutter, y el [FaceLandmarkerResult]
+     * crudo (landmarks + matriz de transformación facial) para el motor de
+     * render 3D nativo (ver paquete `render`). */
+    private val onResult: (Map<String, Any?>, FaceLandmarkerResult) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private var faceLandmarker: FaceLandmarker? = null
@@ -30,13 +34,18 @@ class FaceLandmarkerHelper(
                 .setMinFacePresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
                 .setRunningMode(RunningMode.LIVE_STREAM)
+                // Necesario para el motor de render 3D (paquete `render`): MediaPipe
+                // resuelve la pose 3D completa de la cabeza (rotación + profundidad)
+                // ajustando su modelo facial canónico — mucho más robusto que derivar
+                // yaw/pitch/roll a mano desde dos landmarks.
+                .setOutputFacialTransformationMatrixes(true)
                 .setResultListener { result, image ->
                     val mapped = EyeTrackingResultMapper.map(
                         result,
                         image.width,
                         image.height
                     )
-                    onResult(mapped)
+                    onResult(mapped, result)
                 }
                 .setErrorListener { error ->
                     onError(error.message ?: "Unknown error")
