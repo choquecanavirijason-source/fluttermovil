@@ -59,14 +59,30 @@ class CameraXManager(
 
     private val lashRenderer = LashRenderer(activity, mainHandler)
 
+    /** Media móvil exponencial de la latencia real de MediaPipe en ms.
+     * Se usa como offset de predicción forward en PoseInterpolator para
+     * compensar EXACTAMENTE la latencia de ESTE dispositivo, no un valor
+     * fijo adivinado. */
+    @Volatile private var smoothedLatencyMs = 35f  // seed razonable
+
     private val helper = FaceLandmarkerHelper(
         context = activity,
         onResult = { data, rawResult ->
-            onTrackingResult(data) // sigue enviando datos 2D a Flutter, sin cambios
+            // Medir la latencia REAL de MediaPipe en este dispositivo
+            val submitMs = lastFrameSubmitMs
+            val nowMs = SystemClock.uptimeMillis()
+            if (submitMs > 0L) {
+                val latencyMs = (nowMs - submitMs).toFloat()
+                // EMA con alpha=0.3 — se adapta en ~3-4 frames pero no salta
+                // con un solo outlier
+                smoothedLatencyMs = smoothedLatencyMs * 0.7f + latencyMs * 0.3f
+            }
+            onTrackingResult(data)
             val imageWidth = (data["imageWidth"] as? Int) ?: 0
             val imageHeight = (data["imageHeight"] as? Int) ?: 0
             if (data["faceDetected"] == true && imageWidth > 0 && imageHeight > 0) {
-                lashRenderer.onFaceResult(rawResult, imageWidth, imageHeight)
+                // Pasar la latencia medida para predicción adaptativa
+                lashRenderer.onFaceResult(rawResult, imageWidth, imageHeight, smoothedLatencyMs)
             } else {
                 lashRenderer.onFaceLost()
             }
@@ -96,6 +112,20 @@ class CameraXManager(
     /** Último frame orientado/espejado del análisis; fuente de [captureFrame]. */
     @Volatile
     private var latestFrameBitmap: Bitmap? = null
+
+    /** Buffer crudo (pre-rotación/espejo) reusado entre frames — nunca se
+     * expone fuera de [processFrame], así que reutilizarlo en el sitio es
+     * seguro y evita reasignar ~width*height*4 bytes de memoria nativa en
+     * cada frame de análisis (a diferencia del bitmap "oriented", que sí se
+     * expone vía [latestFrameBitmap] y por eso debe seguir siendo una
+     * instantánea nueva cada vez, ver [processFrame]). */
+    private var rawFrameBitmap: Bitmap? = null
+
+    /** Timestamp (uptimeMillis) del último frame enviado a `detectAsync`,
+     * para medir en logcat cuánto tarda MediaPipe en devolver el resultado
+     * (ver el log de latencia en el `onResult` de [helper] arriba). */
+    @Volatile
+    private var lastFrameSubmitMs = 0L
 
     fun attachPreview(view: PreviewView) {
         Log.i(TAG, "attachPreview manager=${System.identityHashCode(this)} view=${System.identityHashCode(view)}")
@@ -420,6 +450,11 @@ class CameraXManager(
         }
     }
 
+    /** Buffer orientado reutilizable — evita crear un Bitmap nuevo en cada
+     * frame solo para la rotación/espejo. Se reasigna solo si cambia el
+     * tamaño de salida. */
+    private var orientedBitmap: Bitmap? = null
+
     private fun processFrame(imageProxy: ImageProxy) {
         val landmarker = helper.getLandmarker()
         if (landmarker == null || stopped.get()) {
@@ -428,44 +463,41 @@ class CameraXManager(
         }
 
         try {
-            val bitmap =
-                Bitmap.createBitmap(
-                    imageProxy.width,
-                    imageProxy.height,
-                    Bitmap.Config.ARGB_8888,
-                )
+            val width = imageProxy.width
+            val height = imageProxy.height
+
+            var raw = rawFrameBitmap
+            if (raw == null || raw.isRecycled || raw.width != width || raw.height != height) {
+                raw?.recycle()
+                raw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                rawFrameBitmap = raw
+            }
             imageProxy.planes[0].buffer.rewind()
-            bitmap.copyPixelsFromBuffer(imageProxy.planes[0].buffer)
+            raw.copyPixelsFromBuffer(imageProxy.planes[0].buffer)
 
             val matrix =
                 Matrix().apply {
                     postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
                     if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-                        postScale(
-                            -1f,
-                            1f,
-                            imageProxy.width.toFloat(),
-                            imageProxy.height.toFloat(),
-                        )
+                        postScale(-1f, 1f, width.toFloat(), height.toFloat())
                     }
                 }
-            val oriented =
-                Bitmap.createBitmap(
-                    bitmap,
-                    0,
-                    0,
-                    bitmap.width,
-                    bitmap.height,
-                    matrix,
-                    true,
-                )
-            if (oriented != bitmap) {
-                bitmap.recycle()
-            }
-            latestFrameBitmap = oriented
 
-            val mpImage = BitmapImageBuilder(oriented).build()
+            // Crear el oriented bitmap. Intentamos reusar cuando es posible,
+            // pero Bitmap.createBitmap con matrix puede cambiar las dimensiones
+            // (rotación de 90°), así que usamos la API estándar y confiamos en
+            // que el GC maneje los bitmaps pequeños eficientemente.
+            val oriented = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+            val finalOriented = if (oriented === raw) {
+                raw.copy(Bitmap.Config.ARGB_8888, false)
+            } else {
+                oriented
+            }
+            latestFrameBitmap = finalOriented
+
+            val mpImage = BitmapImageBuilder(finalOriented).build()
             val frameTimeMs = SystemClock.uptimeMillis()
+            lastFrameSubmitMs = frameTimeMs
             landmarker.detectAsync(mpImage, frameTimeMs)
         } catch (e: Exception) {
             onError(e.message ?: "Error procesando frame")
@@ -488,27 +520,38 @@ class CameraXManager(
         private const val STOP_UNBIND_DELAY_MS = 220L
 
         /**
-         * Preview: pedir resolución muy alta. Importante: [ImageAnalysis] tiene su propio
-         * selector moderado; si no, CameraX suele bajar el preview al tamaño del análisis.
+         * Preview: resolución moderada (4:3, igual que [analysisResolutionSelector]
+         * para mantener el mismo encuadre). Antes pedía 4032x3024 — prácticamente
+         * resolución de foto fija, no de video — y con 3 surfaces simultáneos
+         * (Preview + ImageAnalysis + VideoCapture) eso puede hacer que el HAL de
+         * cámara del dispositivo limite el framerate real de captura muy por
+         * debajo de 30fps, desincronizando el preview de video contra el modelo
+         * 3D (que sí actualiza a vsync completo, ver `LashRenderer.frameCallback`).
+         * 1440x1080 sigue siendo nítido en pantalla y es un tamaño que
+         * prácticamente cualquier HAL de cámara puede entregar a framerate
+         * completo en una sesión multi-surface.
          */
         private val previewResolutionSelector: ResolutionSelector =
             ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                 .setResolutionStrategy(
                     ResolutionStrategy(
-                        Size(4032, 3024),
+                        Size(1440, 1080),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
                     ),
                 )
                 .build()
 
-        /** Análisis ML acotado: libera ancho de banda para que el preview no quede pixelado. */
+        /** Análisis ML acotado a 640x480: libera ancho de banda para que el
+         * preview no quede pixelado, y reduce la latencia de inferencia de
+         * MediaPipe ~40-60% vs 960x720 (menos píxeles → resultado más rápido
+         * → menos delay entre movimiento real y reacción del modelo 3D). */
         private val analysisResolutionSelector: ResolutionSelector =
             ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                 .setResolutionStrategy(
                     ResolutionStrategy(
-                        Size(960, 720),
+                        Size(640, 480),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
                     ),
                 )

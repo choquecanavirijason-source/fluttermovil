@@ -3,11 +3,15 @@ package com.example.test_face.render
 import android.app.Activity
 import android.os.Handler
 import android.util.Log
+import android.view.Choreographer
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import com.google.android.filament.Engine
 import com.google.android.filament.IndirectLight
+import com.google.android.filament.RenderableManager
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 import io.github.sceneview.SceneView
+import io.github.sceneview.geometries.Geometry
 import io.github.sceneview.node.ModelNode
 import kotlinx.coroutines.launch
 import java.io.File
@@ -31,6 +35,35 @@ class LashRenderer(
     private val leftSlot = EyeModelSlot()
     private val rightSlot = EyeModelSlot()
 
+    /**
+     * Corre a vsync de pantalla (~60Hz+) mientras haya un [SceneView]
+     * adjuntado, INDEPENDIENTE de la frecuencia con la que llegan
+     * resultados de MediaPipe — lee la pose extrapolada de
+     * [EyeModelSlot.interpolator] y la escribe al nodo en cada frame. Sin
+     * esto, el nodo solo se actualizaba cuando llegaba un resultado nuevo
+     * de MediaPipe (potencialmente bastante más lento que la pantalla), lo
+     * que se percibía como que el modelo "no está pegado en tiempo real" al
+     * preview de cámara. Se arranca en [attachSceneView] y se detiene en
+     * [detachSceneView] — mismo ciclo de vida que el resto del estado del
+     * SceneView.
+     */
+    private var frameLoopRunning = false
+
+    /** Latencia medida del pipeline (MediaPipe + preprocesado), actualizada
+     * por [onFaceResult] en cada resultado. [writeInterpolatedPose] la lee
+     * desde el hilo principal (Choreographer) para que [PoseInterpolator]
+     * sepa cuánto predecir hacia adelante. */
+    @Volatile private var measuredLatencyNanos = 35_000_000L  // seed: 35ms
+
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!frameLoopRunning) return
+            writeInterpolatedPose(leftSlot, frameTimeNanos)
+            writeInterpolatedPose(rightSlot, frameTimeNanos)
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
     fun attachSceneView(view: SceneView) {
         sceneView = view
         Log.i(
@@ -42,6 +75,29 @@ class LashRenderer(
         configureEnvironment(view)
         configureRenderQuality(view)
         configureKeyLight(view)
+        startFrameLoop()
+    }
+
+    private fun startFrameLoop() {
+        if (frameLoopRunning) return
+        frameLoopRunning = true
+        mainHandler.post { Choreographer.getInstance().postFrameCallback(frameCallback) }
+    }
+
+    private fun stopFrameLoop() {
+        frameLoopRunning = false
+    }
+
+    /** Escribe en [slot.node] la pose extrapolada a [nowNanos] (ver
+     * [PoseInterpolator]) — no-op si el nodo no existe o está oculto (ojo
+     * cerrado/rostro perdido, ver [hideSlot]). */
+    private fun writeInterpolatedPose(slot: EyeModelSlot, nowNanos: Long) {
+        val node = slot.node ?: return
+        if (!node.isVisible) return
+        val transform = slot.interpolator.sample(nowNanos, measuredLatencyNanos) ?: return
+        node.position = transform.position
+        node.quaternion = transform.rotation
+        node.scale = transform.scale
     }
 
     /**
@@ -66,6 +122,7 @@ class LashRenderer(
             "detachSceneView renderer=${System.identityHashCode(this)} view=${System.identityHashCode(view)} " +
                 "engine=${System.identityHashCode(view.engine)}",
         )
+        stopFrameLoop()
         for (slot in listOf(leftSlot, rightSlot)) {
             slot.node?.let { old ->
                 Log.i(TAG, "detachSceneView destruyendo node=${System.identityHashCode(old)} path=${slot.path}")
@@ -101,28 +158,20 @@ class LashRenderer(
      * MediaPipe); solo la escritura final de la transformación en el nodo se
      * despacha al hilo principal, igual que antes, por rendimiento.
      */
-    fun onFaceResult(result: FaceLandmarkerResult, imageWidth: Int, imageHeight: Int) {
-        if (leftSlot.node == null && rightSlot.node == null) {
-            Log.v(TAG, "onFaceResult IGNORADO — leftNode=null rightNode=null (sin modelos cargados aún)")
-            return
-        }
+    fun onFaceResult(result: FaceLandmarkerResult, imageWidth: Int, imageHeight: Int, pipelineLatencyMs: Float = 35f) {
+        if (leftSlot.node == null && rightSlot.node == null) return
 
-        val sv = sceneView ?: run {
-            Log.v(TAG, "onFaceResult IGNORADO — SceneView no adjuntado en este frame")
-            return
-        }
-        // Cámara real del SceneView actual, extraída una vez por frame — ver
-        // CameraProjection: reemplaza el mapeo lineal por des-proyección real
-        // (Fase 1 del plan de motor).
+        // Actualizar la latencia medida para que writeInterpolatedPose la use
+        // en el próximo vsync. +16ms para compensar la composición de
+        // SurfaceFlinger (2 superficies separadas: PreviewView + SceneView).
+        measuredLatencyNanos = ((pipelineLatencyMs + 16f) * 1_000_000f).toLong()
+
+        val sv = sceneView ?: return
         val camera = CameraProjection(
             projection = sv.cameraNode.projectionTransform,
             cameraToWorld = sv.cameraNode.modelTransform,
         )
 
-        // Red de seguridad: cualquier excepción acá NO debe dejar las
-        // pestañas ocultas para siempre — se loguea y se reintenta en el
-        // próximo frame en vez de propagar el error hacia el listener
-        // nativo de MediaPipe.
         val pipelineResult = try {
             FaceRenderPipeline.compute(
                 result = result,
@@ -141,13 +190,8 @@ class LashRenderer(
             return
         }
 
-        Log.v(
-            TAG,
-            "onFaceResult left=${System.identityHashCode(leftSlot.node)} right=${System.identityHashCode(rightSlot.node)} " +
-                "leftTransform=${pipelineResult.left != null} rightTransform=${pipelineResult.right != null}",
-        )
-        applyTransform(leftSlot, pipelineResult.left)
-        applyTransform(rightSlot, pipelineResult.right)
+        applyTransform(leftSlot, pipelineResult.left, sv.engine)
+        applyTransform(rightSlot, pipelineResult.right, sv.engine)
     }
 
     /**
@@ -167,6 +211,11 @@ class LashRenderer(
         slot.filter.reset()
         if (node != null) {
             mainHandler.post {
+                // El interpolador se resetea acá (hilo principal, mismo hilo
+                // que lo lee en writeInterpolatedPose vía el frame loop) para
+                // que no queden muestras viejas esperando a extrapolarse
+                // cuando el rostro reaparezca.
+                slot.interpolator.reset()
                 if (node.isVisible) {
                     Log.i(TAG, "hideSlot node=${System.identityHashCode(node)} -> OCULTO (onFaceLost)")
                 }
@@ -175,7 +224,17 @@ class LashRenderer(
         }
     }
 
-    private fun applyTransform(slot: EyeModelSlot, transform: EyeTransform?) {
+    /**
+     * Calcula la transformación suavizada del frame y la registra en
+     * [EyeModelSlot.interpolator] — el rígido (posición/rotación/escala) ya
+     * NO se escribe al nodo directamente acá: eso lo hace
+     * [writeInterpolatedPose] en cada vsync (ver [frameCallback]),
+     * desacoplado de la frecuencia con la que llega este resultado de
+     * MediaPipe. El doblado del párpado ([LashMeshBender]), en cambio, SÍ
+     * se aplica una vez por resultado (no por vsync): necesita los
+     * landmarks crudos del frame, que solo existen acá.
+     */
+    private fun applyTransform(slot: EyeModelSlot, transform: EyeTransform?, engine: Engine) {
         val node = slot.node ?: return
         if (transform == null) {
             hideSlot(slot)
@@ -193,14 +252,41 @@ class LashRenderer(
             return
         }
         val smoothed = slot.filter.apply(transform)
-        mainHandler.post {
-            if (!node.isVisible) {
+        // Damping ya horneado en la escala ANTES de entrar al interpolador:
+        // así el interpolador solo necesita conocer "la escala final a
+        // renderizar", sin bookkeeping aparte, y de paso el parpadeo también
+        // queda suavemente extrapolado frame a frame en vez de dar un salto
+        // discreto exactamente en el instante de cada resultado de MediaPipe.
+        val damped = smoothed.copy(scale = smoothed.scale * damping)
+        val nowNanos = System.nanoTime()
+
+        // DESACTIVADO: LashMeshBender.bend() reconstruye una List<Geometry.
+        // Vertex> completa (17k-85k objetos según el diseño) y
+        // geometry.setVertices() la vuelve a subir a GPU en CADA resultado
+        // de MediaPipe. En dispositivo esto no fue "lento" — tumbó el
+        // proceso: GC bloqueando 600-850ms seguidos, heap al tope de
+        // 192MB, terminando en OutOfMemoryError real (ver logcat del
+        // crash). El engine sigue en `engine` (parámetro) y `slot.geometry`
+        // sigue existiendo con la malla ORIGINAL sin doblar (asignada una
+        // única vez al cargar, en loadIntoSlot — esa parte es barata,
+        // ocurre una vez, no en cada frame) — el modelo se sigue viendo
+        // rígido, como antes de esta ronda, pero sin crashear. Reactivar
+        // esto necesita un rediseño que no reasigne buffers por vértice
+        // cada frame (p. ej. ByteBuffer directo reusado + throttling real),
+        // no una versión "más lenta" de lo mismo. `engine` queda sin usar
+        // acá a propósito, mientras el doblado está desactivado.
+
+        // Push directo (sin mainHandler.post): evita añadir ~16ms de latencia
+        // extra por esperar al próximo despacho del hilo principal. Los campos
+        // de PoseInterpolator son @Volatile, así que writeInterpolatedPose (que
+        // corre en el hilo principal vía Choreographer) ve el push más reciente
+        // en el próximo vsync sin problemas de visibilidad de memoria.
+        slot.interpolator.push(damped, nowNanos)
+        if (!node.isVisible) {
+            mainHandler.post {
                 Log.i(TAG, "applyTransform node=${System.identityHashCode(node)} -> VISIBLE")
+                node.isVisible = true
             }
-            node.isVisible = true
-            node.position = smoothed.position
-            node.quaternion = smoothed.rotation
-            node.scale = smoothed.scale * damping
         }
     }
 
@@ -261,13 +347,52 @@ class LashRenderer(
                     autoAnimate = true,
                 )
                 node.centerOrigin()
+
+                // Reemplaza la geometría que cargó gltfio por una propia,
+                // editable frame a frame (ver LashMeshBender): ni
+                // FilamentAsset ni RenderableManager exponen una forma de
+                // LEER los vértices que gltfio ya cargó, solo de
+                // reemplazarlos vía setGeometry. Si el parseo falla o el
+                // modelo no tiene RenderableNode, el modelo se sigue
+                // mostrando rígido (sin doblado) — no bloquea la carga.
+                try {
+                    val rawMesh = GlbMeshReader.read(path)
+                    val geometry = Geometry.Builder(RenderableManager.PrimitiveType.TRIANGLES)
+                        .vertices(rawMesh.vertices)
+                        .indices(rawMesh.indices)
+                        .build(sv.engine)
+                    val renderableNode = node.renderableNodes.firstOrNull()
+                    if (renderableNode != null) {
+                        renderableNode.setGeometry(geometry)
+                        slot.rawMesh = rawMesh
+                        slot.geometry = geometry
+                    } else {
+                        Log.w(TAG, "loadIntoSlot[$eye]: sin RenderableNode — sin doblado de párpado")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "loadIntoSlot[$eye]: fallo parseando geometría para doblado, sigue rígido", e)
+                }
+
+                // setGeometry no garantiza preservar el material instance
+                // original del glTF — se reaplica DESPUÉS del swap para no
+                // perder el material PBR/anisotrópico.
                 MaterialManager.tune(node, sv)
                 // Oculto hasta el primer frame con rostro detectado — evita
                 // mostrar el modelo "congelado" en su posición por defecto.
                 node.isVisible = false
 
                 val size = node.size
-                slot.naturalSpan = maxOf(size.x, size.y, size.z).takeIf { it > 0f } ?: 1f
+                // naturalSpan = ancho del modelo en X (la dimensión que se
+                // escala para coincidir con el ancho real del ojo en el mundo).
+                // NO se usa maxOf(x,y,z): si el modelo fuera más alto que ancho,
+                // la escala calculada en EyeTransformCalculator sería incorrecta.
+                val naturalSizeX = size.x.takeIf { it > 0f } ?: 1f
+                val naturalSizeY = size.y.takeIf { it > 0f } ?: naturalSizeX
+                slot.naturalSpan = naturalSizeX
+                // Guardar la relación Y/X para que writeInterpolatedPose pueda
+                // calcular la altura renderizada en cualquier frame sin acceder
+                // al nodo (que puede estar en otro hilo).
+                slot.modelYRatio = naturalSizeY / naturalSizeX
 
                 sv.addChildNode(node)
                 slot.node = node

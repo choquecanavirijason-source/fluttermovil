@@ -873,12 +873,6 @@ Widget _assistantFloatingBar() {
             ],
           ),
         ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 16 + bottomInset,
-          child: Center(child: _recordButton()),
-        ),
       ],
     );
   }
@@ -940,37 +934,4 @@ Widget _assistantFloatingBar() {
     );
   }
 
-  /// Botón real de grabar/detener video: círculo rojo en reposo, cuadrado
-  /// (stop) mientras graba.
-  Widget _recordButton() {
-    return GestureDetector(
-      onTap: () => unawaited(_toggleRecording()),
-      child: Container(
-        width: 72,
-        height: 72,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.4),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Center(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: _isRecording ? 28 : 56,
-            height: _isRecording ? 28 : 56,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE53935),
-              borderRadius: BorderRadius.circular(_isRecording ? 6 : 28),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

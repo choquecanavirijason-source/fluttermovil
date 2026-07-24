@@ -48,8 +48,10 @@ data class HeadPose(
  */
 object EyePoseEstimator {
 
-    /** Activo por defecto hasta la primera verificación en dispositivo (Fase 0 del plan). */
-    const val DEBUG_LOG_POSE = true
+    /** Desactivado en producción: Log.d() en cada frame de MediaPipe
+     * agrega I/O que compite con el pipeline de render en el critical path.
+     * Reactivar solo para depuración específica de pose. */
+    const val DEBUG_LOG_POSE = false
 
     private const val TAG = "EyePoseEstimator"
 

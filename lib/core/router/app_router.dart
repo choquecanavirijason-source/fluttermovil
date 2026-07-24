@@ -31,8 +31,22 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     initialLocation: AppRoutes.camera,
     debugLogDiagnostics: false,
     refreshListenable: authController,
-    // redirect: (context, state) =>
-    //     sessionRedirect(state, ref.read(authStateProvider)),
+    redirect: (context, state) {
+      final status = ref.read(authStateProvider);
+      final isAuthRoute = state.uri.path == AppRoutes.login || state.uri.path == AppRoutes.splash;
+
+      // Si no está autenticado y no está en splash/login, redirige a login.
+      if (status != AuthStatus.authenticated && !isAuthRoute) {
+        return AppRoutes.login;
+      }
+
+      // Si ya está autenticado y está en login, mandarlo al shell principal.
+      if (status == AuthStatus.authenticated && state.uri.path == AppRoutes.login) {
+        return AppRoutes.shell;
+      }
+
+      return null;
+    },
     routes: [
       GoRoute(
         path: AppRoutes.splash,

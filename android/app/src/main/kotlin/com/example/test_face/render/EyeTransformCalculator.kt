@@ -14,6 +14,16 @@ data class EyeTransform(
      * al parpadear en vez de dejar que la geometría casi cerrada lo haga de
      * forma implícita. */
     val opennessRatio: Float = 1f,
+    /** Curva de ajuste del párpado superior para el doblado del mesh (ver
+     * [LashMeshBender]) — `null` si no hay suficientes puntos para un
+     * ajuste significativo en este frame. NO se suaviza por
+     * [EyeTrackingFilter]/[PoseInterpolator]: se propaga tal cual del frame
+     * más reciente, igual que [opennessRatio]. */
+    val lashLineCurve: LashLineCurve? = null,
+    /** Ancho real del ojo en píxeles de imagen (`EyeAnchor.widthPx`) — ver
+     * [LashMeshBender], necesario para convertir [lashLineCurve] (en
+     * píxeles) a unidades locales del mesh. */
+    val eyeWidthPx: Float = 0f,
 )
 
 /**

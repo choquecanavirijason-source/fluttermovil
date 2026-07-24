@@ -28,10 +28,7 @@ object FaceRenderPipeline {
         rightNaturalSpan: Float,
         camera: CameraProjection,
     ): Result? {
-        if (result.faceLandmarks().isEmpty()) {
-            Log.v(TAG, "compute: sin landmarks (rostro no detectado en este frame)")
-            return null
-        }
+        if (result.faceLandmarks().isEmpty()) return null
         val landmarks: List<NormalizedLandmark> = result.faceLandmarks()[0]
 
         // La pose 3D completa (facialTransformationMatrixes) es lo ideal,
@@ -61,7 +58,7 @@ object FaceRenderPipeline {
             landmarks, FaceLandmarkIndices.RIGHT_EYE_RING, FaceLandmarkIndices.RIGHT_IRIS,
             headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE,
         )
-        Log.v(TAG, "compute OK left=${left != null} right=${right != null} imageWidth=$imageWidth imageHeight=$imageHeight")
+        // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
     }
 
@@ -83,7 +80,15 @@ object FaceRenderPipeline {
         val transform = EyeTransformCalculator.compute(
             headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized,
         )
-        return transform.copy(opennessRatio = eyeLandmarks.opennessRatio)
+        // Curva del párpado superior para el doblado del mesh (ver
+        // LashMeshBender) — se ajusta acá porque eyeLandmarks/anchor ya
+        // están calculados en este punto, sin duplicar ese trabajo.
+        val curve = LashLineCurve.fit(eyeLandmarks.upperLid, anchor.point, anchor.upperLidTangent)
+        return transform.copy(
+            opennessRatio = eyeLandmarks.opennessRatio,
+            lashLineCurve = curve,
+            eyeWidthPx = anchor.widthPx,
+        )
     }
 
     private const val TAG = "FaceRenderPipeline"
