@@ -51,16 +51,32 @@ object RendererConfiguration {
 
     // ── Escala del modelo ───────────────────────────────────────────────
     const val WIDTH_MULTIPLIER = 1.65f
-    // HEIGHT_OFFSET controla dónde queda el CENTRO del modelo 3D respecto
-    // al BORDE del párpado superior (la línea de pestañas visible).
+    // HEIGHT_OFFSET controla dónde queda la RAÍZ real de la pestaña 3D
+    // (EyeModelSlot.rootLocalY, ver EyeTransformCalculator) respecto al
+    // BORDE del párpado superior (la línea donde nace la pestaña real).
     //
-    // 0.0 = centro en el borde del párpado (mitad del modelo dentro del ojo)
-    // 0.3 = centro 30% de la altura del ojo ARRIBA del borde → aspecto natural
-    // 0.5 = centro a media-altura del ojo por encima del borde
+    // 0.0 = raíz exactamente en el borde del párpado (valor por defecto —
+    //       anatómicamente correcto: una extensión de pestañas se pega justo
+    //       sobre la línea de pestañas real, sin margen)
+    // >0  = raíz desplazada hacia ARRIBA esa fracción de la altura del ojo
+    //       (margen de "flote"/glue visible, si hiciera falta por estética)
     //
-    // Como el ojo mide ~8-10mm de altura, 0.3 equivale a ~2.5-3mm por encima
-    // del borde del párpado — donde visualmente se ve el centro de las pestañas.
-    const val HEIGHT_OFFSET = 0.30f
+    // IMPORTANTE (corrección 2026-07-24): antes este offset se aplicaba
+    // sobre el CENTRO GEOMÉTRICO del bounding box del modelo (asumiendo que
+    // el .glb estaba centrado en su raíz visual), en 0.30 — pero se verificó
+    // con los 10 modelos reales de assets/modelos/ (histograma de densidad
+    // de vértices en Y) que la raíz visual de cada pestaña está muy por
+    // debajo del centro geométrico del bounding box, cerca de su Y mínimo.
+    // Ancorar el centro (en vez de la raíz real) + este offset extra
+    // empujaba la pestaña sistemáticamente hacia la ceja, en cualquier
+    // ángulo de cabeza — justo el síntoma reportado con capturas reales.
+    // Ahora EyeTransformCalculator ancla EyeModelSlot.rootLocalY (la raíz
+    // real, medida del mesh) directamente al punto de anclaje del ojo, así
+    // que este offset vuelve a tener el significado simple y literal de su
+    // nombre. 0.0f es el punto de partida teóricamente correcto — falta
+    // confirmar visualmente en dispositivo real (no disponible en este
+    // entorno) y ajustar solo si hace falta un pequeño margen estético.
+    const val HEIGHT_OFFSET = 0.0f
     const val HEAD_TILT_MULTIPLIER = 1.0f
 
     // ── Corrección por ojo ──────────────────────────────────────────────

@@ -16,13 +16,16 @@ data class EyeAnchor(
 /**
  * Calcula el punto de anclaje de las pestañas 3D.
  *
- * **Principio**: el modelo 3D se coloca con su CENTRO en `anchor.point`.
- * Por eso `anchor.point` debe ser el CENTRO VISUAL de las pestañas, NO el
- * borde inferior del párpado. Para extensiones de pestañas reales:
+ * **Principio (corregido 2026-07-24)**: `anchor.point` es el punto de mundo
+ * donde debe renderizar la RAÍZ real de la pestaña (`EyeModelSlot.
+ * rootLocalY`, ver [EyeTransformCalculator]) — NO el centro geométrico del
+ * bounding box del modelo. Se verificó con los 10 `.glb` reales de
+ * `assets/modelos/` que su bounding box en Y está centrado en el origen
+ * local, pero la masa/raíz visual del mesh está muy por debajo de ese
+ * centro — anclar el centro (como se hacía antes) empujaba la pestaña
+ * sistemáticamente hacia la ceja. Para extensiones de pestañas reales:
  *   - El borde del párpado (lash line) es el ORIGEN de las pestañas
  *   - Las pestañas se extienden HACIA ARRIBA desde ahí
- *   - El centro visual de las pestañas está ~30-50% de la altura del ojo
- *     por ENCIMA del borde del párpado
  *
  * En coordenadas de imagen, Y crece HACIA ABAJO, así que "arriba en el
  * rostro" = Y menor. La fórmula es:
@@ -33,12 +36,11 @@ data class EyeAnchor(
  * de los puntos upperLid) y HEIGHT_OFFSET ≥ 0 mueve el ancla hacia arriba
  * (Y más pequeño = más arriba en la imagen = hacia la frente).
  *
- * HEIGHT_OFFSET = 0.0 → ancla en el borde del párpado (raíz de pestañas)
- * HEIGHT_OFFSET = 0.3 → ancla 30% de altura del ojo ARRIBA del borde
- *
- * Como el modelo se centra en el ancla, con HEIGHT_OFFSET = 0.3 el centro
- * visual de las pestañas queda 30% de la altura del ojo por encima del
- * borde del párpado — que es donde se ven las pestañas naturales.
+ * HEIGHT_OFFSET = 0.0 (valor actual) → ancla en el borde del párpado, y como
+ * ahora se ancla la RAÍZ real (no el centro), la raíz de la pestaña nace
+ * exactamente ahí — anatómicamente correcto por defecto.
+ * HEIGHT_OFFSET > 0 → la raíz queda esa fracción de la altura del ojo por
+ * ENCIMA del borde, solo si hiciera falta un margen estético.
  */
 object EyeAnchorCalculator {
 

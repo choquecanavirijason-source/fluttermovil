@@ -158,7 +158,7 @@ stub vacío):
 |---|---|
 | `RendererConfiguration.kt` | Única fuente de constantes de tuning: One Euro Filter, profundidad, escala, nudges por ojo, openness thresholds, iluminación. |
 | `FaceLandmarkIndices.kt` | Índices canónicos de MediaPipe: anillo de 16 puntos por ojo + iris. |
-| `EyeLandmarks.kt` | Extrae el anillo del ojo, el párpado superior (dinámico: mitad de menor Y, no índice fijo) y `opennessRatio` (alto/ancho del anillo, proxy de apertura). |
+| `EyeLandmarks.kt` | Extrae el anillo del ojo, el párpado superior (índice FIJO — `ring[8:16]`, orden anatómico de MediaPipe, corregido 2026-07-24, ver 3.3.2) y `opennessRatio` (alto/ancho del anillo, proxy de apertura). |
 | `EyePoseEstimator.kt` | `facialTransformationMatrixes()` de MediaPipe → `HeadPose` en espacio Filament, con conjugación de espejo correcta (`F·R·F`, no `F·R`). `fallback()` (pose neutra) si la matriz no está disponible. `DEBUG_LOG_POSE = false` en producción (activar solo para depurar pose — logueaba en cada frame, agregaba I/O al critical path). |
 | `EyeAnchorCalculator.kt` | Ancla real: X = promedio de todo el párpado superior; Y = promedio del 30% inferior (el borde visible) desplazado hacia arriba por `HEIGHT_OFFSET`, + tangente del párpado por PCA (mínimos cuadrados totales sobre todos los puntos, no solo extremo-a-extremo). |
 | `EyePlaneCalculator.kt` | Plano/normal local de cada ojo: combina la rotación de cabeza con el residuo angular propio del párpado (Rodrigues). |
@@ -170,7 +170,7 @@ stub vacío):
 | `OneEuroFilter.kt` | Filtro 1€ (Casiez, Roussel & Vogel, CHI 2012) para una señal escalar: corte adaptativo a la velocidad instantánea. |
 | `EyeTrackingFilter.kt` | 10 instancias de `OneEuroFilter` por ojo (3 posición + 4 quaternion + 3 escala), con alineación antipodal del quaternion antes de filtrar (evita glitches al cruzar el signo) y renormalización post-filtro. |
 | `PoseInterpolator.kt` | Desacopla el framerate de render (vsync) del framerate de MediaPipe: guarda las últimas 3 muestras filtradas y predice hacia ADELANTE, compensando la latencia medida del pipeline (cuadrático con velocidad+aceleración; lineal si solo hay 2 muestras) — ver 3.3. |
-| `EyeModelSlot.kt` | Estado por ojo: `node`, `path`, `naturalSpan`, `modelYRatio`, `filter`, `interpolator`, `rawMesh`, `geometry`. |
+| `EyeModelSlot.kt` | Estado por ojo: `node`, `path`, `naturalSpan`, `rootLocalY` (raíz real del mesh en Y, ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.1), `filter`, `interpolator`, `rawMesh`, `geometry`. |
 | `MaterialManager.kt` | Intenta `lash_fiber.filamat` (anisotrópico); si no existe, fallback a PBR genérico (`doubleSided`). |
 | `FaceRenderPipeline.kt` | Orquesta el flujo por frame para ambos ojos — stateless, recibe `CameraProjection` del `SceneView` activo. |
 | `LashRenderer.kt` | Dueño del `SceneView`: iluminación de estudio, carga de `.glb`, `Choreographer.FrameCallback`, blink damping, aplica la transformación filtrada e interpolada. |
@@ -243,16 +243,17 @@ muestre dónde el rostro ESTÁ AHORA, no dónde estaba cuando terminó de proces
 LashRenderer.loadEyeModels(leftPath, rightPath)  ← desde Flutter, vía CameraXManager
    → loadIntoSlot(slot, path, eye):
       1. lee bytes del .glb → sv.modelLoader.createModelInstance(buffer) → ModelNode
-      2. GlbMeshReader.read(path) → RawMesh; Geometry.Builder(...).build(engine) →
-         renderableNode.setGeometry(geometry)  [swap de geometría, costo ÚNICO por carga]
+      2. GlbMeshReader.read(path) → RawMesh (incluye minY, la raíz real del mesh);
+         Geometry.Builder(...).build(engine) → renderableNode.setGeometry(geometry)
+         [swap de geometría, costo ÚNICO por carga] → EyeModelSlot.rootLocalY = rawMesh.minY
       3. MaterialManager.tune(node, sv)  [DESPUÉS del swap — setGeometry no garantiza
          preservar el material instance original]
-      4. mide node.size → EyeModelSlot.naturalSpan / modelYRatio
+      4. mide node.size → EyeModelSlot.naturalSpan
       5. sv.addChildNode(node), oculto (isVisible=false) hasta el primer rostro detectado
 ```
 
 `EyeModelSlot` (uno por ojo, vive dentro de `LashRenderer`) es el único estado real de todo
-`render/`: `node`, `path`, `naturalSpan`, `modelYRatio`, `filter` (10× `OneEuroFilter`),
+`render/`: `node`, `path`, `naturalSpan`, `rootLocalY`, `filter` (10× `OneEuroFilter`),
 `interpolator` (últimas 3 muestras + contador de "pushes desde el último reset"),
 `rawMesh`/`geometry` (la malla parseada y la geometría activa, dormidas desde la sección 3.4).
 Todo lo demás en `render/` son `object`s o clases sin estado propio — funciones puras.
@@ -265,6 +266,87 @@ Todo lo demás en `render/` son `object`s o clases sin estado propio — funcion
 usando las 3 últimas muestras), clampeando la extrapolación a `MAX_EXTRAPOLATION_FACTOR = 3.0×`
 el intervalo entre muestras y la aceleración a `MAX_ACCEL` para no producir overshoot en
 sacudidas bruscas de cabeza. Compila; **sin confirmar en dispositivo**.
+
+### 3.3.1 Corrección de raíz del modelo (2026-07-24)
+
+**Síntoma reportado con 4 capturas reales en dispositivo**: el modelo aparecía
+consistentemente a la altura de la CEJA en todos los ángulos de cabeza probados,
+nunca en el párpado — el patrón idéntico en los 4 ángulos descartaba un bug de
+rotación/handedness (eso se vería como pestañas corridas de forma distinta según
+el ángulo, no siempre arriba).
+
+Diagnóstico hecho sin dispositivo (parseando los `.glb` reales de
+`assets/modelos/` con un script propio, más decompilar `sceneview-android`
+v2.1.1 contra su fuente real en GitHub) — ver el detalle completo y la evidencia
+en [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.1. Resumen: el motor
+anclaba el CENTRO GEOMÉTRICO del bounding box del modelo (vía `node.
+centerOrigin()`, que resultó ser un no-op — confirmado en bytecode) en el punto
+de anclaje del ojo, pero un histograma de densidad de vértices mostró que la
+raíz visual real de cada pestaña está muy por debajo de ese centro. Encima,
+`HEIGHT_OFFSET=0.30` sumaba otro 30% de la altura del ojo hacia arriba sobre
+esa premisa ya incorrecta — la suma empujaba la pestaña hacia la ceja.
+`EyeModelSlot.modelYRatio`, que según su comentario debía compensar esto, era
+también código muerto (se escribía, nunca se leía).
+
+**Fix aplicado** (compilado limpio con `gradlew compileDebugKotlin`, **sin
+confirmar visualmente en dispositivo real** — no hay uno conectado en este
+entorno, `adb devices` no lista ninguno):
+- `GlbMeshReader.RawMesh` expone `minY` (la raíz real del mesh, de los vértices).
+- `EyeModelSlot.rootLocalY` reemplaza a `modelYRatio` (eliminado).
+- `EyeTransformCalculator.compute()` corrige la posición final con
+  `position - eyePlane.up * (scaleFactor * rootLocalY)` para que sea la RAÍZ,
+  no el centro, la que quede en el punto de anclaje.
+- `node.centerOrigin()` se eliminó de `LashRenderer.loadIntoSlot` (no-op).
+- `RendererConfiguration.HEIGHT_OFFSET` bajó de `0.30` a `0.0` (con la raíz ya
+  bien anclada, `0.0` es el punto de partida anatómicamente correcto).
+
+**Confirmado en dispositivo real (2026-07-24, continuación)** — ver 3.3.2 para el
+detalle de la sesión de instrumentación en dispositivo que validó este fix.
+
+### 3.3.2 Corrección de partición párpado superior/inferior + confirmación en dispositivo real (2026-07-24)
+
+Con el fix de 3.3.1 ya instalado, el usuario probó en dispositivo real y reportó
+que la altura mejoró (ya no en la ceja en ninguna foto) pero seguía sin caer en
+la posición EXACTA en distintos ángulos de cabeza, sobre todo con roll (cabeza
+inclinada de costado).
+
+**Causa**: `EyeLandmarks.from()` separaba "párpado superior" con un umbral
+dinámico de Y de imagen (`ring.filter { it.y <= meanY }`). Los 16 índices de
+`FaceLandmarkIndices.LEFT/RIGHT_EYE_RING` tienen en cambio un orden anatómico
+FIJO (primeros 8 = párpado inferior, últimos 8 = superior — verificado cruzando
+contra landmarks conocidos 159/145 y 386/374). Con la cabeza derecha el umbral
+de Y coincidía por casualidad con esa partición; con roll, "Y menor en imagen"
+deja de ser "arriba anatómico", así que el umbral mezclaba puntos de los dos
+párpados de forma dependiente del ángulo — desplazando el ancla calculada.
+
+**Fix**: `EyeLandmarks.from()` ahora usa `ring.subList(8, 16)` (partición fija
+por índice) con fallback al umbral de Y solo si el anillo no tiene los 16
+puntos esperados.
+
+**Confirmación en dispositivo real, con instrumentación**: con un `Infinix
+X669` conectado por USB, se agregaron logs temporales (`Log.i`) en
+`EyeAnchorCalculator`/`EyeTransformCalculator` imprimiendo todos los valores
+intermedios del cálculo (landmarks crudos, `anchor`, `ndc`, `scaleFactor`,
+posición final), se recompiló e instaló, y se le pidió al usuario sostener el
+rostro frente a la cámara. Se capturaron `adb exec-out screencap` + `adb logcat
+-d` en el mismo instante, dos veces: una vez de frente y otra con la cabeza en
+roll extremo (~80-90°). En ambos casos:
+- La captura de pantalla muestra la pestaña naciendo en la línea de pestañas
+  real, no en la ceja.
+- Los números del log confirman que `upperLid` sigue siendo exactamente
+  `ring[8:16]` (no se mezcla con el párpado inferior) y que `anchor` cae
+  dentro de la huella real del anillo del ojo, incluso con roll extremo.
+- `worldZ` apareció siempre clampeado en `MAX_DEPTH=-0.35` — es el
+  comportamiento esperado sosteniendo el teléfono muy cerca de la cara (típico
+  en selfie), no un bug.
+
+Ambos fixes (3.3.1 y este) quedan **confirmados con evidencia real de
+dispositivo**, no solo compilación. Los logs de diagnóstico temporales se
+retiraron del código después de la confirmación. Pendiente, no bloqueante:
+ajuste fino estético de `HEIGHT_OFFSET`/`WIDTH_MULTIPLIER`; verificación de la
+convención de la matriz de pose (`DEBUG_LOG_POSE`); logcat del "flote" general
+(sección 6, sigue sin diagnosticar); confirmar visualmente los otros 9 modelos
+de `assets/modelos/` (solo se probó uno, "Redondo"/cateye, en esta sesión).
 
 ### 3.4 Lo que existe pero está DESACTIVADO: doblado del mesh según la curva del párpado
 
@@ -295,7 +377,7 @@ necesita buffers nativos reusados (`ByteBuffer` escrito en sitio) y throttling r
 | `ONE_EURO_D_CUTOFF` | `1.0` Hz | Corte fijo con el que se suaviza la derivada (estimación de velocidad) dentro de cada `OneEuroFilter`. |
 | `MIN_DEPTH` / `MAX_DEPTH` | `-2.2` / `-0.35` | Rango de profundidad de cabeza válido (clamp). |
 | `WIDTH_MULTIPLIER` | `1.65` | Multiplicador de ancho del modelo sobre el ancho real del ojo. |
-| `HEIGHT_OFFSET` | `0.30` | Fracción de la altura del ojo que se desplaza el ancla hacia arriba desde el borde del párpado (ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 3). |
+| `HEIGHT_OFFSET` | `0.0` (bajado de `0.30` el 2026-07-24, ver 3.3.1) | Fracción de la altura del ojo que se desplaza la RAÍZ del modelo hacia arriba desde el borde del párpado (ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 3/5.1). |
 | `RIGHT_EYE_X_NUDGE` / `LEFT_EYE_X_NUDGE` | `0.0` / `0.0` | Corrección fina por ojo (fracción de pantalla) — hoy sin corrección aplicada. |
 | `FACE_DISTANCE_MULTIPLIER` / `HEAD_TILT_MULTIPLIER` | `1.0` / `1.0` | Ganchos cableados, hoy no-op — reservados. |
 | `EYE_CLOSED_OPENNESS_THRESHOLD` / `EYE_OPEN_OPENNESS_THRESHOLD` | `0.12` / `0.22` | Rango de smoothstep del blink damping. |
@@ -367,7 +449,7 @@ Notas de implementación vigentes:
 | Parte | Estado |
 |---|---|
 | Reconocimiento de ojos (sección 2) | ✅ Funciona, salvo `eyeShapeStream`/`leftOpenRatio` (campos muertos, no bloqueantes) |
-| Carga y posicionamiento del modelo 3D | ✅ Compila; calibración actual (`WIDTH_MULTIPLIER=1.65`/`HEIGHT_OFFSET=0.30`/nudges en `0.0`) sin confirmar visualmente en la última ronda |
+| Carga y posicionamiento del modelo 3D | ✅ **Confirmado en dispositivo real** (2026-07-24, ver 3.3.1/3.3.2): anclaje de raíz + partición fija párpado superior/inferior, validados con logcat+screenshot en frontal y roll extremo. `WIDTH_MULTIPLIER=1.65`/`HEIGHT_OFFSET=0.0`/nudges en `0.0` — ajuste fino estético pendiente pero no bloqueante |
 | Suavizado/timing (One Euro Filter + predicción adaptativa de latencia) | ✅ Compila; **sin confirmar en dispositivo de forma aislada** — nunca se probó un build limpio sin el crash de la sección 3.4 encima |
 | Calentamiento post-reset de `PoseInterpolator` (sección 3.3) | ✅ Compila; sin confirmar en dispositivo |
 | Doblado de mesh según curva del párpado | ❌ Desactivado — código presente, no se ejecuta por frame (ver 3.4) |
@@ -412,8 +494,11 @@ ciegas ya demostró que puede salir peor que el problema original.
 
 ## 6. Próximo paso
 
-Lo único que desbloquea seguir sin adivinar es un logcat real del dispositivo. Con la
-pantalla de cámara abierta:
+**Actualización 2026-07-24**: ya hubo un dispositivo real conectado (`Infinix X669`) y se usó
+para confirmar con evidencia (logcat + screenshot) que el bug de posicionamiento vertical
+("pestaña en la ceja") y el bug de partición por roll están resueltos — ver 3.3.1/3.3.2. Lo
+que sigue de esta lista ya NO tiene ese bloqueo estructural; falta repetir el mismo patrón
+(dispositivo conectado + logcat) para el resto de las preguntas pendientes:
 
 ```
 adb logcat -c
@@ -424,8 +509,9 @@ adb logcat -d | grep -E "LashRenderer|FaceRenderPipeline|CameraXManager|CameraPr
 Preguntas concretas que ese log (o un reporte manual específico) tiene que responder, por
 separado — no todas mezcladas en un mismo "sigue mal":
 
-1. ¿El modelo carga y se posiciona razonablemente bien (tamaño/lugar), con los valores
-   actuales de `WIDTH_MULTIPLIER=1.65`/`HEIGHT_OFFSET=0.30`/nudges en `0.0`?
+1. ~~¿El fix de anclaje de raíz resolvió que la pestaña apareciera en la ceja?~~ **Confirmado
+   ✅ 2026-07-24** (3.3.1/3.3.2). Pendiente menor: ¿hace falta subir `HEIGHT_OFFSET` un poco
+   por estética, o probar los otros 9 modelos de `assets/modelos/` (solo se probó "Redondo")?
 2. ¿El calentamiento post-reset de `PoseInterpolator` evita el salto ("entra grande y
    encoge") al reaparecer el rostro?
 3. ¿El "flote" general mejoró con los fixes de timing + la compensación adaptativa de
@@ -490,3 +576,38 @@ ver sección 2.1. Ninguno de estos cambios fue verificado en dispositivo durante
 reauditoría (fue una lectura de código, no una sesión de pruebas) — ver sección 6. Se creó
 además [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md), documento dedicado solo al cálculo de
 posición/escala de las pestañas.
+
+**Fix de anclaje de raíz — "pestaña en la ceja" (2026-07-24, continuación).** A partir de
+4 capturas reales en dispositivo reportando el modelo consistentemente a la altura de la
+ceja en todo ángulo de cabeza, se diagnosticó la causa raíz SIN dispositivo: se parsearon
+los 10 `.glb` reales de `assets/modelos/` con un script propio y se decompiló
+`sceneview-android` v2.1.1 (bytecode + fuente real en GitHub). Se confirmó que el motor
+anclaba el centro geométrico del bounding box del modelo (vía un `node.centerOrigin()` que
+resultó ser un no-op) en vez de la raíz visual real de la pestaña (identificada por
+histograma de densidad de vértices, muy por debajo del centro en los 10 modelos) — y que
+`EyeModelSlot.modelYRatio`, que según su comentario debía compensar esto, era código muerto
+(se escribía, nunca se leía). Fix aplicado: `GlbMeshReader.RawMesh.minY` +
+`EyeModelSlot.rootLocalY` + corrección en `EyeTransformCalculator.compute()` para anclar la
+raíz real (no el centro) en el punto de anclaje del ojo; `HEIGHT_OFFSET` bajado de `0.30` a
+`0.0`; `node.centerOrigin()` eliminado. Compila limpio (`gradlew compileDebugKotlin`). **Sin
+confirmar en dispositivo real** — no hay ninguno conectado en este entorno (`adb devices`
+vacío) — pendientes también, por la misma razón, la verificación de la convención de la
+matriz de pose (`DEBUG_LOG_POSE`) y el logcat del "flote" (sección 6). Ver detalle completo
+y evidencia en [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.1.
+
+**Fix de partición párpado superior/inferior + confirmación en dispositivo real (2026-07-24,
+continuación).** El usuario probó el fix anterior en dispositivo real: la altura mejoró (ya
+no en la ceja) pero seguía sin caer exacto según el ángulo, sobre todo con roll. Causa:
+`EyeLandmarks.from()` separaba "párpado superior" por umbral de Y de imagen en vez del orden
+anatómico FIJO de los 16 índices del anillo (primeros 8 = inferior, últimos 8 = superior,
+verificado contra landmarks 159/145 y 386/374) — el umbral se rompe con roll. Fix:
+`ring.subList(8, 16)`. Con un `Infinix X669` conectado por USB, se instrumentaron
+`EyeAnchorCalculator`/`EyeTransformCalculator` con logs temporales, se recompiló, instaló, y
+se capturó `adb exec-out screencap` + `adb logcat -d` en el mismo instante que el usuario
+sostenía el rostro frente a la cámara — de frente y con roll extremo (~80-90°). Ambas
+capturas confirman la pestaña naciendo en la línea de pestañas real, con los números del log
+coincidiendo con la imagen. **Ambos fixes de esta ronda (raíz + partición) quedan
+confirmados con evidencia real de dispositivo**, no solo compilación — primera vez en varias
+rondas que esto pasa (ver rondas anteriores, todas terminaron "sin confirmar en
+dispositivo"). Logs de diagnóstico retirados después de confirmar. Ver detalle en
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) secciones 5.1/5.2.

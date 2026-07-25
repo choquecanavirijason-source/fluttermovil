@@ -56,6 +56,13 @@ object EyeTransformCalculator {
         /** Corrección fina por ojo, como fracción del ancho de pantalla
          * ([0,1]). Ver [RendererConfiguration.RIGHT_EYE_X_NUDGE]. */
         xNudgeNormalized: Float = 0f,
+        /** [EyeModelSlot.rootLocalY] — la raíz real de la pestaña en
+         * unidades locales del `.glb` (mismo sistema que [naturalSpan]),
+         * NO el origen (0,0,0) del modelo. `0f` si el mesh todavía no
+         * terminó de parsear (degrada a anclar el origen, comportamiento
+         * anterior). Ver [RawMesh]/[EyeModelSlot] para la evidencia de por
+         * qué el origen del `.glb` no coincide con la raíz visual. */
+        rootLocalY: Float = 0f,
     ): EyeTransform {
         val nx = (anchor.point.x / imageWidth) + xNudgeNormalized
         val ny = anchor.point.y / imageHeight
@@ -93,8 +100,22 @@ object EyeTransformCalculator {
         val rawScale = if (naturalSpan > 0f) desiredWorldWidth / naturalSpan else 1f
         val scaleFactor = if (rawScale.isFinite() && rawScale > 0f) rawScale else 1f
 
+        // `position` de arriba es donde renderiza el ORIGEN local (0,0,0)
+        // del modelo, no necesariamente su raíz visual — [rootLocalY] mide
+        // cuánto más abajo, en unidades locales del `.glb`, está la raíz
+        // real respecto a ese origen (ver EyeModelSlot/RawMesh). Para que la
+        // RAÍZ (no el origen) quede exactamente en `position` (el punto de
+        // anclaje del ojo), el origen debe renderizar más ARRIBA que el
+        // anclaje, por la distancia local escalada al mismo factor que el
+        // resto del modelo (escala isotrópica, así que un mismo
+        // `scaleFactor` vale para X/Y/Z). `rootLocalY` es negativo (está
+        // por debajo del origen), así que `-rootLocalY` es positivo:
+        // `position - up*(scaleFactor*rootLocalY)` = `position +
+        // up*(scaleFactor*|rootLocalY|)`, es decir, sube el origen.
+        val rootCorrectedPosition = position - eyePlane.up * (scaleFactor * rootLocalY)
+
         return EyeTransform(
-            position = position,
+            position = rootCorrectedPosition,
             rotation = eyePlane.rotation,
             scale = Float3(scaleFactor, scaleFactor, scaleFactor),
         )

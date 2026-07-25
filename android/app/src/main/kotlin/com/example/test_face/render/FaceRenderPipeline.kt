@@ -27,6 +27,9 @@ object FaceRenderPipeline {
         leftNaturalSpan: Float,
         rightNaturalSpan: Float,
         camera: CameraProjection,
+        /** [EyeModelSlot.rootLocalY] de cada ojo — ver [EyeTransformCalculator]. */
+        leftRootLocalY: Float = 0f,
+        rightRootLocalY: Float = 0f,
     ): Result? {
         if (result.faceLandmarks().isEmpty()) return null
         val landmarks: List<NormalizedLandmark> = result.faceLandmarks()[0]
@@ -52,11 +55,11 @@ object FaceRenderPipeline {
 
         val left = computeEye(
             landmarks, FaceLandmarkIndices.LEFT_EYE_RING, FaceLandmarkIndices.LEFT_IRIS,
-            headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE,
+            headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY,
         )
         val right = computeEye(
             landmarks, FaceLandmarkIndices.RIGHT_EYE_RING, FaceLandmarkIndices.RIGHT_IRIS,
-            headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE,
+            headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY,
         )
         // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
@@ -72,13 +75,14 @@ object FaceRenderPipeline {
         naturalSpan: Float,
         camera: CameraProjection,
         xNudgeNormalized: Float,
+        rootLocalY: Float,
     ): EyeTransform? {
         val eyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
         val anchor = EyeAnchorCalculator.compute(eyeLandmarks) ?: return null
         val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
         val transform = EyeTransformCalculator.compute(
-            headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized,
+            headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
         )
         // Curva del párpado superior para el doblado del mesh (ver
         // LashMeshBender) — se ajusta acá porque eyeLandmarks/anchor ya

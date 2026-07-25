@@ -17,13 +17,17 @@ class EyeModelSlot {
      * del ojo, así las pestañas siempre se ajustan al ojo real. */
     var naturalSpan = 1f
 
-    /** Altura del modelo en unidades de mundo, DESPUÉS de escalar. Se
-     * calcula en loadIntoSlot y lo usa writeInterpolatedPose para subir el
-     * modelo media-altura: así el BORDE INFERIOR del modelo (la raíz de las
-     * pestañas) queda en el punto de anclaje, no el centro geométrico.
-     * @Volatile porque se escribe desde el hilo de carga y se lee desde el
-     * hilo principal (Choreographer). */
-    @Volatile var modelYRatio = 0f  // = naturalSizeY / naturalSizeX (relación de aspecto Y/X)
+    /** [RawMesh.minY] — la raíz real de la pestaña en unidades locales del
+     * `.glb` (mismo sistema de unidades que [naturalSpan], sin escalar).
+     * `0f` mientras el mesh no haya terminado de parsear (degrada al
+     * comportamiento anterior: ancla en el origen del modelo, no en la
+     * raíz). [EyeTransformCalculator] usa esto para desplazar la posición
+     * final de modo que la RAÍZ del modelo (no su origen/centro geométrico)
+     * quede sobre el punto de anclaje del ojo — ver [GlbMeshReader] para la
+     * evidencia de por qué el origen del `.glb` NO coincide con la raíz
+     * visual. @Volatile porque se escribe desde el hilo de carga y se lee
+     * desde el hilo llamante de [FaceRenderPipeline] (el de MediaPipe). */
+    @Volatile var rootLocalY = 0f
 
     val filter = EyeTrackingFilter()
     val interpolator = PoseInterpolator()
@@ -41,7 +45,7 @@ class EyeModelSlot {
         node = null
         path = null
         naturalSpan = 1f
-        modelYRatio = 0f
+        rootLocalY = 0f
         filter.reset()
         interpolator.reset()
         rawMesh = null

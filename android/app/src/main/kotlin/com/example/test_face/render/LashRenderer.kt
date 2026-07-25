@@ -180,6 +180,8 @@ class LashRenderer(
                 leftNaturalSpan = leftSlot.naturalSpan,
                 rightNaturalSpan = rightSlot.naturalSpan,
                 camera = camera,
+                leftRootLocalY = leftSlot.rootLocalY,
+                rightRootLocalY = rightSlot.rootLocalY,
             )
         } catch (e: Exception) {
             Log.e(TAG, "onFaceResult: fallo calculando la transformación", e)
@@ -346,7 +348,16 @@ class LashRenderer(
                     scaleToUnits = null,
                     autoAnimate = true,
                 )
-                node.centerOrigin()
+                // NO se llama node.centerOrigin(): con los argumentos por
+                // defecto (origin=Float3(0,0,0)) esa llamada es un no-op
+                // matemático (`position += origin*size` con origin=0), y aun
+                // si no lo fuera, writeInterpolatedPose() sobreescribe
+                // node.position COMPLETO en cada vsync — cualquier ajuste que
+                // centerOrigin() hiciera acá se perdería en el primer frame
+                // visible. Verificado decompilando sceneview-android v2.1.1
+                // (bytecode + fuente real en GitHub). El alineado real de la
+                // raíz de la pestaña ahora lo hace EyeTransformCalculator
+                // usando slot.rootLocalY (ver abajo), no este método.
 
                 // Reemplaza la geometría que cargó gltfio por una propia,
                 // editable frame a frame (ver LashMeshBender): ni
@@ -369,6 +380,12 @@ class LashRenderer(
                     } else {
                         Log.w(TAG, "loadIntoSlot[$eye]: sin RenderableNode — sin doblado de párpado")
                     }
+                    // Raíz real de la pestaña (ver GlbMeshReader/EyeModelSlot):
+                    // el bounding box del .glb está centrado en Y, pero la
+                    // masa del mesh (banda densa de donde nacen las fibras)
+                    // está cerca de minY, no del origen — anclar el origen
+                    // (como se hacía antes) empuja la pestaña hacia arriba.
+                    slot.rootLocalY = rawMesh.minY
                 } catch (e: Exception) {
                     Log.e(TAG, "loadIntoSlot[$eye]: fallo parseando geometría para doblado, sigue rígido", e)
                 }
@@ -386,13 +403,7 @@ class LashRenderer(
                 // escala para coincidir con el ancho real del ojo en el mundo).
                 // NO se usa maxOf(x,y,z): si el modelo fuera más alto que ancho,
                 // la escala calculada en EyeTransformCalculator sería incorrecta.
-                val naturalSizeX = size.x.takeIf { it > 0f } ?: 1f
-                val naturalSizeY = size.y.takeIf { it > 0f } ?: naturalSizeX
-                slot.naturalSpan = naturalSizeX
-                // Guardar la relación Y/X para que writeInterpolatedPose pueda
-                // calcular la altura renderizada en cualquier frame sin acceder
-                // al nodo (que puede estar en otro hilo).
-                slot.modelYRatio = naturalSizeY / naturalSizeX
+                slot.naturalSpan = size.x.takeIf { it > 0f } ?: 1f
 
                 sv.addChildNode(node)
                 slot.node = node

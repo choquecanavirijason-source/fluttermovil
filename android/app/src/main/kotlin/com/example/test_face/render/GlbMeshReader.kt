@@ -16,12 +16,25 @@ import java.nio.ByteOrder
  * [minX]/[maxX] son el rango local del eje X del mesh (extremo a extremo de
  * la pestaña) — necesarios para mapear cada vértice a un parámetro a lo
  * largo de la curva del párpado.
+ *
+ * [minY] es el punto más bajo del mesh en Y local — la RAÍZ real de la
+ * pestaña (donde se apoya sobre el párpado), NO el origen local (0,0,0) del
+ * `.glb`. Verificado con los 10 modelos de `assets/modelos/`: el bounding
+ * box en Y es simétrico (`minY == -maxY`, el pivote SÍ está en el centro
+ * geométrico), pero un histograma de densidad de vértices por banda de Y
+ * muestra que la masa del mesh (la base ancha de donde nacen las fibras) se
+ * concentra cerca de `minY`, no del centro — el origen local cae ya varias
+ * unidades adentro del abanico de fibras. Anclar el origen (como hacía el
+ * motor antes) en vez de `minY` empuja visualmente toda la pestaña hacia
+ * arriba. Ver [EyeModelSlot.rootLocalY] / [EyeTransformCalculator] para
+ * cómo se usa esto en el cálculo de posición final.
  */
 data class RawMesh(
     val vertices: List<Geometry.Vertex>,
     val indices: List<Int>,
     val minX: Float,
     val maxX: Float,
+    val minY: Float,
 )
 
 /**
@@ -97,7 +110,8 @@ object GlbMeshReader {
 
         val minX = positions.minOf { it.x }
         val maxX = positions.maxOf { it.x }
-        return RawMesh(vertices = vertices, indices = indices, minX = minX, maxX = maxX)
+        val minY = positions.minOf { it.y }
+        return RawMesh(vertices = vertices, indices = indices, minX = minX, maxX = maxX, minY = minY)
     }
 
     private fun readVec3(

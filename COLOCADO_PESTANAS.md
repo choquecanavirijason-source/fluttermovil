@@ -59,9 +59,15 @@ LEFT_EYE_RING` / `RIGHT_EYE_RING`) que forman el anillo completo del ojo,
 convertidos de coordenadas normalizadas `[0,1]` a píxeles de imagen
 (`lm.x() * imageWidth`, `lm.y() * imageHeight`).
 
-El **párpado superior no es un subconjunto fijo de índices**: se calcula
-dinámicamente como la mitad del anillo con menor Y (más arriba en la imagen),
-más robusto ante variaciones de orientación/numeración de MediaPipe.
+El **párpado superior es un subconjunto FIJO de índices** (corregido
+2026-07-24, ver sección 5.2): dentro de los 16 puntos del anillo, los
+primeros 8 trazan el párpado inferior y los últimos 8 el superior — orden
+anatómico constante de MediaPipe, verificado cruzando contra landmarks
+individuales muy conocidos (159/145 y 386/374). Antes se calculaba
+dinámicamente como "la mitad del anillo con menor Y en la imagen", que
+parecía más robusto pero en realidad se rompía con la cabeza en roll (Y de
+imagen deja de ser "arriba anatómico" cuando la cabeza se inclina de
+costado).
 
 También se calcula `opennessRatio = altura_anillo / ancho_anillo` — un proxy
 barato de apertura del ojo (no el EAR clásico de 6 puntos), usado más adelante
@@ -69,9 +75,11 @@ para atenuar el modelo al parpadear.
 
 ## 3. Punto de anclaje 2D (`EyeAnchorCalculator.kt`)
 
-Este es el corazón del posicionamiento. El modelo 3D se centra en
-`anchor.point`, así que ese punto debe ser el CENTRO VISUAL de las pestañas,
-no el borde del párpado.
+Este es el corazón del posicionamiento. `anchor.point` es el punto de mundo
+donde debe renderizar la **raíz real** de la pestaña (ver sección 5.1 —
+corregido el 2026-07-24; hasta esa fecha se asumía que el modelo se
+centraba en `anchor.point` por su centro geométrico, una asunción que
+resultó falsa y causaba que la pestaña apareciera a la altura de la ceja).
 
 ```
 X del ancla  = promedio de X de todos los puntos del párpado superior
@@ -80,12 +88,14 @@ Y del borde  = promedio del 30% de puntos con mayor Y del párpado superior
 Y del ancla  = Y_del_borde − altura_del_ojo × HEIGHT_OFFSET
 ```
 
-`HEIGHT_OFFSET = 0.30` (constante en `RendererConfiguration.kt`). En
-coordenadas de imagen Y crece hacia abajo, así que restar sube el ancla hacia
-la frente. Con `HEIGHT_OFFSET = 0`, el centro del modelo cae en el borde del
-párpado (mitad del modelo quedaría dentro del ojo); con `0.30`, el centro
-visual de las pestañas queda ~30% de la altura del ojo por encima del borde,
-que es donde se ven naturalmente.
+`HEIGHT_OFFSET = 0.0` (constante en `RendererConfiguration.kt`, bajada de
+`0.30` el 2026-07-24 — ver sección 5.1). En coordenadas de imagen Y crece
+hacia abajo, así que restar sube el ancla hacia la frente. Con
+`HEIGHT_OFFSET = 0`, y como ahora se ancla la RAÍZ real del modelo (no su
+centro geométrico), la raíz de la pestaña nace exactamente en el borde del
+párpado — anatómicamente correcto. `HEIGHT_OFFSET > 0` solo agregaría un
+margen estético por encima del borde, si hiciera falta tras confirmar en
+dispositivo.
 
 También se calcula la **tangente del párpado** (ajuste PCA de los puntos del
 párpado superior alrededor de su centroide) — la dirección de inclinación
@@ -138,6 +148,121 @@ quaternion de rotación del modelo.
    dividiendo, con clamp para no explotar en ángulos extremos de tracking
    ruidoso).
 
+### 5.1 Corrección de raíz (2026-07-24) — por qué la pestaña aparecía en la ceja
+
+**Síntoma reportado con capturas reales en dispositivo**: en 4 fotos con
+distintos ángulos de cabeza, el modelo aparecía consistentemente a la altura
+de la ceja, nunca del párpado — el mismo patrón en los 4 ángulos, lo que
+descartaba un bug de rotación/handedness de la matriz de cabeza (eso se
+vería como pestañas rotadas o corridas de forma distinta según el ángulo,
+no siempre arriba).
+
+**Diagnóstico (sin necesidad de dispositivo, con los `.glb` reales del
+repo)**:
+1. Se parsearon los 10 modelos de `assets/modelos/` con un script propio
+   (mismo formato que lee `GlbMeshReader.kt`). El bounding box en Y de los
+   10 es perfectamente simétrico (`minY = -maxY` exacto) — el pivote SÍ
+   está en el centro geométrico del bounding box.
+2. Pero un **histograma de densidad de vértices por banda de Y** mostró que
+   la masa real del mesh (la banda densa donde nace la fibra, la "raíz"
+   visual de la pestaña) está concentrada cerca del `minY` — el origen
+   local (Y=0, el centro geométrico) cae bastante por encima de la raíz
+   real, ya adentro del abanico de fibras.
+3. Decompilando `sceneview-android` v2.1.1 (bytecode del `.aar` + fuente
+   real en GitHub) se confirmó que `node.centerOrigin()` — llamado en
+   `LashRenderer.loadIntoSlot` con argumentos por defecto — es la fórmula
+   `position += Float3(0,0,0) * size`, un **no-op literal**. Y aunque no lo
+   fuera, `LashRenderer.writeInterpolatedPose()` sobreescribe
+   `node.position` por completo en cada vsync, así que cualquier ajuste que
+   `centerOrigin()` hiciera se perdería en el primer frame visible de
+   todos modos. Esa llamada nunca tuvo efecto en el render final.
+4. `EyeModelSlot.modelYRatio` (el mecanismo que, según su comentario, debía
+   compensar esto) también era código muerto: se escribía en
+   `loadIntoSlot` pero nunca se leía en ningún otro lugar — el comentario
+   que afirmaba que `writeInterpolatedPose` lo usaba "para subir el modelo
+   media-altura" describía un comportamiento que jamás ocurría en el código
+   real.
+
+**Conclusión**: el motor anclaba el CENTRO GEOMÉTRICO del bounding box del
+modelo en `anchor.point`, pero la raíz visual real está bien por debajo de
+ese centro — y encima `HEIGHT_OFFSET=0.30` sumaba otro 30% de la altura del
+ojo hacia arriba, sobre una premisa (centrado) que ya era incorrecta. La
+suma de ambos errores empujaba la pestaña hacia la ceja, en cualquier
+ángulo de cabeza — consistente con lo reportado.
+
+**Fix aplicado** (código, compilado y verificado con
+`gradlew compileDebugKotlin`, **sin confirmar visualmente en dispositivo
+real** — no hay uno disponible en este entorno):
+- `GlbMeshReader.RawMesh` ahora expone `minY` (el punto más bajo real del
+  mesh, calculado de los vértices, igual que ya se hacía para `minX`/`maxX`).
+- `EyeModelSlot.rootLocalY` reemplaza al `modelYRatio` muerto: se fija en
+  `loadIntoSlot` a `rawMesh.minY`, en las mismas unidades locales que
+  `naturalSpan`.
+- `EyeTransformCalculator.compute()` ahora recibe `rootLocalY` y corrige la
+  posición final: `position - eyePlane.up * (scaleFactor * rootLocalY)` —
+  desplaza el origen del modelo hacia ARRIBA (ya que `rootLocalY` es
+  negativo) la distancia justa para que sea la RAÍZ, no el origen/centro,
+  la que quede exactamente en `anchor.point`. Usa el mismo `scaleFactor`
+  isotrópico que ya escala X/Y/Z del modelo, así que no hace falta ningún
+  factor de conversión nuevo.
+- `node.centerOrigin()` se eliminó de `LashRenderer.loadIntoSlot` (no-op
+  confirmado, ver punto 3 arriba).
+- `RendererConfiguration.HEIGHT_OFFSET` bajó de `0.30` a `0.0` — con la raíz
+  ya anclada correctamente, `0.0` es el punto de partida anatómicamente
+  correcto (raíz exactamente en el borde del párpado), sin necesidad de
+  ningún valor "mágico" que compensara el bug de arriba.
+
+**Confirmado en dispositivo real (2026-07-24, continuación)**: con un
+`Infinix X669` conectado, se instrumentó `EyeAnchorCalculator`/
+`EyeTransformCalculator` con logs temporales (`Log.i`), se pidió al usuario
+sostener el rostro de frente frente a la cámara, y se capturó `adb
+exec-out screencap` + `adb logcat -d` en el mismo instante. La captura
+muestra la pestaña naciendo justo en la línea de pestañas real (no en la
+ceja), y los números del log (`edgeLidY`/`anchor` calculados a partir de
+`upperLid`/`ring` crudos) coinciden con la posición visible en la imagen.
+Confirma que este fix (raíz real, no centro geométrico) resolvió el síntoma
+original. Los logs de diagnóstico ya se quitaron del código. Pendiente:
+ajuste fino estético de `HEIGHT_OFFSET`/`WIDTH_MULTIPLIER` si hiciera falta,
+y la verificación de la convención de la matriz de pose (`DEBUG_LOG_POSE`,
+sección 9) — ninguna de las dos es bloqueante.
+
+### 5.2 Corrección de partición párpado superior/inferior (2026-07-24) — por qué variaba según el ángulo
+
+**Síntoma reportado con capturas reales en varios ángulos**: con la raíz ya
+corregida (5.1), la pestaña seguía sin quedar en la posición exacta cuando
+la cabeza estaba inclinada de costado (roll), aunque en ángulos frontales
+se veía bien.
+
+**Diagnóstico**: `EyeLandmarks.from()` separaba "párpado superior" con un
+umbral dinámico (`ring.filter { it.y <= meanY }`, es decir, la mitad del
+anillo con menor Y de IMAGEN). Los 16 índices de `FaceLandmarkIndices.
+LEFT_EYE_RING`/`RIGHT_EYE_RING` tienen en cambio un orden anatómico FIJO:
+los primeros 8 trazan el párpado inferior y los últimos 8 el superior —
+verificado cruzando contra landmarks individuales muy citados en cualquier
+cálculo de EAR/parpadeo con MediaPipe (159/145 para el ojo izquierdo,
+386/374 para el derecho: los "top" conocidos caen siempre en los últimos 8,
+los "bottom" conocidos siempre en los primeros 8). Con la cabeza derecha,
+el umbral de Y de imagen coincide por casualidad con esa partición fija —
+pero con roll, "Y menor en imagen" deja de ser "arriba anatómico", así que
+el umbral mezclaba puntos de los dos párpados de forma dependiente del
+ángulo, desplazando el ancla y la tangente calculados.
+
+**Fix aplicado**: `EyeLandmarks.from()` ahora usa la partición fija por
+índice (`ring.subList(8, 16)`) cuando el anillo tiene los 16 puntos
+esperados, con fallback al umbral de Y solo si algún índice quedó fuera de
+rango (caso degenerado, no debería pasar en operación normal).
+
+**Confirmado en dispositivo real**: con el mismo `Infinix X669`, se probó
+un roll de cabeza extremo (~80-90°, cabeza casi de costado) y se comparó
+logcat + screenshot del mismo instante. La partición `upperLid` seguía
+siendo exactamente `ring[8:16]` (no se mezclaba con el párpado inferior), y
+el ancla calculada cayó dentro de la huella real del anillo del ojo en
+ambos ojos, sin desplazamiento sistemático hacia otro lado por el ángulo.
+Con un roll tan extremo los ojos aparecen naturalmente entrecerrados
+(afecta la precisión de los landmarks de MediaPipe en sí, no algo que este
+motor pueda corregir), pero no se observó el patrón de error dependiente
+del ángulo que motivó este fix.
+
 ## 6. Curva del párpado y doblado de mesh (actualmente inactivo)
 
 `LashLineCurve.fit()` ajusta una parábola (`f(x) = ax² + bx + c`, mínimos
@@ -178,7 +303,7 @@ lenta de lo mismo. Hoy el modelo se ve rígido: solo se aplica el transform
 
 | Constante | Valor | Efecto |
 |---|---|---|
-| `HEIGHT_OFFSET` | 0.30 | Cuánto sube el centro del modelo sobre el borde del párpado |
+| `HEIGHT_OFFSET` | 0.0 | Cuánto sube la RAÍZ del modelo (no el centro, ver sección 5.1) sobre el borde del párpado |
 | `WIDTH_MULTIPLIER` | 1.65 | Cuánto más ancho que el ojo real es el modelo |
 | `LEFT_EYE_X_NUDGE` / `RIGHT_EYE_X_NUDGE` | 0.0 | Corrección fina de X por ojo (fracción de pantalla) |
 | `HEAD_TILT_MULTIPLIER` | 1.0 | Multiplicador extra sobre la corrección de escorzo |
@@ -199,3 +324,10 @@ lenta de lo mismo. Hoy el modelo se ve rígido: solo se aplica el transform
   doblado está desactivado.
 - **Doblado de mesh desactivado** (sección 6) — pendiente de rediseño para no
   reasignar buffers por vértice cada frame.
+- ~~`rootLocalY = minY` sin confirmar visualmente~~ — **confirmado en
+  dispositivo real 2026-07-24** (sección 5.1): la pestaña nace en la línea
+  de pestañas real, no en la ceja, tanto de frente como con roll extremo.
+  Riesgo residual menor, no observado en las pruebas: si algún OTRO modelo
+  (de los 10 en `assets/modelos/`, solo se probó visualmente uno) tuviera
+  geometría adicional por debajo de la raíz real (ej. un plano de colisión
+  invisible), su `minY` daría un valor demasiado bajo.
