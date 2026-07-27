@@ -65,6 +65,10 @@ class CameraXManager(
      * fijo adivinado. */
     @Volatile private var smoothedLatencyMs = 35f  // seed razonable
 
+    // ── LOG DE DIAGNÓSTICO TEMPORAL (ronda "flote") ──────────────────────
+    @Volatile private var debugFrameCount = 0
+    @Volatile private var debugLastResultMs = 0L
+
     private val helper = FaceLandmarkerHelper(
         context = activity,
         onResult = { data, rawResult ->
@@ -77,6 +81,16 @@ class CameraXManager(
                 // con un solo outlier
                 smoothedLatencyMs = smoothedLatencyMs * 0.7f + latencyMs * 0.3f
             }
+            debugFrameCount++
+            if (debugFrameCount % 30 == 0) {
+                val intervalMs = if (debugLastResultMs > 0L) nowMs - debugLastResultMs else -1L
+                Log.i(
+                    "FloteDebug",
+                    "smoothedLatencyMs=$smoothedLatencyMs intervalDesde30FramesAtras=${intervalMs}ms " +
+                        "fps≈${if (intervalMs > 0) 30_000f / intervalMs else -1f}",
+                )
+            }
+            debugLastResultMs = nowMs
             onTrackingResult(data)
             val imageWidth = (data["imageWidth"] as? Int) ?: 0
             val imageHeight = (data["imageHeight"] as? Int) ?: 0

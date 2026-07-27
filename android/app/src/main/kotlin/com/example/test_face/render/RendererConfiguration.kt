@@ -102,7 +102,7 @@ object RendererConfiguration {
     // ancho del ojo, hacia el corner EXTERNO (el más lejano al centro
     // horizontal de la imagen — ver EyeAnchorCalculator) para reducir el
     // invasión del lado interno sin tocar la escala. 0.0 = sin desplazar.
-    const val NOSE_AVOID_SHIFT = 0.58f
+    const val NOSE_AVOID_SHIFT = 0.68f
 
     // ── Parpadeo ────────────────────────────────────────────────────────
     const val EYE_CLOSED_OPENNESS_THRESHOLD = 0.12f

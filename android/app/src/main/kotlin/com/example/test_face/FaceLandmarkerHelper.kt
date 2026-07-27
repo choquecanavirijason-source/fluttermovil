@@ -40,7 +40,7 @@ class FaceLandmarkerHelper(
         }
 
         faceLandmarker = try {
-            buildLandmarker(Delegate.GPU)
+            buildLandmarker(Delegate.GPU).also { Log.i(TAG, "Delegado GPU activo (diagnóstico flote)") }
         } catch (e: Exception) {
             Log.w(TAG, "Delegado GPU no disponible en este dispositivo, fallback a CPU", e)
             try {
