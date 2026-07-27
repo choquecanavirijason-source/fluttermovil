@@ -453,18 +453,32 @@ class LashRenderer(
     }
 
     /**
-     * DESACTIVADO: `ToneMapping`/`AntiAliasing`/`sampleCount` son pases de
-     * post-procesado que operan sobre TODO el framebuffer, incluidas las
-     * zonas donde no hay geometría — en un [SceneView] translúcido
-     * (`isOpaque = false`, ver [com.example.test_face.CameraPreviewFactory])
-     * eso puede forzar alpha=1 en el fondo y tapar de negro el preview de la
-     * cámara que va debajo. Se activaron en una iteración anterior y
-     * causaron justo eso, así que quedan fuera hasta poder confirmarlas de
-     * forma segura en dispositivo (por ejemplo, restringiendo el pase a la
-     * región del `.glb` en vez de a toda la vista).
+     * Solo MSAA (multisampling del render target), NO `ToneMapping`/`FXAA`/
+     * `TAA` — esos son pases de post-procesado que operan sobre TODO el
+     * framebuffer ya resuelto, incluidas las zonas sin geometría, y en un
+     * [SceneView] translúcido (`isOpaque = false`, ver
+     * [com.example.test_face.CameraPreviewFactory]) pueden forzar alpha=1
+     * de fondo y tapar de negro el preview de la cámara — eso fue lo que
+     * pasó cuando se activaron los tres juntos en una iteración anterior
+     * (ver historial en ESTADO_ACTUAL.md). MSAA es distinto: multisamplea
+     * color+alpha por sub-muestra ANTES de resolver a un solo píxel, así
+     * que preserva la transparencia correctamente — necesario acá porque
+     * las fibras de pestaña son geometría muy fina (1-2px de ancho) que se
+     * ve como ruido/estática sin ningún anti-aliasing. Probado en
+     * dispositivo real (Infinix X669, 2026-07-24): preview de cámara sigue
+     * visible, sin pantalla negra. Si en algún dispositivo esto SÍ tapa la
+     * cámara, revertir a no-op inmediatamente (no investigar a ciegas).
      */
     private fun configureRenderQuality(sv: SceneView) {
-        // No-op a propósito — ver comentario de la función.
+        try {
+            sv.view.multiSampleAntiAliasingOptions = com.google.android.filament.View.MultiSampleAntiAliasingOptions().apply {
+                enabled = true
+                sampleCount = RendererConfiguration.MSAA_SAMPLE_COUNT
+                customResolve = false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "No se pudo configurar MSAA — sigue sin anti-aliasing", e)
+        }
     }
 
     /**

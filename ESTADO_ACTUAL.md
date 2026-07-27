@@ -348,6 +348,30 @@ convención de la matriz de pose (`DEBUG_LOG_POSE`); logcat del "flote" general
 (sección 6, sigue sin diagnosticar); confirmar visualmente los otros 9 modelos
 de `assets/modelos/` (solo se probó uno, "Redondo"/cateye, en esta sesión).
 
+### 3.3.3 Calidad visual: MSAA + volumen vertical (2026-07-24, misma sesión)
+
+Con la posición ya confirmada, el usuario comparó el render contra un filtro AR
+de referencia (pestañas gruesas/voluminosas) y reportó que el propio se veía
+"con ruido"/como estática, fino. Dos causas, dos fixes, ambos probados en vivo
+en el `Infinix X669` con `adb screencap`:
+
+1. **Sin anti-aliasing**: `configureRenderQuality()` era no-op desde el bug
+   histórico de "ToneMapping+FXAA+MSAA tapan la cámara de negro" (sección 7).
+   Se activó SOLO `View.MultiSampleAntiAliasingOptions` (MSAA) — multisamplea
+   color+alpha por sub-muestra, no post-procesa el framebuffer resuelto como
+   FXAA/ToneMapping. Confirmado en dispositivo: cámara sigue visible, fibras
+   de pestaña notablemente más limpias.
+2. **Escala isotrópica**: el `scaleFactor` (X/Y/Z igual) no permitía dar más
+   volumen vertical sin también estirar el ancho más allá de las esquinas del
+   ojo. Se separó una escala Y propia (`HEIGHT_VOLUME_MULTIPLIER = 1.4`) en
+   `EyeTransformCalculator.compute()`, y la corrección de `rootLocalY` (3.3.1)
+   se actualizó para usar esa misma escala Y (no la de X/Z), porque el
+   desplazamiento de la raíz es a lo largo de ese eje.
+
+Resultado confirmado con screenshot en vivo: fibras de pestaña legibles, no
+ruido, sin regresión de la cámara. Detalle completo en
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.3.
+
 ### 3.4 Lo que existe pero está DESACTIVADO: doblado del mesh según la curva del párpado
 
 Hay una ruta completa para que la pestaña siga la curva real del párpado superior
@@ -376,13 +400,14 @@ necesita buffers nativos reusados (`ByteBuffer` escrito en sitio) y throttling r
 | `SCALE_MIN_CUTOFF` / `SCALE_BETA` | `2.0` / `≈3.67` (=`POSITION_BETA`×0.05/0.3) | Ídem para escala, mantiene proporción fija respecto a `POSITION_BETA`. |
 | `ONE_EURO_D_CUTOFF` | `1.0` Hz | Corte fijo con el que se suaviza la derivada (estimación de velocidad) dentro de cada `OneEuroFilter`. |
 | `MIN_DEPTH` / `MAX_DEPTH` | `-2.2` / `-0.35` | Rango de profundidad de cabeza válido (clamp). |
-| `WIDTH_MULTIPLIER` | `1.65` | Multiplicador de ancho del modelo sobre el ancho real del ojo. |
+| `WIDTH_MULTIPLIER` | `1.65` | Multiplicador de ancho del modelo sobre el ancho real del ojo (escala X/Z). |
+| `HEIGHT_VOLUME_MULTIPLIER` | `1.4` (nuevo 2026-07-24) | Multiplicador EXTRA solo en Y (volumen/grosor vertical), separado de X/Z — ver 3.3.3. |
 | `HEIGHT_OFFSET` | `0.0` (bajado de `0.30` el 2026-07-24, ver 3.3.1) | Fracción de la altura del ojo que se desplaza la RAÍZ del modelo hacia arriba desde el borde del párpado (ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 3/5.1). |
 | `RIGHT_EYE_X_NUDGE` / `LEFT_EYE_X_NUDGE` | `0.0` / `0.0` | Corrección fina por ojo (fracción de pantalla) — hoy sin corrección aplicada. |
 | `FACE_DISTANCE_MULTIPLIER` / `HEAD_TILT_MULTIPLIER` | `1.0` / `1.0` | Ganchos cableados, hoy no-op — reservados. |
 | `EYE_CLOSED_OPENNESS_THRESHOLD` / `EYE_OPEN_OPENNESS_THRESHOLD` | `0.12` / `0.22` | Rango de smoothstep del blink damping. |
 | `INDIRECT_LIGHT_INTENSITY` / `KEY_LIGHT_INTENSITY` | `15000` / `100000` | Intensidad de luz ambiental sintética (armónicos esféricos) / luz clave direccional. |
-| `MSAA_SAMPLE_COUNT` | `4` | **Declarada, sin consumidor** — `configureRenderQuality()` sigue siendo no-op (ver 4). |
+| `MSAA_SAMPLE_COUNT` | `4` | **Con consumidor desde 2026-07-24** — `configureRenderQuality()` lo usa para `View.MultiSampleAntiAliasingOptions` (ver 3.3.3). |
 
 Nota de higiene detectada en esta relectura: `HEIGHT_OFFSET` y los `*_X_NUDGE` estaban
 documentados antes con valores distintos (`0.53` y `±0.08`) que ya NO coinciden con el
@@ -427,10 +452,13 @@ cuánto tarda MediaPipe en ESTE dispositivo y se la pasa a `LashRenderer` para q
 `CameraXManager.kt` ya no es 100% ajeno al pipeline de render, aunque no calcula posiciones.
 
 Notas de implementación vigentes:
-- `configureRenderQuality()` en `LashRenderer` sigue siendo **no-op a propósito**:
-  `ToneMapping`/`AntiAliasing`/MSAA son pases de post-procesado de framebuffer completo que,
-  en un `SceneView` translúcido, fuerzan alpha=1 de fondo y tapan la cámara de negro (bug
-  histórico, ver sección 7). No se reactivó.
+- `configureRenderQuality()` en `LashRenderer` **ya NO es no-op** (cambio 2026-07-24, ver
+  sección 3.3.3 y [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.3): activa SOLO
+  `View.MultiSampleAntiAliasingOptions` (MSAA), confirmado seguro en dispositivo real. NO se
+  reactivaron `ToneMapping`/`FXAA` — esos siguen siendo el bug histórico documentado (pases de
+  post-procesado de framebuffer completo que en un `SceneView` translúcido fuerzan alpha=1 de
+  fondo y tapan la cámara de negro, ver sección 7). MSAA es distinto: multisamplea color+alpha
+  antes de resolver, no post-procesa.
 - `detachPreview`/`detachSceneView` comparan identidad de instancia antes de limpiar: Flutter
   puede crear el `PlatformView` nuevo (y llamar `attachPreview`/`attachSceneView`) ANTES de
   que el anterior termine su `dispose()` — sin esa comprobación, el `detach` tardío anulaba
@@ -611,3 +639,21 @@ confirmados con evidencia real de dispositivo**, no solo compilación — primer
 rondas que esto pasa (ver rondas anteriores, todas terminaron "sin confirmar en
 dispositivo"). Logs de diagnóstico retirados después de confirmar. Ver detalle en
 [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) secciones 5.1/5.2.
+
+**Fix de calidad visual: MSAA + volumen vertical (2026-07-24, misma sesión, continuación).**
+El usuario comparó el resultado contra un filtro AR de referencia (pestañas gruesas) y
+reportó que el propio se veía como "estática" — fino y con ruido. Se reactivó `MSAA` (solo
+multisampling, no `FXAA`/`ToneMapping` — esos siguen siendo el bug histórico que tapaba la
+cámara) y se separó una escala Y propia (`HEIGHT_VOLUME_MULTIPLIER=1.4`) del `scaleFactor`
+de X/Z, para dar volumen sin estirar el ancho. Ambos cambios probados en vivo en el mismo
+`Infinix X669` con `adb screencap`: cámara sigue visible, fibras de pestaña legibles en vez
+de ruido. Ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.3.
+
+**Ajuste fino: X centrado pero Y de esquina (2026-07-24, misma sesión, continuación).** Con
+la posición ya "casi" bien, se re-instrumentó `EyeAnchorCalculator` y se capturó logcat +
+screenshot de la misma pose reportada. Los números mostraron que `anchor.x` promediaba TODOS
+los puntos del párpado superior (centrado) pero `anchor.y` (`edgeLidY`) promediaba solo el
+30% con mayor Y — que para un párpado en forma de arco son casi siempre las ESQUINAS, no el
+centro — un desfase real de ~8px confirmado con datos de logcat. Fix: `anchor.y` ahora usa
+`meanY` (mismo conjunto y peso que `meanX`), sin sesgo de esquina. Confirmado con screenshot
+antes/después de la misma pose. Ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.4.

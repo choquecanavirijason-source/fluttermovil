@@ -263,6 +263,64 @@ Con un roll tan extremo los ojos aparecen naturalmente entrecerrados
 motor pueda corregir), pero no se observó el patrón de error dependiente
 del ángulo que motivó este fix.
 
+### 5.3 Calidad visual: MSAA + volumen vertical (2026-07-24)
+
+Con la posición ya confirmada (5.1/5.2), el usuario reportó que el render se veía
+"con ruido"/como estática — fino y poco parecido a una pestaña real, comparado
+contra un filtro AR de referencia con pestañas gruesas y voluminosas.
+
+**Causa 1 — sin anti-aliasing**: `LashRenderer.configureRenderQuality()` era un
+no-op desde una ronda anterior, por un bug histórico donde activar
+`ToneMapping`+`FXAA`+MSAA juntos tapaba de negro el preview de cámara (`SceneView`
+translúcido). Las fibras de pestaña son geometría muy fina (1-2px en pantalla) y
+sin ningún anti-aliasing se ven como ruido/estática. Se probó reactivar SOLO MSAA
+(`View.MultiSampleAntiAliasingOptions`, no FXAA ni ToneMapping — MSAA multisamplea
+color+alpha por sub-muestra, no post-procesa el framebuffer ya resuelto como sí
+hacen FXAA/ToneMapping) en dispositivo real (Infinix X669): la cámara sigue
+visible, sin pantalla negra, y las fibras se ven notablemente más limpias.
+
+**Causa 2 — escala isotrópica**: `WIDTH_MULTIPLIER` solo puede agrandar el ancho
+sin también estirar la altura más allá de proporción, porque el `scaleFactor`
+anterior era isotrópico (mismo valor en X/Y/Z). Se separó la escala del eje Y
+(`RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER = 1.4`, ver
+`EyeTransformCalculator.compute()`) para dar más volumen/grosor vertical sin
+extender la pestaña más allá de las esquinas del ojo en X. La corrección de
+`rootLocalY` (5.1) se actualizó para usar esta misma escala Y (no el
+`scaleFactor` de X/Z), ya que el desplazamiento de la raíz es a lo largo de ese
+eje.
+
+**Confirmado en dispositivo real**: ambos cambios juntos, probados con
+`adb screencap` en vivo — resultado visiblemente más parecido a pestañas reales
+(fibras legibles, no ruido), sin regresión de la cámara. El estilo de pestaña
+seleccionado en la UI (catálogo, fuera del alcance de este documento) también
+influye mucho en qué tan "dramático"/denso se ve — estilos como "wispy"/"natural"
+son finos por diseño del asset, no por un bug de render.
+
+### 5.4 Ajuste fino: ancla X centrado pero Y sesgado a la esquina (2026-07-24)
+
+Con 5.1/5.2/5.3 ya confirmados, el usuario reportó que la posición seguía "casi"
+bien pero no exacta — un desfase pequeño, no el bug grande de la ceja.
+
+**Diagnóstico con logcat + screenshot de la misma pose**: `EyeAnchorCalculator.
+compute()` calculaba `anchor.x` como el promedio de TODOS los puntos del párpado
+superior (centrado), pero `anchor.y` (`edgeLidY`) como el promedio del 30% de
+puntos con MAYOR Y — para un párpado con forma de arco (más alto en el centro,
+más bajo en las esquinas, la forma real de un ojo), ese 30% con mayor Y son casi
+siempre las ESQUINAS, no una muestra representativa de la línea de pestañas en
+el centro. Con datos reales de logcat (pose de cabeza inclinada hacia abajo): el
+párpado superior iba de Y=300 en el centro a Y=314 en las esquinas, pero
+`edgeLidY` salía en 312.5 (esquina) mientras `meanX` (con el mismo conjunto de
+puntos) caía en el centro — un desfase real de ~8px en la imagen de análisis
+(480×640), con X centrado pero Y de esquina.
+
+**Fix**: `anchor.y` ahora usa `meanY` (promedio de Y de TODOS los puntos del
+párpado superior, el MISMO conjunto y peso que ya usa `meanX`) en vez de
+`edgeLidY` — quedan geométricamente consistentes entre sí, sin sesgo de esquina.
+
+**Confirmado en dispositivo real**: misma pose (cabeza inclinada hacia abajo),
+antes/después comparados por screenshot — la pestaña ahora sigue la curva real
+del párpado en vez de quedar desplazada hacia la altura de la esquina.
+
 ## 6. Curva del párpado y doblado de mesh (actualmente inactivo)
 
 `LashLineCurve.fit()` ajusta una parábola (`f(x) = ax² + bx + c`, mínimos
@@ -304,7 +362,8 @@ lenta de lo mismo. Hoy el modelo se ve rígido: solo se aplica el transform
 | Constante | Valor | Efecto |
 |---|---|---|
 | `HEIGHT_OFFSET` | 0.0 | Cuánto sube la RAÍZ del modelo (no el centro, ver sección 5.1) sobre el borde del párpado |
-| `WIDTH_MULTIPLIER` | 1.65 | Cuánto más ancho que el ojo real es el modelo |
+| `WIDTH_MULTIPLIER` | 1.65 | Cuánto más ancho que el ojo real es el modelo (escala X/Z) |
+| `HEIGHT_VOLUME_MULTIPLIER` | 1.4 | Escala EXTRA solo en Y (grosor/volumen vertical), sección 5.3 |
 | `LEFT_EYE_X_NUDGE` / `RIGHT_EYE_X_NUDGE` | 0.0 | Corrección fina de X por ojo (fracción de pantalla) |
 | `HEAD_TILT_MULTIPLIER` | 1.0 | Multiplicador extra sobre la corrección de escorzo |
 | `EYE_CLOSED_OPENNESS_THRESHOLD` / `EYE_OPEN_OPENNESS_THRESHOLD` | 0.12 / 0.22 | Umbral de apertura para ocultar/atenuar al parpadear |

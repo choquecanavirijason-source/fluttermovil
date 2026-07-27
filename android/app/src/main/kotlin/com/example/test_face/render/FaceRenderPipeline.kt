@@ -79,7 +79,7 @@ object FaceRenderPipeline {
     ): EyeTransform? {
         val eyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
-        val anchor = EyeAnchorCalculator.compute(eyeLandmarks) ?: return null
+        val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth) ?: return null
         val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
         val transform = EyeTransformCalculator.compute(
             headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,

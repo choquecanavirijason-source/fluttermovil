@@ -78,10 +78,31 @@ object RendererConfiguration {
     // entorno) y ajustar solo si hace falta un pequeño margen estético.
     const val HEIGHT_OFFSET = 0.0f
     const val HEAD_TILT_MULTIPLIER = 1.0f
+    // Multiplicador SOLO sobre el eje Y local del modelo (además del
+    // scaleFactor isotrópico que ya iguala el ancho al ojo real) — le da
+    // más volumen/grosor vertical a la pestaña sin estirarla más allá de
+    // las esquinas del ojo en X (que es lo que pasaría si en cambio se
+    // subiera WIDTH_MULTIPLIER, porque ese escala X/Y/Z por igual). 1.0 =
+    // sin cambio. Ver EyeTransformCalculator: también se usa (no solo
+    // WIDTH_MULTIPLIER×scaleFactor) para el desplazamiento de rootLocalY,
+    // porque ese desplazamiento es a lo largo del mismo eje Y que ahora
+    // tiene esta escala extra.
+    const val HEIGHT_VOLUME_MULTIPLIER = 1.4f
 
     // ── Corrección por ojo ──────────────────────────────────────────────
     const val RIGHT_EYE_X_NUDGE = 0.0f
     const val LEFT_EYE_X_NUDGE = 0.0f
+
+    // Con WIDTH_MULTIPLIER=1.65 el modelo se agranda simétricamente desde
+    // el centro del ojo — pero el lado interno (hacia la nariz/lagrimal)
+    // tiene mucho menos espacio anatómico libre que el lado externo (hacia
+    // la sien), así que esa misma expansión simétrica invade la nariz de
+    // un lado y se ve bien del otro (reportado en dispositivo real,
+    // 2026-07-24). NOSE_AVOID_SHIFT desplaza el ancla X, como fracción del
+    // ancho del ojo, hacia el corner EXTERNO (el más lejano al centro
+    // horizontal de la imagen — ver EyeAnchorCalculator) para reducir el
+    // invasión del lado interno sin tocar la escala. 0.0 = sin desplazar.
+    const val NOSE_AVOID_SHIFT = 0.58f
 
     // ── Parpadeo ────────────────────────────────────────────────────────
     const val EYE_CLOSED_OPENNESS_THRESHOLD = 0.12f

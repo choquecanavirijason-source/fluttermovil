@@ -30,44 +30,81 @@ data class EyeAnchor(
  * En coordenadas de imagen, Y crece HACIA ABAJO, así que "arriba en el
  * rostro" = Y menor. La fórmula es:
  *
- *   anchorY = edgeLidY - height * HEIGHT_OFFSET
+ *   anchorY = meanY - height * HEIGHT_OFFSET
  *
- * donde `edgeLidY` es el borde inferior del párpado superior (máximo Y
- * de los puntos upperLid) y HEIGHT_OFFSET ≥ 0 mueve el ancla hacia arriba
- * (Y más pequeño = más arriba en la imagen = hacia la frente).
+ * donde `meanY` es el promedio de Y de TODOS los puntos del párpado
+ * superior (el mismo conjunto y el mismo peso que `meanX`, así que X e Y
+ * quedan geométricamente consistentes entre sí) y HEIGHT_OFFSET ≥ 0 mueve
+ * el ancla hacia arriba (Y más pequeño = más arriba en la imagen = hacia
+ * la frente).
  *
- * HEIGHT_OFFSET = 0.0 (valor actual) → ancla en el borde del párpado, y como
- * ahora se ancla la RAÍZ real (no el centro), la raíz de la pestaña nace
- * exactamente ahí — anatómicamente correcto por defecto.
+ * CORRECCIÓN 2026-07-24 (ajuste fino): antes `anchorY` usaba `edgeLidY`
+ * (promedio del 30% de puntos con MAYOR Y del párpado superior) en vez de
+ * `meanY`. Para un párpado con forma de arco (más alto — Y menor — en el
+ * centro, más bajo en las esquinas, que es la forma real de un ojo), "el
+ * 30% con mayor Y" son casi siempre las ESQUINAS, no una muestra
+ * representativa de toda la línea de pestañas — mientras que `meanX` sí
+ * promedia TODOS los puntos (queda centrado). Esa mezcla (X centrado, Y de
+ * esquina) desplazaba el ancla verticalmente respecto a dónde está la
+ * línea de pestañas real en el CENTRO del ojo (donde cae `meanX`) — un
+ * desfase real de varios píxeles, confirmado con logcat en dispositivo
+ * real. `meanY` no tiene ese sesgo: es el centroide del mismo conjunto de
+ * puntos que ya usa `meanX`.
+ *
+ * HEIGHT_OFFSET = 0.0 (valor actual) → ancla en el centroide del párpado
+ * superior, y como ahora se ancla la RAÍZ real (no el centro del modelo),
+ * la raíz de la pestaña nace ahí — anatómicamente correcto por defecto.
  * HEIGHT_OFFSET > 0 → la raíz queda esa fracción de la altura del ojo por
- * ENCIMA del borde, solo si hiciera falta un margen estético.
+ * ENCIMA del centroide, solo si hiciera falta un margen estético.
  */
 object EyeAnchorCalculator {
 
-    fun compute(eye: EyeLandmarks): EyeAnchor? {
+    /** [imageWidth] — ancho de la imagen de análisis, en píxeles. Se usa
+     * SOLO para estimar qué esquina del ojo es la externa (hacia la sien)
+     * vs la interna (hacia la nariz), comparando cada esquina contra el
+     * centro horizontal de la imagen — ver [RendererConfiguration.
+     * NOSE_AVOID_SHIFT]. No depende de saber si es el ojo izquierdo o
+     * derecho de MediaPipe (evita esa ambigüedad — ver nota en
+     * [FaceLandmarkIndices]), solo de que el rostro esté razonablemente
+     * centrado en el cuadro (caso normal de selfie). */
+    fun compute(eye: EyeLandmarks, imageWidth: Float): EyeAnchor? {
         if (eye.upperLid.size < 2) return null
 
         val width = eye.width
         val height = eye.height
         if (width < 1f || height < 0.5f) return null
 
-        // Centro X del ojo = promedio de todos los puntos del párpado
+        // Centroide del párpado superior = promedio de X e Y de TODOS sus
+        // puntos. Ambos se calculan del MISMO conjunto de puntos con el
+        // MISMO peso, así que X e Y quedan geométricamente consistentes
+        // entre sí (corrección 2026-07-24, ver nota de la clase).
         val meanX = eye.upperLid.sumOf { it.x.toDouble() }.toFloat() / eye.upperLid.size
-
-        // Borde del párpado = el punto MÁS BAJO del párpado superior
-        // (máximo Y en coords de imagen = más abajo en la imagen = el
-        // borde visible del párpado donde nacen las pestañas).
-        // Se promedia el 30% inferior para estabilidad ante ruido.
-        val sortedByYDesc = eye.upperLid.sortedByDescending { it.y }
-        val edgeCount = (sortedByYDesc.size * 0.30f).toInt().coerceAtLeast(1)
-        val edgeLidY = sortedByYDesc.take(edgeCount).sumOf { it.y.toDouble() }.toFloat() / edgeCount
-
-        // El ancla sube (Y decrece) desde el borde del párpado según HEIGHT_OFFSET.
-        // El CENTRO del modelo 3D se coloca aquí.
-        val anchorY = edgeLidY - height * RendererConfiguration.HEIGHT_OFFSET
-        val anchor = ImagePoint(meanX, anchorY)
-
         val meanY = eye.upperLid.sumOf { it.y.toDouble() }.toFloat() / eye.upperLid.size
+
+        // Desplaza el ancla X hacia la esquina EXTERNA del ojo (la más
+        // lejana al centro horizontal de la imagen, asumiendo rostro
+        // centrado) — ver RendererConfiguration.NOSE_AVOID_SHIFT y la nota
+        // de la clase (2026-07-24): evita que la expansión simétrica de
+        // WIDTH_MULTIPLIER invada la nariz por el lado interno.
+        val cornerA = eye.ring.minByOrNull { it.x }
+        val cornerB = eye.ring.maxByOrNull { it.x }
+        val imageCenterX = imageWidth / 2f
+        val outerCornerX = if (cornerA != null && cornerB != null) {
+            if (kotlin.math.abs(cornerA.x - imageCenterX) > kotlin.math.abs(cornerB.x - imageCenterX)) {
+                cornerA.x
+            } else {
+                cornerB.x
+            }
+        } else {
+            meanX
+        }
+        val shiftSign = if (outerCornerX >= meanX) 1f else -1f
+        val shiftedX = meanX + shiftSign * width * RendererConfiguration.NOSE_AVOID_SHIFT
+
+        // El ancla sube (Y decrece) desde el centroide según HEIGHT_OFFSET.
+        val anchorY = meanY - height * RendererConfiguration.HEIGHT_OFFSET
+        val anchor = ImagePoint(shiftedX, anchorY)
+
         val tangent = fittedUpperLidTangent(eye.upperLid, meanX, meanY)
 
         return EyeAnchor(point = anchor, widthPx = width, heightPx = height, upperLidTangent = tangent)

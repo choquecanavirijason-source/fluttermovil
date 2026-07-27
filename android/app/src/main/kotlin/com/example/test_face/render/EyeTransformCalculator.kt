@@ -99,6 +99,11 @@ object EyeTransformCalculator {
         val desiredWorldWidth = eyeWidthWorld * RendererConfiguration.WIDTH_MULTIPLIER * tiltCorrection
         val rawScale = if (naturalSpan > 0f) desiredWorldWidth / naturalSpan else 1f
         val scaleFactor = if (rawScale.isFinite() && rawScale > 0f) rawScale else 1f
+        // Escala Y (volumen/grosor) por separado de X/Z (ancho/profundidad):
+        // sube el eje Y local del modelo un poco más que el resto, para que
+        // se vea más lleno sin estirarlo más allá de las esquinas del ojo
+        // en X (ver RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER).
+        val scaleY = scaleFactor * RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER
 
         // `position` de arriba es donde renderiza el ORIGEN local (0,0,0)
         // del modelo, no necesariamente su raíz visual — [rootLocalY] mide
@@ -106,18 +111,19 @@ object EyeTransformCalculator {
         // real respecto a ese origen (ver EyeModelSlot/RawMesh). Para que la
         // RAÍZ (no el origen) quede exactamente en `position` (el punto de
         // anclaje del ojo), el origen debe renderizar más ARRIBA que el
-        // anclaje, por la distancia local escalada al mismo factor que el
-        // resto del modelo (escala isotrópica, así que un mismo
-        // `scaleFactor` vale para X/Y/Z). `rootLocalY` es negativo (está
-        // por debajo del origen), así que `-rootLocalY` es positivo:
-        // `position - up*(scaleFactor*rootLocalY)` = `position +
-        // up*(scaleFactor*|rootLocalY|)`, es decir, sube el origen.
-        val rootCorrectedPosition = position - eyePlane.up * (scaleFactor * rootLocalY)
+        // anclaje, por la distancia local escalada al MISMO factor que se
+        // usa para el eje Y del modelo (`scaleY`, no `scaleFactor` — el
+        // desplazamiento es a lo largo del eje Y, así que tiene que usar la
+        // escala de ESE eje, ahora que X/Z y Y escalan distinto).
+        // `rootLocalY` es negativo (está por debajo del origen), así que
+        // `-rootLocalY` es positivo: `position - up*(scaleY*rootLocalY)` =
+        // `position + up*(scaleY*|rootLocalY|)`, es decir, sube el origen.
+        val rootCorrectedPosition = position - eyePlane.up * (scaleY * rootLocalY)
 
         return EyeTransform(
             position = rootCorrectedPosition,
             rotation = eyePlane.rotation,
-            scale = Float3(scaleFactor, scaleFactor, scaleFactor),
+            scale = Float3(scaleFactor, scaleY, scaleFactor),
         )
     }
 }
