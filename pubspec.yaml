@@ -117,6 +117,15 @@ flutter:
     - assets/modelos/wispy/wispy_left.glb
     - assets/modelos/wispy/wispy_right.glb
 
+    - assets/modelos/catclassic/cat_classic_left.glb
+    - assets/modelos/catclassic/cat_classic_right.glb
+
+    - assets/modelos/foxyeyex/foxy_intense_left.glb
+    - assets/modelos/foxyeyex/foxy_intense_right.glb
+
+    - assets/modelos/natural/natural_left.glb
+    - assets/modelos/natural/natural_right.glb
+
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

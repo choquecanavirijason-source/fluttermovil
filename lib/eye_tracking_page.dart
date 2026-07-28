@@ -35,6 +35,56 @@ import 'screens/widgets/save_options_sheet.dart';
 import 'recommendation_args.dart';
 import 'work_assistant_args.dart';
 
+/// Diseño de pestañas empaquetado en la app (bundle), con modelos .glb
+/// reales por ojo (no espejados como los que suben desde el admin, que solo
+/// guardan un archivo). Viven en `assets/modelos/` — ver pubspec.yaml.
+class _LocalLashPreset {
+  final String name;
+  final String thumbnailAsset;
+  final String leftModelAsset;
+  final String rightModelAsset;
+
+  const _LocalLashPreset({
+    required this.name,
+    required this.thumbnailAsset,
+    required this.leftModelAsset,
+    required this.rightModelAsset,
+  });
+}
+
+const _localLashPresets = [
+  _LocalLashPreset(
+    name: 'Cat Eye',
+    thumbnailAsset: 'assets/p1.png',
+    leftModelAsset: defaultLeftEyeModelAsset,
+    rightModelAsset: defaultRightEyeModelAsset,
+  ),
+  _LocalLashPreset(
+    name: 'Wispy',
+    thumbnailAsset: 'assets/p2.png',
+    leftModelAsset: 'assets/modelos/wispy/wispy_left.glb',
+    rightModelAsset: 'assets/modelos/wispy/wispy_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Cat Classic',
+    thumbnailAsset: 'assets/p3.png',
+    leftModelAsset: 'assets/modelos/catclassic/cat_classic_left.glb',
+    rightModelAsset: 'assets/modelos/catclassic/cat_classic_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Foxy Eye',
+    thumbnailAsset: 'assets/p4.png',
+    leftModelAsset: 'assets/modelos/foxyeyex/foxy_intense_left.glb',
+    rightModelAsset: 'assets/modelos/foxyeyex/foxy_intense_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Natural',
+    thumbnailAsset: 'assets/p5.png',
+    leftModelAsset: 'assets/modelos/natural/natural_left.glb',
+    rightModelAsset: 'assets/modelos/natural/natural_right.glb',
+  ),
+];
+
 class EyeTrackingPage extends ConsumerStatefulWidget {
   const EyeTrackingPage({super.key});
 
@@ -142,6 +192,31 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('No se pudo cargar el diseño "${design.name}"')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _switchingDesignModel = false);
+    }
+  }
+
+  /// Igual que [_switchDesignModel] pero para un diseño empaquetado en la
+  /// app (ver [_localLashPresets]): cada lado usa su propio asset real, sin
+  /// necesidad de descargar nada.
+  Future<void> _switchLocalPreset(_LocalLashPreset preset) async {
+    if (_switchingDesignModel) return;
+    setState(() => _switchingDesignModel = true);
+    try {
+      final leftPath = await extractEyeModelAssetToFile(preset.leftModelAsset);
+      final rightPath = await extractEyeModelAssetToFile(preset.rightModelAsset);
+      if (!mounted) return;
+      _leftModelPath = leftPath;
+      _rightModelPath = rightPath;
+      await _service.loadEyeModels(leftPath: leftPath, rightPath: rightPath);
+    } catch (e) {
+      debugPrint('No se pudo cargar el preset local ${preset.name}: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo cargar el diseño "${preset.name}"')),
         );
       }
     } finally {
@@ -663,8 +738,16 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   void _onLashSelect(int index) {
     setState(() => _selectedLashIndex = index);
-    if (index >= 0 && index < _currentCarouselDesigns.length) {
-      unawaited(_switchDesignModel(_currentCarouselDesigns[index]));
+    // Los presets locales van primero en el carrusel (ver build()), así que
+    // los primeros _localLashPresets.length índices son locales y el resto
+    // corresponde a _currentCarouselDesigns (catálogo remoto).
+    if (index < _localLashPresets.length) {
+      unawaited(_switchLocalPreset(_localLashPresets[index]));
+      return;
+    }
+    final remoteIndex = index - _localLashPresets.length;
+    if (remoteIndex >= 0 && remoteIndex < _currentCarouselDesigns.length) {
+      unawaited(_switchDesignModel(_currentCarouselDesigns[remoteIndex]));
     }
   }
 
@@ -691,7 +774,18 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     _currentCarouselDesigns =
         rawDesigns.where((d) => d.hasImage).toList(growable: false);
     final carousel = _currentCarouselDesigns;
-    final safeLash = _selectedLashIndex < carousel.length
+    // Presets locales primero (siempre disponibles, no dependen del
+    // catálogo remoto), después los del admin — ver _onLashSelect para el
+    // mapeo de índice a diseño.
+    final carouselImagePaths = [
+      ..._localLashPresets.map((p) => p.thumbnailAsset),
+      ...carousel.map((d) => d.imageUrl!),
+    ];
+    final carouselLabels = [
+      ..._localLashPresets.map((p) => p.name),
+      ...carousel.map((d) => d.name),
+    ];
+    final safeLash = _selectedLashIndex < carouselImagePaths.length
         ? _selectedLashIndex
         : 0;
 
@@ -766,17 +860,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 bottom: 70,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: carousel.isNotEmpty
+                  // Los presets locales garantizan que el carrusel nunca esté
+                // vacío, incluso si el catálogo remoto falla — pero si
+                // llegara a fallar la carga de los presets también (no
+                // debería), se ve el estado de error en vez de nada.
+                child: carouselImagePaths.isNotEmpty
                     ? BottomCarousel(
                         selectedLash: safeLash,
                         onSelect: _onLashSelect,
-                        imagePaths: carousel.map((d) => d.imageUrl!).toList(),
-                        labels: carousel.map((d) => d.name).toList(),
-                        isNetwork: true,
+                        imagePaths: carouselImagePaths,
+                        labels: carouselLabels,
                       )
-                    // Estado vacío/error visible en vez de no mostrar nada —
-                    // sin esto, un fallo silencioso del catálogo parecía que
-                    // "no hay diseños" sin dar pista de la causa real.
                     : Container(
                         height: 70,
                         alignment: Alignment.center,

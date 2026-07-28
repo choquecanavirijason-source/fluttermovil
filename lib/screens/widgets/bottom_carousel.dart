@@ -35,10 +35,12 @@ Uint8List? _decodeDataUri(String uri) {
 class BottomCarousel extends StatelessWidget {
   final int selectedLash;
   final ValueChanged<int> onSelect;
+  /// Cada entrada puede ser un asset local (`assets/...`), una data URI
+  /// (`data:image/...;base64,...`) o una URL de red (`http(s)://...`) — el
+  /// tipo se infiere del contenido del propio path en [_buildImage], así se
+  /// pueden mezclar diseños locales (bundle) y del catálogo remoto en la
+  /// misma lista sin coordinar un flag global.
   final List<String> imagePaths;
-  /// Si es true, [imagePaths] son URLs de red (diseños del catálogo remoto)
-  /// en vez de assets locales del bundle.
-  final bool isNetwork;
   /// Nombre a mostrar bajo cada miniatura (ej. "cglamour", "dolleye"), igual
   /// que en el modal de diseños (ver [EyeTrackingLashModal]). Si es null, no
   /// se muestra texto (comportamiento anterior).
@@ -49,7 +51,6 @@ class BottomCarousel extends StatelessWidget {
     required this.selectedLash,
     required this.onSelect,
     required this.imagePaths,
-    this.isNetwork = false,
     this.labels,
   });
 
@@ -150,7 +151,7 @@ class BottomCarousel extends StatelessWidget {
       color: Colors.grey,
       size: 32,
     );
-    if (!isNetwork) {
+    if (path.startsWith('assets/')) {
       return Image.asset(
         path,
         fit: BoxFit.contain,
