@@ -1,7 +1,12 @@
+import 'env.dart';
+
 /// Configuración central de la API (mismo esquema que Swagger en `/api/docs`).
+/// Delega en [Env] para que el switch local/producción (`Env.kUseLocalBackend`)
+/// aplique también a las pantallas que todavía usan este cliente legacy
+/// (`core/services/api_client.dart`) en vez del `dioProvider` más nuevo.
 class ApiConfig {
-  static const String host = 'http://34.55.150.142';
-  static const String apiPrefix = '/api';
+  static const String host = Env.host;
+  static const String apiPrefix = Env.kUseLocalBackend ? '' : '/api';
 
   /// Rutas relativas al prefijo `/api` (sin duplicar).
   static const String docs = '$apiPrefix/docs';
