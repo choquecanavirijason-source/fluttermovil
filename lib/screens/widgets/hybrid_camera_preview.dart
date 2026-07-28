@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show Factory;
 import 'package:flutter/gestures.dart' show OneSequenceGestureRecognizer;
 import 'package:flutter/material.dart';
@@ -85,5 +86,30 @@ Future<String> extractEyeModelAssetToFile(String assetPath) async {
   if (!await file.exists() || await file.length() != bytes.length) {
     await file.writeAsBytes(bytes, flush: true);
   }
+  return file.path;
+}
+
+/// Descarga (con caché en disco) el `.glb` de un diseño del catálogo remoto
+/// a un archivo local: igual que [extractEyeModelAssetToFile], `SceneView`
+/// solo carga desde ruta de archivo real. Se cachea por [cacheKey] — debe
+/// ser algo que cambie cuando el modelo cambie (ej. el nombre de archivo de
+/// la URL, no el id del diseño) para que reemplazar el `.glb` desde el
+/// admin sí invalide la copia local vieja en vez de reusarla para siempre.
+Future<String> downloadEyeModelToFile(
+  Dio dio,
+  String url,
+  String cacheKey,
+) async {
+  final safeKey = cacheKey.contains('.') ? cacheKey : '$cacheKey.glb';
+  final dir = await getTemporaryDirectory();
+  final file = File('${dir.path}/design_$safeKey');
+  if (await file.exists() && await file.length() > 0) {
+    return file.path;
+  }
+  final response = await dio.get<List<int>>(
+    url,
+    options: Options(responseType: ResponseType.bytes),
+  );
+  await file.writeAsBytes(response.data!, flush: true);
   return file.path;
 }

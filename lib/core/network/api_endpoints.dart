@@ -22,6 +22,10 @@ class ApiEndpoints {
   static const String catalogEffects = '/catalogs/effects';
   static const String catalogVolumes = '/catalogs/volumes';
   static const String catalogLashDesigns = '/catalogs/lash-designs';
+  /// "Diseños" del admin (combos con imagen + modelo 3D) — distinto de
+  /// [catalogLashDesigns] ("Tecnología" en el sidebar del admin, solo
+  /// nombres). Este es el catálogo real que usa el Probador.
+  static const String catalogDesigns = '/catalogs/designs';
 
   // Servicios
   static const String servicesList = '/services/';

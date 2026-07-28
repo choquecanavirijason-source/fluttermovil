@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'core/network/dio_client.dart';
 import 'core/recommendation/eye_shape_analyzer.dart';
 import 'core/theme/app_colors.dart';
 import 'features/catalogo/domain/entities/catalog_item.dart';
@@ -100,9 +101,53 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// Duración mínima que los ojos deben permanecer alineados antes de disparar la captura.
   static const Duration _alignmentHoldDuration = Duration(milliseconds: 900);
 
-  List<String> get _carouselImages => _selectedFilter == 0
-      ? LashCustomizationCatalog.compatibleImages
-      : LashCustomizationCatalog.explorarImages;
+  /// Diseños del catálogo mostrados actualmente en el carrusel inferior
+  /// ("Compatible" = filtrados en vivo por forma de ojo, "Explorar" = todo
+  /// el catálogo). Se actualiza en cada build (ver [build]) y lo usa
+  /// [_onLashSelect] para saber a qué diseño corresponde el índice tocado.
+  List<CatalogItem> _currentCarouselDesigns = [];
+
+  bool _switchingDesignModel = false;
+
+  Future<void> _switchDesignModel(CatalogItem design) async {
+    final url = design.model3dAbsoluteUrl;
+    if (url == null || _switchingDesignModel) return;
+    setState(() => _switchingDesignModel = true);
+    try {
+      final dio = ref.read(dioProvider);
+      // La clave de caché es el nombre de archivo de la URL (backend genera
+      // uno nuevo al azar cada vez que se sube un modelo), no el id del
+      // diseño: si se cacheara por id, reemplazar el .glb desde el admin
+      // nunca invalidaría la copia local vieja.
+      final cacheKey = Uri.parse(url).pathSegments.isNotEmpty
+          ? Uri.parse(url).pathSegments.last
+          : design.id.toString();
+      final path = await downloadEyeModelToFile(dio, url, cacheKey);
+      if (!mounted) return;
+      // El backend solo guarda un .glb por diseño (no hay modelo separado
+      // por ojo izq/der como en el set por defecto cateyeleft/cateyeright),
+      // así que se carga el mismo archivo en ambos lados.
+      _leftModelPath = path;
+      _rightModelPath = path;
+      // A diferencia de _rebindPreview (recrea el AndroidView completo —
+      // SceneView + motor Filament nuevos, dejando el anterior sin liberar
+      // del todo: detachSceneView solo destruye los nodos del modelo, no el
+      // SceneView/Engine en sí), esto actualiza los modelos sobre el mismo
+      // SceneView que ya está vivo. Usar _rebindPreview aquí (como se hacía
+      // antes) filtraba un motor gráfico por cada diseño tocado — con el
+      // tiempo/varios cambios de diseño terminaba tronando la app.
+      await _service.loadEyeModels(leftPath: path, rightPath: path);
+    } catch (e) {
+      debugPrint('No se pudo cargar el modelo del diseño ${design.id}: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo cargar el diseño "${design.name}"')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _switchingDesignModel = false);
+    }
+  }
 
   /// Resuelve, una única vez, las rutas de archivo de los .glb de pestañas
   /// (cateyeleft/cateyeright). No dispara ninguna carga en Kotlin: las rutas
@@ -149,6 +194,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         if (mounted) setState(() => _eyeTypes = items);
       } catch (_) {}
     });
+
+    // Fuerza recarga del catálogo de "Diseños" al entrar: autoDispose
+    // debería refrescarlo solo, pero invalidar explícitamente garantiza que
+    // un diseño/modelo nuevo creado en el admin aparezca sin depender de esa
+    // limpieza implícita. Se hace en addPostFrameCallback (no directo en
+    // initState) porque ref.invalidate toca el árbol de widgets y eso
+    // requiere que el build inicial ya haya terminado.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.invalidate(designCatalogListProvider);
+    });
   }
 
   @override
@@ -162,11 +218,19 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
-  Future<void> _restartCameraFromLifecycle() async {
+  Future<void> _restartCameraFromLifecycle() => _rebindPreview();
+
+  /// Fuerza recreación del `AndroidView` (nueva `key`) y re-suscribe el
+  /// stream de tracking. Se usa tanto al volver de background (lifecycle)
+  /// como al cambiar de diseño desde el carrusel: en ambos casos el nuevo
+  /// `.glb` ya está resuelto en `_leftModelPath`/`_rightModelPath` *antes*
+  /// de llamar esto, y viaja como `creationParams` al crearse la vista.
+  Future<void> _rebindPreview() async {
     if (!mounted) return;
     setState(() => _previewSession++);
     await Future<void>.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
+    _sub?.cancel();
     _sub = _service.trackingStream.listen(
       (frame) {
         if (!mounted) return;
@@ -186,10 +250,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     await _service.refreshPreviewBind();
-    // El GLB ya no requiere recarga aquí: _leftModelPath/_rightModelPath
-    // siguen resueltos en el State, y el nuevo AndroidView (creado con la
-    // key `eye_preview_$_previewSession`) los recibe como creationParams al
-    // crearse — Kotlin los carga en el mismo create(), sin timers.
   }
 
   Future<void> _start() async {
@@ -251,9 +311,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _selectedFilter = index;
       _showTransparentMenu = true;
       _activeCategory = null;
-      if (_selectedLashIndex >= _carouselImages.length) {
-        _selectedLashIndex = 0;
-      }
+      // La lista de diseños del nuevo filtro recién se resuelve en el
+      // próximo build (viene de un provider); reiniciar el índice evita
+      // referenciar una posición fuera de rango del filtro anterior.
+      _selectedLashIndex = 0;
     });
   }
 
@@ -602,14 +663,34 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   void _onLashSelect(int index) {
     setState(() => _selectedLashIndex = index);
+    if (index >= 0 && index < _currentCarouselDesigns.length) {
+      unawaited(_switchDesignModel(_currentCarouselDesigns[index]));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Se mantiene el watch (sin guardar el resultado) para que esta pantalla
-    // se reconstruya si el catálogo de diseños de pestañas cambia en remoto.
-    ref.watch(filteredCatalogProvider(CatalogKind.lashDesign));
-    final carousel = _carouselImages;
+    // "Compatible": diseños del catálogo filtrados en vivo por la forma de
+    // ojo detectada (universales + los que coincidan), ya resuelto por
+    // filteredCatalogProvider. "Explorar": el catálogo completo sin filtrar.
+    final compatibleAsync = ref.watch(filteredDesignCatalogProvider);
+    final allAsync = ref.watch(designCatalogListProvider);
+    final activeAsyncError =
+        (_selectedFilter == 0 ? compatibleAsync : allAsync).error;
+    if (activeAsyncError != null) {
+      debugPrint('[lash-designs] error cargando catálogo: $activeAsyncError');
+    }
+    final rawDesigns =
+        (_selectedFilter == 0
+            ? compatibleAsync.valueOrNull
+            : allAsync.valueOrNull) ??
+        const [];
+    // Solo diseños con imagen entran al carrusel — se mantiene esta MISMA
+    // lista (filtrada) en _currentCarouselDesigns para que el índice tocado
+    // en el carrusel siga correspondiendo al diseño correcto en _onLashSelect.
+    _currentCarouselDesigns =
+        rawDesigns.where((d) => d.hasImage).toList(growable: false);
+    final carousel = _currentCarouselDesigns;
     final safeLash = _selectedLashIndex < carousel.length
         ? _selectedLashIndex
         : 0;
@@ -685,11 +766,35 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 bottom: 70,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: BottomCarousel(
-                    selectedLash: safeLash,
-                    onSelect: _onLashSelect,
-                    imagePaths: carousel,
-                  ),
+                  child: carousel.isNotEmpty
+                    ? BottomCarousel(
+                        selectedLash: safeLash,
+                        onSelect: _onLashSelect,
+                        imagePaths: carousel.map((d) => d.imageUrl!).toList(),
+                        labels: carousel.map((d) => d.name).toList(),
+                        isNetwork: true,
+                      )
+                    // Estado vacío/error visible en vez de no mostrar nada —
+                    // sin esto, un fallo silencioso del catálogo parecía que
+                    // "no hay diseños" sin dar pista de la causa real.
+                    : Container(
+                        height: 70,
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          activeAsyncError != null
+                              ? 'Error: $activeAsyncError'
+                              : 'Sin diseños de pestañas en el catálogo',
+                          style: const TextStyle(color: Colors.white, fontSize: 11),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
                 ),
               ),
             if (_activeCategory != null)

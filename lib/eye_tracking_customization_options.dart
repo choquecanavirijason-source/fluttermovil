@@ -5,21 +5,6 @@
 class LashCustomizationCatalog {
   const LashCustomizationCatalog._();
 
-  static const List<String> compatibleImages = [
-    'assets/p1.png',
-    'assets/p2.png',
-    'assets/p3.png',
-    'assets/p4.png',
-    'assets/p5.png',
-  ];
-
-  /// Solo assets declarados en pubspec (p6 existe; p7/p8 no).
-  static const List<String> explorarImages = [
-    'assets/p4.png',
-    'assets/p5.png',
-    'assets/p6.png',
-  ];
-
   static const List<String> _designImages = [
     'assets/p1.png',
     'assets/p2.png',

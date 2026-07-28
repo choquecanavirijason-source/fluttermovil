@@ -42,6 +42,10 @@ class CatalogItem {
   bool get hasImage => imageUrl != null;
   bool get has3dModel => model3dUrl != null && model3dUrl!.isNotEmpty;
 
+  /// El backend devuelve `model_3d_url` como ruta relativa (`/media/...`),
+  /// igual que `image` — hace falta el mismo prefijo de host que [imageUrl].
+  String? get model3dAbsoluteUrl => Env.mediaUrl(model3dUrl);
+
   factory CatalogItem.fromDto(CatalogItemDto d, CatalogKind kind) {
     final name = d.name.trim();
     final desc = d.description?.trim();

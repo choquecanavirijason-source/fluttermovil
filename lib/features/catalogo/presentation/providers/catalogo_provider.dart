@@ -46,3 +46,29 @@ final filteredCatalogProvider =
     }
   },
 );
+
+/// "Diseños" del admin (`/catalogs/designs`, combos con imagen + modelo 3D)
+/// — el catálogo real que usa el carrusel del Probador, distinto de
+/// [catalogListProvider]/[filteredCatalogProvider] con `CatalogKind.lashDesign`
+/// (que apunta a `/catalogs/lash-designs`, solo nombres sin imagen).
+final designCatalogListProvider =
+    FutureProvider.autoDispose<List<CatalogItem>>(
+  (ref) => ref.read(catalogRepositoryProvider).listDesigns(),
+);
+
+/// Igual que [filteredCatalogProvider] pero sobre [designCatalogListProvider].
+final filteredDesignCatalogProvider =
+    StreamProvider.autoDispose<List<CatalogItem>>((ref) async* {
+  final service = ref.read(nativeEyeTrackingServiceProvider);
+  final allItems = await ref.watch(designCatalogListProvider.future);
+  yield allItems;
+
+  await for (final shape in service.eyeShapeStream) {
+    final shapeLower = shape.toLowerCase();
+    final filtered = allItems.where((item) {
+      final compat = item.tipoOjoCompatible?.toLowerCase();
+      return compat == null || compat == shapeLower;
+    }).toList();
+    yield filtered.isEmpty ? allItems : filtered;
+  }
+});

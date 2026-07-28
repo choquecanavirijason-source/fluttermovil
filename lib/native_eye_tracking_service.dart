@@ -90,6 +90,11 @@ class NativeEyeTrackingService {
   /// uno anclado a cada ojo. `null` en cualquiera de los dos deja ese ojo
   /// sin modelo. Llamar varias veces con las mismas rutas es seguro: Kotlin
   /// evita recargar si el modelo ya está cargado.
+  /// Relanza cualquier error del canal (antes se tragaba silenciosamente con
+  /// solo un debugPrint) — el llamador (ver `_switchDesignModel` en
+  /// EyeTrackingPage) necesita enterarse si el cambio de modelo falló para
+  /// poder avisarle a la usuaria, en vez de fallar en silencio y que parezca
+  /// que "el diseño no cambia".
   Future<void> loadEyeModels({String? leftPath, String? rightPath}) async {
     try {
       await _methodChannel.invokeMethod<void>(
@@ -98,9 +103,11 @@ class NativeEyeTrackingService {
       );
     } on PlatformException catch (e) {
       debugPrint('[EyeTracking] loadEyeModels PlatformException: ${e.code} — ${e.message}');
+      rethrow;
     } catch (e) {
       // MissingPluginException u otro error inesperado del canal.
       debugPrint('[EyeTracking] loadEyeModels error: $e');
+      rethrow;
     }
   }
 }

@@ -13,28 +13,17 @@ class CatalogRepositoryImpl implements CatalogRepository {
   @override
   Future<List<CatalogItem>> list(CatalogKind kind) async {
     final dtos = await _api.list(kind);
-    final items = dtos.map((d) => CatalogItem.fromDto(d, kind)).toList()
+    return dtos.map((d) => CatalogItem.fromDto(d, kind)).toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // TODO: REMOVE MOCK 3D DATA
-    // Inyección temporal para probar el flujo 3D antes de que el backend esté
-    // listo. Eliminar este bloque cuando la API devuelva 'model_3d_url' y
-    // 'tipo_ojo_compatible' en los endpoints de catálogo.
-    // ─────────────────────────────────────────────────────────────────────────
-    final itemsWithMock = items
-        .map(
-          (item) => item.copyWith(
-            model3dUrl:
-                'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models'
-                '/master/2.0/Box/glTF-Binary/Box.glb',
-            tipoOjoCompatible: 'almendrado',
-          ),
-        )
-        .toList();
-    // ─────────────────────────────────────────────────────────────────────────
-
-    return itemsWithMock;
+  @override
+  Future<List<CatalogItem>> listDesigns() async {
+    final dtos = await _api.listDesigns();
+    return dtos
+        .map((d) => CatalogItem.fromDto(d, CatalogKind.lashDesign))
+        .toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 }
 
