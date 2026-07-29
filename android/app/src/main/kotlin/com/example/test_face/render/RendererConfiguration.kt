@@ -116,4 +116,46 @@ object RendererConfiguration {
 
     // ── Calidad de render ───────────────────────────────────────────────
     const val MSAA_SAMPLE_COUNT = 4
+
+    // ── Doblado de pestaña según curva del párpado (LashMeshBender) ──────
+    // Reconstruir la malla (List<Geometry.Vertex>, 17k-85k objetos según el
+    // diseño) y subirla a GPU vía geometry.setVertices() es caro: hacerlo en
+    // CADA resultado de MediaPipe (~30Hz+) causó un OutOfMemoryError real en
+    // dispositivo (GC bloqueando 600-850ms seguidos — ver ESTADO_ACTUAL.md
+    // sección 3.4). Este intervalo limita a cuántas veces por segundo como
+    // MÁXIMO se permite recalcular el doblado, independiente de la
+    // frecuencia real de MediaPipe — reduce la basura generada por segundo
+    // en la misma proporción. 120ms ≈ 8.3 Hz: la curva del párpado cambia
+    // lento respecto al movimiento de cabeza (que ya tiene su propio
+    // suavizado/predicción vía PoseInterpolator, no depende de esto), así
+    // que a esta tasa no debería notarse como "atrasado", solo menos fluido
+    // que 60Hz. Si en dispositivo real esto SIGUE generando presión de GC
+    // visible, subir este valor (menos Hz) antes de tocar el resto —
+    // primera palanca de ajuste, no hace falta tocar LashMeshBender.
+    // Subido de 120ms a 220ms (2026-07-29): con el doblado REACTIVADO en
+    // dispositivo real (no solo el diagnóstico) apareció lag notorio — cada
+    // recalculo reconstruye una List<Geometry.Vertex> de miles de objetos y
+    // la sube a GPU vía setVertices() en el hilo principal; a 8.3Hz por CADA
+    // ojo (hasta ~16.6 subidas/seg combinadas) eso satura el hilo principal.
+    // ~4.5Hz por ojo sigue siendo imperceptible como "atraso" (la curva del
+    // párpado cambia lento respecto al movimiento de cabeza, que tiene su
+    // propio suavizado vía PoseInterpolator) pero reduce el trabajo de GPU
+    // upload/GC a poco más de la mitad. Ver también EyeModelSlot.bendPending,
+    // que evita que se seguya encolando trabajo si el hilo principal ya va
+    // atrasado.
+    const val LASH_BEND_MIN_INTERVAL_NANOS = 220_000_000L
+
+    // Multiplicador de intensidad del doblado (0 = recto, 1 = la curva
+    // calculada tal cual). El ajuste de LashLineCurve, aunque matemáticamente
+    // correcto (mínimos cuadrados, verificado con y sin centrado numérico —
+    // el resultado no cambió), produce una desviación de magnitud mayor a
+    // la que se ve bien en pantalla (confirmado en dispositivo real,
+    // BEND_DIAG 2026-07-29: hasta ~1 unidad de malla de desviación sobre un
+    // span de ~3, es decir hasta ~30% del ancho total del modelo). En vez
+    // de seguir cazando la causa exacta de esa sobre-estimación bajo
+    // presión de tiempo de entrega, se amortigua la salida a un nivel que
+    // se ve bien — subir/bajar ESTE número es la primera palanca de ajuste
+    // visual, no hace falta tocar LashMeshBender ni LashLineCurve para
+    // afinar cuánto se curva.
+    const val LASH_BEND_STRENGTH = 0.25f
 }

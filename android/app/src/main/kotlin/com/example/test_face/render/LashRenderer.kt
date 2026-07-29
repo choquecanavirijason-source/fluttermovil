@@ -262,21 +262,16 @@ class LashRenderer(
         val damped = smoothed.copy(scale = smoothed.scale * damping)
         val nowNanos = System.nanoTime()
 
-        // DESACTIVADO: LashMeshBender.bend() reconstruye una List<Geometry.
-        // Vertex> completa (17k-85k objetos según el diseño) y
-        // geometry.setVertices() la vuelve a subir a GPU en CADA resultado
-        // de MediaPipe. En dispositivo esto no fue "lento" — tumbó el
-        // proceso: GC bloqueando 600-850ms seguidos, heap al tope de
-        // 192MB, terminando en OutOfMemoryError real (ver logcat del
-        // crash). El engine sigue en `engine` (parámetro) y `slot.geometry`
-        // sigue existiendo con la malla ORIGINAL sin doblar (asignada una
-        // única vez al cargar, en loadIntoSlot — esa parte es barata,
-        // ocurre una vez, no en cada frame) — el modelo se sigue viendo
-        // rígido, como antes de esta ronda, pero sin crashear. Reactivar
-        // esto necesita un rediseño que no reasigne buffers por vértice
-        // cada frame (p. ej. ByteBuffer directo reusado + throttling real),
-        // no una versión "más lenta" de lo mismo. `engine` queda sin usar
-        // acá a propósito, mientras el doblado está desactivado.
+        // DESACTIVADO DE NUEVO (2026-07-29): reactivar el doblado (aun con
+        // throttle + LASH_BEND_STRENGTH amortiguando + el guard bendPending)
+        // seguía metiendo lag notorio en dispositivo real — cada
+        // recalculo reconstruye miles de Vertex y los sube a GPU en el hilo
+        // principal, y a la cercanía de la entrega la prioridad es un
+        // modelo PLANO pero estable/fluido antes que uno curveado pero con
+        // lag. Toda la infraestructura (LashLineCurve, LashMeshBender,
+        // LASH_BEND_STRENGTH, bendPending) queda intacta para retomarlo con
+        // más tiempo — solo esta llamada queda apagada.
+        // engine/rawMesh/geometry quedan sin usar acá a propósito.
 
         // Push directo (sin mainHandler.post): evita añadir ~16ms de latencia
         // extra por esperar al próximo despacho del hilo principal. Los campos

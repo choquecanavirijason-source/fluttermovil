@@ -33,13 +33,32 @@ class EyeModelSlot {
     val interpolator = PoseInterpolator()
 
     /** Malla original sin doblar, parseada del .glb (ver [GlbMeshReader]) —
-     * `null` si el parseo falló o el modelo no tiene un `RenderableNode`. */
-    var rawMesh: RawMesh? = null
+     * `null` si el parseo falló o el modelo no tiene un `RenderableNode`.
+     * @Volatile: se escribe en el hilo de carga (loadIntoSlot) y se lee
+     * desde el hilo de MediaPipe (applyTransform), mismo motivo que
+     * [rootLocalY]. */
+    @Volatile var rawMesh: RawMesh? = null
 
     /** Geometry propia activa en el nodo (reemplaza la que carga gltfio por
-     * defecto), actualizada en cada resultado de MediaPipe vía
-     * [LashMeshBender]. */
-    var geometry: Geometry? = null
+     * defecto), actualizada según throttle vía [LashMeshBender] — ver
+     * [RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS]. @Volatile por la
+     * misma razón que [rawMesh]. */
+    @Volatile var geometry: Geometry? = null
+
+    /** Marca de tiempo (nanoTime) del último doblado aplicado — throttle de
+     * [LashMeshBender.bend], ver [RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS].
+     * Se lee y escribe solo desde el hilo de MediaPipe (mismo hilo que llama
+     * a applyTransform en cada resultado), no necesita @Volatile. */
+    var lastBendNanos = 0L
+
+    /** `true` mientras hay un `geometry.setVertices()` encolado en el hilo
+     * principal sin ejecutar todavía. Sin este guard, si el hilo principal
+     * va lento (jank), applyTransform sigue encolando `Runnable`s nuevos en
+     * cada resultado de MediaPipe más rápido de lo que el principal los
+     * puede consumir — la cola crece sin límite y el lag se acumula en vez
+     * de estabilizarse. @Volatile: escrito desde el hilo de MediaPipe y
+     * desde el hilo principal (dentro del propio Runnable). */
+    @Volatile var bendPending = false
 
     fun reset() {
         node = null
@@ -50,5 +69,7 @@ class EyeModelSlot {
         interpolator.reset()
         rawMesh = null
         geometry = null
+        lastBendNanos = 0L
+        bendPending = false
     }
 }

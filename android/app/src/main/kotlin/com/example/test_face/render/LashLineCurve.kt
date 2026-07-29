@@ -19,13 +19,45 @@ class LashLineCurve private constructor(
     private val a: Float,
     private val b: Float,
     private val c: Float,
+    /** Rango real (en `localX`, píxeles) de los puntos usados para el
+     * ajuste — ver [fit]. [deviationAt]/[slopeAt] hacen clamp de su entrada
+     * a este rango antes de evaluar: una cuadrática evaluada MÁS ALLÁ de
+     * donde se ajustó diverge rápido (por diseño de cualquier polinomio),
+     * y [LashMeshBender] necesita evaluar hasta los BORDES de la malla del
+     * modelo (± mitad del ancho del ojo), que caen fuera del rango angosto
+     * de los landmarks reales del párpado usados en [fit] — confirmado en
+     * dispositivo real: sin este clamp, la desviación en los bordes salía
+     * 5-10× más grande que en el centro, "disparando" la pestaña hacia la
+     * ceja (ver diagnóstico BEND_DIAG, 2026-07-29). Más allá del rango
+     * fitteado, se sostiene el valor/pendiente del borde en vez de seguir
+     * la parábola — una extrapolación lineal (recta tangente en el borde),
+     * no una curva descontrolada.
+     */
+    private val minLocalX: Float,
+    private val maxLocalX: Float,
 ) {
-    fun deviationAt(localX: Float): Float = a * localX * localX + b * localX + c
+    fun deviationAt(localX: Float): Float {
+        val clamped = localX.coerceIn(minLocalX, maxLocalX)
+        val base = a * clamped * clamped + b * clamped + c
+        if (localX == clamped) return base
+        // Fuera del rango fitteado: extrapolación LINEAL desde el borde,
+        // usando la pendiente real de la curva en ese borde (no la propia
+        // parábola, que seguiría acelerando). "clamped" es minLocalX o
+        // maxLocalX acá porque localX != clamped.
+        val edgeSlope = 2f * a * clamped + b
+        return base + edgeSlope * (localX - clamped)
+    }
 
     /** Pendiente local (derivada de [deviationAt]) — usada para inclinar la
      * normal del vértice al doblar, no solo desplazarlo (ver
-     * [LashMeshBender]; si no, la iluminación se ve plana/incorrecta). */
-    fun slopeAt(localX: Float): Float = 2f * a * localX + b
+     * [LashMeshBender]; si no, la iluminación se ve plana/incorrecta).
+     * Fuera del rango fitteado, [deviationAt] extrapola linealmente, así
+     * que la pendiente ahí es constante (la del borde), no la de la
+     * parábola completa. */
+    fun slopeAt(localX: Float): Float {
+        val clamped = localX.coerceIn(minLocalX, maxLocalX)
+        return 2f * a * clamped + b
+    }
 
     companion object {
         /**
@@ -41,6 +73,37 @@ class LashLineCurve private constructor(
             val perpX = -tangent.y
             val perpY = tangent.x
 
+            // Primera pasada: proyectar a (localX, localY) relativos a
+            // `anchor` y calcular su media en X. `anchor` puede estar MUY
+            // lejos del centro real de la nube de puntos del párpado — no es
+            // un descuido, es a propósito: EyeAnchorCalculator desplaza el
+            // ancla ~68% del ancho del ojo hacia la esquina externa
+            // (NOSE_AVOID_SHIFT), para que el modelo 3D no invada la nariz al
+            // posicionarse. Pero ajustar mínimos cuadrados con datos tan
+            // descentrados mal-condiciona las ecuaciones normales (el
+            // término x⁴ crece muchísimo más rápido que los demás cuando |x|
+            // es grande) y dispara coeficientes a/b/c grandes e inestables
+            // — confirmado en dispositivo real (BEND_DIAG, 2026-07-29):
+            // desviación fuertemente asimétrica entre ambos bordes del ojo,
+            // firma clásica de mal condicionamiento numérico, no de curvatura
+            // anatómica real.
+            val locals = ArrayList<Pair<Double, Double>>(points.size)
+            var sumLocalX = 0.0
+            for (p in points) {
+                val dx = (p.x - anchor.x).toDouble()
+                val dy = (p.y - anchor.y).toDouble()
+                val localX = dx * tangent.x + dy * tangent.y
+                val localY = dx * perpX + dy * perpY
+                locals.add(localX to localY)
+                sumLocalX += localX
+            }
+            val meanLocalX = sumLocalX / points.size
+
+            // Segunda pasada: arma las ecuaciones normales con X CENTRADO en
+            // la media real de los puntos (no en `anchor`) — el mismo truco
+            // de estabilidad numérica que cualquier regresión polinómica
+            // (centering). El resultado (aC, bC, cC) describe la curva en
+            // ESE sistema centrado.
             var s0 = 0.0
             var s1 = 0.0
             var s2 = 0.0
@@ -49,12 +112,10 @@ class LashLineCurve private constructor(
             var t0 = 0.0
             var t1 = 0.0
             var t2 = 0.0
-            for (p in points) {
-                val dx = (p.x - anchor.x).toDouble()
-                val dy = (p.y - anchor.y).toDouble()
-                val localX = dx * tangent.x + dy * tangent.y
-                val localY = dx * perpX + dy * perpY
-
+            var minLocalX = Float.POSITIVE_INFINITY
+            var maxLocalX = Float.NEGATIVE_INFINITY
+            for ((localXRaw, localY) in locals) {
+                val localX = localXRaw - meanLocalX
                 val x2 = localX * localX
                 s0 += 1.0
                 s1 += localX
@@ -64,16 +125,41 @@ class LashLineCurve private constructor(
                 t0 += localY
                 t1 += localY * localX
                 t2 += localY * x2
+
+                val localXf = localXRaw.toFloat()
+                if (localXf < minLocalX) minLocalX = localXf
+                if (localXf > maxLocalX) maxLocalX = localXf
             }
 
-            // Ecuaciones normales de mínimos cuadrados para y = a·x² + b·x + c.
+            // Ecuaciones normales de mínimos cuadrados para y = aC·x'² + bC·x' + cC,
+            // con x' = localX - meanLocalX (centrado).
             val solved = solve3x3(
                 doubleArrayOf(s4, s3, s2, t2),
                 doubleArrayOf(s3, s2, s1, t1),
                 doubleArrayOf(s2, s1, s0, t0),
             ) ?: return null
+            val aC = solved[0]
+            val bC = solved[1]
+            val cC = solved[2]
 
-            return LashLineCurve(a = solved[0].toFloat(), b = solved[1].toFloat(), c = solved[2].toFloat())
+            // Expande de vuelta a coordenadas relativas a `anchor` (sin
+            // centrar) — el contrato externo de LashLineCurve (deviationAt/
+            // slopeAt reciben localX relativo a `anchor`, igual que
+            // LashMeshBender ya espera) no cambia, solo el CÁLCULO interno
+            // fue más estable. Álgebra: aC·(x-m)² + bC·(x-m) + cC
+            //   = aC·x² + (bC - 2·aC·m)·x + (aC·m² - bC·m + cC)
+            val m = meanLocalX
+            val a = aC
+            val b = bC - 2.0 * aC * m
+            val c = aC * m * m - bC * m + cC
+
+            return LashLineCurve(
+                a = a.toFloat(),
+                b = b.toFloat(),
+                c = c.toFloat(),
+                minLocalX = minLocalX,
+                maxLocalX = maxLocalX,
+            )
         }
 
         /** Resuelve un sistema lineal 3x3 (`m·x = b`, última columna de cada

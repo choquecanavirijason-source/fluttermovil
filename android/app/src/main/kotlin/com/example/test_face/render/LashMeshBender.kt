@@ -31,8 +31,13 @@ object LashMeshBender {
     /** `curve == null` o `eyeWidthPx <= 0` -> sin curvatura adicional para
      * este frame: devuelve los vértices originales tal cual (barato, sin
      * recorrer nada). */
-    fun bend(raw: RawMesh, curve: LashLineCurve?, eyeWidthPx: Float): List<Geometry.Vertex> {
-        if (curve == null || eyeWidthPx <= 0f) return raw.vertices
+    fun bend(
+        raw: RawMesh,
+        curve: LashLineCurve?,
+        eyeWidthPx: Float,
+        strength: Float = RendererConfiguration.LASH_BEND_STRENGTH,
+    ): List<Geometry.Vertex> {
+        if (curve == null || eyeWidthPx <= 0f || strength <= 0f) return raw.vertices
 
         val span = raw.maxX - raw.minX
         if (span <= 1e-4f) return raw.vertices
@@ -48,8 +53,13 @@ object LashMeshBender {
             val t = (pos.x - raw.minX) / span
             val pixelLocalX = (t - 0.5f) * eyeWidthPx
 
-            val deviationPx = curve.deviationAt(pixelLocalX)
-            val slope = curve.slopeAt(pixelLocalX)
+            // `strength` amortigua la desviación calculada (ver
+            // RendererConfiguration.LASH_BEND_STRENGTH) — se escala ANTES de
+            // la pendiente/normal también, así la inclinación de la normal
+            // queda consistente con el desplazamiento real aplicado (si no,
+            // la iluminación insinuaría más curva de la que realmente se ve).
+            val deviationPx = curve.deviationAt(pixelLocalX) * strength
+            val slope = curve.slopeAt(pixelLocalX) * strength
 
             val newPosition = Float3(pos.x, pos.y + deviationPx * meshUnitsPerPixel, pos.z)
             val newNormal = tiltNormal(vertex.normal ?: DEFAULT_NORMAL, slope)
