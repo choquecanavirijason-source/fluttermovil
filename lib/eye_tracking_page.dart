@@ -107,6 +107,39 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   bool _showMapping = false;
 
+  /// true mientras alguna de las hojas del flujo "Guardar diseño" (opciones,
+  /// selector de cliente) está abierta. Solo se usa para que
+  /// [_setHidingCameraForSaveSheet] sea idempotente (no repetir la llamada
+  /// nativa si ya está en el estado pedido) — no maneja ningún widget
+  /// directamente: la cámara en vivo queda visible todo el tiempo, lo único
+  /// que se oculta es el modelo 3D de la pestaña (ver más abajo).
+  bool _hidingCameraForSaveSheet = false;
+
+  /// Descarga (o restaura) el modelo 3D de pestaña en el SceneView nativo
+  /// mientras dura el flujo de guardado — la cámara en vivo sigue
+  /// mostrándose normal, solo desaparece la pestaña superpuesta, para no
+  /// distraer/tapar mientras se busca una clienta en la hoja de abajo.
+  /// Idempotente: si ya está en el estado pedido, no hace nada.
+  Future<void> _setHidingCameraForSaveSheet(bool hide) async {
+    if (!mounted || _hidingCameraForSaveSheet == hide) return;
+    setState(() => _hidingCameraForSaveSheet = hide);
+    try {
+      if (hide) {
+        await _service.loadEyeModels(leftPath: null, rightPath: null);
+      } else {
+        await _service.loadEyeModels(
+          leftPath: _leftModelPath,
+          rightPath: _rightModelPath,
+        );
+      }
+    } catch (e) {
+      debugPrint('[EyeTracking] no se pudo ${hide ? 'ocultar' : 'restaurar'} '
+          'el modelo para el flujo de guardado: $e');
+      // El scrim negro sigue tapando la cámara visualmente aunque esto
+      // falle, así que no hace falta propagar el error a la usuaria.
+    }
+  }
+
   int _selectedFilter = 0;
   int _selectedLashIndex = 0;
   int _selectedDesignIndex = 2;
@@ -670,6 +703,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   void _showSaveDesignSheet() {
+    // Si se pasa a _showClientPickerSheet, NO hay que restaurar la cámara
+    // acá — esa función se encarga de mantenerla oculta. Sin esta bandera,
+    // el whenComplete de ESTA hoja (que se resuelve después del pop, ya con
+    // la hoja siguiente abierta) pisaba el estado y volvía a mostrar la
+    // pestaña de fondo mientras se buscaba la clienta.
+    var proceedingToPicker = false;
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -678,14 +717,18 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       ),
       builder: (_) => SaveOptionsSheet(
         onListaTap: () {
+          proceedingToPicker = true;
           Navigator.of(context).pop();
           _showClientPickerSheet();
         },
       ),
-    );
+    ).whenComplete(() {
+      if (!proceedingToPicker) unawaited(_setHidingCameraForSaveSheet(false));
+    });
   }
 
   void _showClientPickerSheet() {
+    unawaited(_setHidingCameraForSaveSheet(true));
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -699,7 +742,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           _saveToClient(client);
         },
       ),
-    );
+    ).whenComplete(() {
+      unawaited(_setHidingCameraForSaveSheet(false));
+    });
   }
 
   Future<void> _saveToClient(Client client) async {
@@ -922,6 +967,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     if (sessionClient != null) {
                       _confirmSaveForClient(sessionClient);
                     } else {
+                      unawaited(_setHidingCameraForSaveSheet(true));
                       _showSaveDesignSheet();
                     }
                   },
