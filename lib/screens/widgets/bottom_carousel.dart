@@ -56,91 +56,150 @@ class BottomCarousel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 25, sigmaY: 15),
-        child: Container(
-          width: double.infinity,
-          // Mismo alto que la versión sin nombre (70): las pestañas
-          // Compatible/Explorar están ancladas a una posición fija más
-          // arriba (ver EyeTrackingFilterRow, bottom:150) — si este
-          // contenedor crece, se les monta encima. Círculo y texto más
-          // chicos (44 + texto 9) para que quepan en el mismo espacio.
-          height: 70,
-          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 0),
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.zero,
-            itemCount: imagePaths.length,
-            itemBuilder: (context, index) {
-              final isSelected = selectedLash == index;
-              final circle = AnimatedScale(
-                scale: isSelected ? 1.18 : 0.92,
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOutBack,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 100),
-                  width: labels == null ? 60 : 44,
-                  height: labels == null ? 60 : 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: isSelected ? 0.95 : 0.45),
-                    border: isSelected
-                        ? Border.all(
-                            color: Colors.white.withValues(alpha: 0.95),
-                            width: 2,
-                          )
-                        : null,
-                    boxShadow: isSelected
-                        ? [
-                            BoxShadow(
-                              color: Colors.white.withValues(alpha: 0.13),
-                              blurRadius: 14,
-                              spreadRadius: 2,
-                            ),
-                          ]
-                        : [],
-                  ),
-                  child: ClipOval(
-                    child: Padding(
-                      padding: const EdgeInsets.all(5),
-                      child: _buildImage(imagePaths[index], index),
+    // Alto fijo del widget completo (mismo de siempre — ver nota sobre
+    // EyeTrackingFilterRow más abajo). El Stack de adentro usa
+    // clipBehavior: Clip.none a propósito: el fondo esmerilado (blur) SÍ
+    // debe recortarse a la barra redondeada, pero el círculo seleccionado
+    // necesita poder "elevarse" (traslación hacia arriba + sombra) por
+    // ENCIMA del borde de la barra sin que se corte — por eso el blur y el
+    // contenido (ListView) ahora son capas separadas del Stack en vez de
+    // que el ClipRRect envuelva todo.
+    return SizedBox(
+      width: double.infinity,
+      // Mismo alto que la versión sin nombre (70): las pestañas
+      // Compatible/Explorar están ancladas a una posición fija más arriba
+      // (ver EyeTrackingFilterRow, bottom:150) — si este contenedor crece,
+      // se les monta encima. Círculo y texto más chicos (44 + texto 9) para
+      // que quepan en el mismo espacio.
+      height: 70,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 25, sigmaY: 15),
+                child: const ColoredBox(color: Colors.transparent),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 0),
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.zero,
+              // Sin este Clip.none, el ListView recorta a su propio alto
+              // (70) y el círculo elevado se corta igual que antes, aunque
+              // el Stack de más arriba ya no lo esté clipeando.
+              clipBehavior: Clip.none,
+              itemCount: imagePaths.length,
+              itemBuilder: (context, index) {
+                final isSelected = selectedLash == index;
+                const selectedScale = 1.18;
+                final baseSize = labels == null ? 60.0 : 44.0;
+                // AnimatedScale agranda el círculo seleccionado solo en el
+                // PAINT (Transform.scale), sin agregar espacio de layout —
+                // por eso antes se recortaba (el círculo no tenía margen
+                // propio reservado arriba para crecer). Envolver en un
+                // SizedBox del tamaño MÁXIMO posible (base * selectedScale)
+                // reserva ese espacio de verdad en el layout, así el
+                // círculo agrandado entra completo sin tocar su tamaño
+                // (selectedScale no cambia).
+                final circle = SizedBox(
+                  width: baseSize * selectedScale,
+                  height: baseSize * selectedScale,
+                  child: Center(
+                    child: AnimatedScale(
+                      scale: isSelected ? selectedScale : 0.92,
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutBack,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 100),
+                        width: baseSize,
+                        height: baseSize,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(alpha: isSelected ? 0.95 : 0.45),
+                          border: isSelected
+                              ? Border.all(
+                                  color: Colors.white.withValues(alpha: 0.95),
+                                  width: 2,
+                                )
+                              : null,
+                          boxShadow: isSelected
+                              ? [
+                                  // Sombra "de elevación" (oscura, con
+                                  // offset hacia abajo) además del glow
+                                  // blanco de siempre — es lo que vende
+                                  // visualmente que el círculo está
+                                  // flotando por encima del resto, no solo
+                                  // más grande.
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.35),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                  BoxShadow(
+                                    color: Colors.white.withValues(alpha: 0.13),
+                                    blurRadius: 14,
+                                    spreadRadius: 2,
+                                  ),
+                                ]
+                              : [],
+                        ),
+                        child: ClipOval(
+                          child: Padding(
+                            padding: const EdgeInsets.all(5),
+                            child: _buildImage(imagePaths[index], index),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              );
-              return GestureDetector(
-                onTap: () => onSelect(index),
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 6),
-                  width: labels == null ? 68 : 52,
-                  child: labels == null
-                      ? Center(child: circle)
-                      : Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            circle,
-                            const SizedBox(height: 2),
-                            Text(
-                              labels![index],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w500,
-                                height: 1.0,
+                );
+                // Eleva el círculo seleccionado por encima de la fila
+                // (traslación hacia arriba, animada) — junto con la sombra
+                // de arriba, da el efecto de "se levanta sobre el layout"
+                // en vez de solo agrandarse en el mismo plano.
+                final liftedCircle = AnimatedSlide(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutBack,
+                  offset: Offset(0, isSelected ? -0.16 : 0),
+                  child: circle,
+                );
+                return GestureDetector(
+                  onTap: () => onSelect(index),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 6),
+                    width: labels == null ? 68 : 52,
+                    child: labels == null
+                        ? Center(child: liftedCircle)
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              liftedCircle,
+                              const SizedBox(height: 2),
+                              Text(
+                                labels![index],
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.0,
+                                ),
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                ),
-              );
-            },
+                            ],
+                          ),
+                  ),
+                );
+              },
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

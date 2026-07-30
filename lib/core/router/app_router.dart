@@ -27,21 +27,34 @@ final goRouterProvider = Provider<GoRouter>((ref) {
   final authController = ref.watch(authStateProvider.notifier);
 
   return GoRouter(
-    // TEMP-DEBUG: bypass de auth para probar el tracking 3D directamente — revertir.
-    initialLocation: AppRoutes.camera,
+    initialLocation: AppRoutes.splash,
     debugLogDiagnostics: false,
     refreshListenable: authController,
     redirect: (context, state) {
       final status = ref.read(authStateProvider);
-      final isAuthRoute = state.uri.path == AppRoutes.login || state.uri.path == AppRoutes.splash;
+      final path = state.uri.path;
 
-      // Si no está autenticado y no está en splash/login, redirige a login.
+      // Splash: se queda ahí mientras el hydrate está en curso (status
+      // initial, ver SplashScreen._hydrate) — una vez resuelto, ESTE
+      // redirect es lo único que lo saca de splash (la pantalla misma no
+      // navega). Antes splash quedaba exento de toda la lógica de abajo,
+      // así que nunca se disparaba ninguna navegación y la app se quedaba
+      // trabada en la pantalla verde para siempre.
+      if (path == AppRoutes.splash) {
+        if (status == AuthStatus.authenticated) return AppRoutes.shell;
+        if (status == AuthStatus.unauthenticated) return AppRoutes.login;
+        return null;
+      }
+
+      final isAuthRoute = path == AppRoutes.login;
+
+      // Si no está autenticado y no está en login, redirige a login.
       if (status != AuthStatus.authenticated && !isAuthRoute) {
         return AppRoutes.login;
       }
 
       // Si ya está autenticado y está en login, mandarlo al shell principal.
-      if (status == AuthStatus.authenticated && state.uri.path == AppRoutes.login) {
+      if (status == AuthStatus.authenticated && path == AppRoutes.login) {
         return AppRoutes.shell;
       }
 
