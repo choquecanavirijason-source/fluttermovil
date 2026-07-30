@@ -129,17 +129,6 @@ class BottomCarousel extends StatelessWidget {
                               : null,
                           boxShadow: isSelected
                               ? [
-                                  // Sombra "de elevación" (oscura, con
-                                  // offset hacia abajo) además del glow
-                                  // blanco de siempre — es lo que vende
-                                  // visualmente que el círculo está
-                                  // flotando por encima del resto, no solo
-                                  // más grande.
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.35),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
                                   BoxShadow(
                                     color: Colors.white.withValues(alpha: 0.13),
                                     blurRadius: 14,
@@ -158,27 +147,17 @@ class BottomCarousel extends StatelessWidget {
                     ),
                   ),
                 );
-                // Eleva el círculo seleccionado por encima de la fila
-                // (traslación hacia arriba, animada) — junto con la sombra
-                // de arriba, da el efecto de "se levanta sobre el layout"
-                // en vez de solo agrandarse en el mismo plano.
-                final liftedCircle = AnimatedSlide(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutBack,
-                  offset: Offset(0, isSelected ? -0.16 : 0),
-                  child: circle,
-                );
                 return GestureDetector(
                   onTap: () => onSelect(index),
                   child: Container(
                     margin: const EdgeInsets.symmetric(horizontal: 6),
                     width: labels == null ? 68 : 52,
                     child: labels == null
-                        ? Center(child: liftedCircle)
+                        ? Center(child: circle)
                         : Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              liftedCircle,
+                              circle,
                               const SizedBox(height: 2),
                               Text(
                                 labels![index],

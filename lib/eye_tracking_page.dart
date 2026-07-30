@@ -914,7 +914,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         selectedLash: safeLash,
                         onSelect: _onLashSelect,
                         imagePaths: carouselImagePaths,
-                        labels: carouselLabels,
                       )
                     : Container(
                         height: 70,
@@ -956,6 +955,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             if (!_showLashModal)
               EyeTrackingPremiumOjoButton(
                 onTap: () => unawaited(_openRecommendation()),
+                // Nombre del diseño de pestaña seleccionado en el carrusel
+                // — antes se mostraba debajo de cada miniatura, ahora vive
+                // acá (ver BottomCarousel más abajo, sin `labels`).
+                label: safeLash < carouselLabels.length
+                    ? carouselLabels[safeLash]
+                    : 'Diseño',
               ),
             if (!_showLashModal)
               Positioned(
