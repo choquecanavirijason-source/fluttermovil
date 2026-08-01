@@ -101,6 +101,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   StreamSubscription<TrackingFrame>? _sub;
   TrackingFrame? _frame;
   String _status = 'Inicializando...';
+  DateTime? _lastFrameUiUpdate;
 
   bool _workAssistantOpening = false;
   bool _openingRecommendation = false;
@@ -333,6 +334,35 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// como al cambiar de diseño desde el carrusel: en ambos casos el nuevo
   /// `.glb` ya está resuelto en `_leftModelPath`/`_rightModelPath` *antes*
   /// de llamar esto, y viaja como `creationParams` al crearse la vista.
+  /// Handler compartido del stream de tracking (usado por [_start] y
+  /// [_rebindPreview]). El overlay 3D de pestañas se dibuja nativamente
+  /// (Filament/Choreographer, fuera de Flutter) y no depende de este
+  /// `setState` — pero sin throttle, cada frame de MediaPipe (hasta ~30/s)
+  /// disparaba un rebuild completo de esta pantalla entera (carrusel,
+  /// filtros, barras...), lo que se sentía como "cámara lenta" aunque el
+  /// preview nativo en sí no lo fuera. `_frame` se actualiza siempre (lo
+  /// necesitan `_evaluateAlignment`/`_detectEyeTypeFromFrame` con el dato
+  /// más fresco posible); solo el `setState` que dispara el rebuild se
+  /// limita, salvo que el estado de detección de rostro recién cambie.
+  void _handleTrackingFrame(TrackingFrame frame) {
+    if (!mounted) return;
+    final newStatus = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
+    final statusChanged = newStatus != _status;
+    _frame = frame;
+    if (_alignmentGuideActive) _evaluateAlignment(frame);
+    _detectEyeTypeFromFrame(frame);
+
+    final now = DateTime.now();
+    final last = _lastFrameUiUpdate;
+    if (!statusChanged &&
+        last != null &&
+        now.difference(last) < const Duration(milliseconds: 150)) {
+      return;
+    }
+    _lastFrameUiUpdate = now;
+    setState(() => _status = newStatus);
+  }
+
   Future<void> _rebindPreview() async {
     if (!mounted) return;
     setState(() => _previewSession++);
@@ -340,15 +370,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (!mounted) return;
     _sub?.cancel();
     _sub = _service.trackingStream.listen(
-      (frame) {
-        if (!mounted) return;
-        setState(() {
-          _frame = frame;
-          _status = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
-        });
-        if (_alignmentGuideActive) _evaluateAlignment(frame);
-        _detectEyeTypeFromFrame(frame);
-      },
+      _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
         setState(() => _status = 'Error: $e');
@@ -371,15 +393,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     setState(() => _status = 'Iniciando cámara…');
 
     _sub = _service.trackingStream.listen(
-      (frame) {
-        if (!mounted) return;
-        setState(() {
-          _frame = frame;
-          _status = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
-        });
-        if (_alignmentGuideActive) _evaluateAlignment(frame);
-        _detectEyeTypeFromFrame(frame);
-      },
+      _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
         setState(() => _status = 'Error: $e');

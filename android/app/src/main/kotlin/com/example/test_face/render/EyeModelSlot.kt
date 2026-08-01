@@ -60,6 +60,13 @@ class EyeModelSlot {
      * desde el hilo principal (dentro del propio Runnable). */
     @Volatile var bendPending = false
 
+    /** Última malla doblada aplicada (ver [RendererConfiguration.LASH_BEND_SMOOTHING])
+     * — se usa para suavizar el doblado nuevo contra el anterior en vez de
+     * saltar directo al valor recién calculado. Solo se lee/escribe desde el
+     * hilo de MediaPipe (mismo hilo que [LashRenderer.applyTransform]), no
+     * necesita @Volatile. */
+    var lastBentVertices: List<Geometry.Vertex>? = null
+
     fun reset() {
         node = null
         path = null
@@ -71,5 +78,6 @@ class EyeModelSlot {
         geometry = null
         lastBendNanos = 0L
         bendPending = false
+        lastBentVertices = null
     }
 }

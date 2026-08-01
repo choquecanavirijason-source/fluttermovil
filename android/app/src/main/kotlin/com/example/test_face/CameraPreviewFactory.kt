@@ -90,6 +90,24 @@ class CameraPreviewFactory(
                     "dispose() viewId=$viewId previewView=${System.identityHashCode(previewView)} " +
                         "sceneView=${System.identityHashCode(sceneView)}",
                 )
+                // Crash real observado en dispositivo: SceneView se
+                // auto-destruye en su propio onDetachedFromWindow() (lo hace
+                // la librería, no nosotros), y esa destrucción puede lanzar
+                // NullPointerException en CameraNode.destroy() (getCamera()
+                // nulo) — visto al recrear este PlatformView (nueva key en
+                // HybridCameraPreview) y en hot-reload/restart. Si dejamos
+                // que Flutter remueva `root` de su padre más adelante, ese
+                // mismo desmonte dispara la excepción DENTRO del framework
+                // (dispatchDetachedFromWindow), donde no podemos envolverla
+                // en try/catch. Removiendo el hijo nosotros mismos PRIMERO,
+                // acá, sí podemos: la vista de todos modos se está
+                // destruyendo, así que tragar la excepción es seguro (no
+                // queda ningún recurso "a medio liberar" que se use después).
+                try {
+                    root.removeView(sceneView)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "dispose: excepción ignorada al remover sceneView (SceneView.destroy())", e)
+                }
                 manager.detachPreview(previewView)
                 manager.detachSceneView(sceneView)
             }

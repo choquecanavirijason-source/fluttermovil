@@ -158,4 +158,19 @@ object RendererConfiguration {
     // visual, no hace falta tocar LashMeshBender ni LashLineCurve para
     // afinar cuánto se curva.
     const val LASH_BEND_STRENGTH = 0.25f
+
+    /**
+     * Suavizado temporal (EMA) del doblado, en posición Y ya deformada —
+     * NO de los coeficientes a/b/c de [LashLineCurve]. Diagnosticado en
+     * dispositivo real (2026-07-31, logs `bendCheck`/`bendApply`): la curva
+     * recalculada desde cero en cada resultado de MediaPipe saltaba fuerte
+     * frame a frame (~1px a ~12px de desviación con el rostro quieto) — puro
+     * ruido de landmarks amplificado por el ajuste cuadrático, sin filtrar
+     * (a diferencia de posición/rotación/escala, que sí pasan por
+     * [EyeTrackingFilter]). Visualmente esto se veía como que la pestaña
+     * "no se adaptaba" al párpado — en realidad temblaba en vez de asentarse
+     * en una curva estable. `1f` = sin suavizado (valor nuevo tal cual);
+     * valores bajos = más estable pero más lento en alcanzar la forma real.
+     */
+    const val LASH_BEND_SMOOTHING = 0.3f
 }
