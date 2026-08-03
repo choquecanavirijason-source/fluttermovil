@@ -50,7 +50,7 @@ object RendererConfiguration {
     const val FACE_DISTANCE_MULTIPLIER = 1.0f
 
     // ── Escala del modelo ───────────────────────────────────────────────
-    const val WIDTH_MULTIPLIER = 1.65f
+    const val WIDTH_MULTIPLIER = 1.8f
     // HEIGHT_OFFSET controla dónde queda la RAÍZ real de la pestaña 3D
     // (EyeModelSlot.rootLocalY, ver EyeTransformCalculator) respecto al
     // BORDE del párpado superior (la línea donde nace la pestaña real).
@@ -76,7 +76,12 @@ object RendererConfiguration {
     // nombre. 0.0f es el punto de partida teóricamente correcto — falta
     // confirmar visualmente en dispositivo real (no disponible en este
     // entorno) y ajustar solo si hace falta un pequeño margen estético.
-    const val HEIGHT_OFFSET = 0.0f
+    // Ajuste 2026-08-02: reportado en dispositivo real que la raíz quedaba
+    // un poco por ENCIMA de la línea de pestañas real (0.0 usa el centroide
+    // del párpado superior, que por promediar todo el arco queda algo más
+    // arriba que el punto más bajo visible en la mayor parte del ancho del
+    // ojo). Negativo = baja el ancla (suma a meanY en vez de restar).
+    const val HEIGHT_OFFSET = -0.15f
     const val HEAD_TILT_MULTIPLIER = 1.0f
     // Multiplicador SOLO sobre el eje Y local del modelo (además del
     // scaleFactor isotrópico que ya iguala el ancho al ojo real) — le da
@@ -87,7 +92,7 @@ object RendererConfiguration {
     // WIDTH_MULTIPLIER×scaleFactor) para el desplazamiento de rootLocalY,
     // porque ese desplazamiento es a lo largo del mismo eje Y que ahora
     // tiene esta escala extra.
-    const val HEIGHT_VOLUME_MULTIPLIER = 1.4f
+    const val HEIGHT_VOLUME_MULTIPLIER = 1.55f
 
     // ── Corrección por ojo ──────────────────────────────────────────────
     const val RIGHT_EYE_X_NUDGE = 0.0f
@@ -146,16 +151,45 @@ object RendererConfiguration {
     const val LASH_BEND_MIN_INTERVAL_NANOS = 220_000_000L
 
     // Multiplicador de intensidad del doblado (0 = recto, 1 = la curva
-    // calculada tal cual). El ajuste de LashLineCurve, aunque matemáticamente
-    // correcto (mínimos cuadrados, verificado con y sin centrado numérico —
-    // el resultado no cambió), produce una desviación de magnitud mayor a
-    // la que se ve bien en pantalla (confirmado en dispositivo real,
-    // BEND_DIAG 2026-07-29: hasta ~1 unidad de malla de desviación sobre un
-    // span de ~3, es decir hasta ~30% del ancho total del modelo). En vez
-    // de seguir cazando la causa exacta de esa sobre-estimación bajo
-    // presión de tiempo de entrega, se amortigua la salida a un nivel que
-    // se ve bien — subir/bajar ESTE número es la primera palanca de ajuste
-    // visual, no hace falta tocar LashMeshBender ni LashLineCurve para
-    // afinar cuánto se curva.
-    const val LASH_BEND_STRENGTH = 0.25f
+    // calculada tal cual).
+    //
+    // CORRECCIÓN 2026-08-02 (BEND_DIAG_3): el valor anterior (0.25f) se
+    // había calibrado el 2026-07-29 para tapar una desviación "de magnitud
+    // mayor a la que se ve bien en pantalla" — pero esa medición se hizo
+    // CON el bug de desalineación de coordenadas todavía presente (ver
+    // EyeAnchorCalculator.lashCurveAnchorOffsetPx / LashMeshBender): la
+    // mayoría de los vértices se muestreaban fuera del rango real ajustado
+    // por LashLineCurve.fit() y caían en la extrapolación LINEAL de borde,
+    // no en la parábola — así que ese "hasta ~30% del ancho del modelo" no
+    // era curvatura anatómica real, era el artefacto del bug. Con el origen
+    // de la curva ya corregido (ajustada contra `lidCenter`, no contra el
+    // ancla desplazada por NOSE_AVOID_SHIFT), 0.25f amortigua CUATRO VECES
+    // una señal que ya no es la misma que cuando se calibró ese número — el
+    // resultado es una curva casi invisible, que es justo el síntoma
+    // reportado ("las pestañas no se arquean").
+    //
+    // Subido a 1.0f (sin amortiguar) como punto de partida para volver a
+    // calibrar desde cero en dispositivo real. Para ajustar: mirar en
+    // logcat (tag "LashRenderer") la línea `bendApply ... deviationSample=`
+    // — es curve.deviationAt(0f) en píxeles de imagen, SIN aplicar todavía
+    // `strength` ni la conversión a unidades del mesh. Si el arco se ve
+    // MUY exagerado/inestable, bajar este número; si sigue plano, el
+    // problema ya no está acá (revisar minLocalX/maxLocalX del log o el
+    // riesgo de espejado de eje X documentado en LashMeshBender).
+    const val LASH_BEND_STRENGTH = 1.0f
+
+    /**
+     * Suavizado temporal (EMA) del doblado, en posición Y ya deformada —
+     * NO de los coeficientes a/b/c de [LashLineCurve]. Diagnosticado en
+     * dispositivo real (2026-07-31, logs `bendCheck`/`bendApply`): la curva
+     * recalculada desde cero en cada resultado de MediaPipe saltaba fuerte
+     * frame a frame (~1px a ~12px de desviación con el rostro quieto) — puro
+     * ruido de landmarks amplificado por el ajuste cuadrático, sin filtrar
+     * (a diferencia de posición/rotación/escala, que sí pasan por
+     * [EyeTrackingFilter]). Visualmente esto se veía como que la pestaña
+     * "no se adaptaba" al párpado — en realidad temblaba en vez de asentarse
+     * en una curva estable. `1f` = sin suavizado (valor nuevo tal cual);
+     * valores bajos = más estable pero más lento en alcanzar la forma real.
+     */
+    const val LASH_BEND_SMOOTHING = 0.3f
 }

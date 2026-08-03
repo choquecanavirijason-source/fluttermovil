@@ -11,6 +11,21 @@ data class EyeAnchor(
     val widthPx: Float,
     val heightPx: Float,
     val upperLidTangent: ImagePoint,
+    /** Centroide REAL del párpado superior (`meanX`/`meanY`, ver [compute]),
+     * SIN el desplazamiento de [RendererConfiguration.NOSE_AVOID_SHIFT] que
+     * sí tiene [point]. [LashLineCurve.fit] debe ajustarse alrededor de este
+     * punto (no de [point]) para que su rango `[minLocalX, maxLocalX]`
+     * quede centrado donde realmente están los landmarks del párpado — ver
+     * nota de la clase, diagnóstico BEND_DIAG 2026-08-02. */
+    val lidCenter: ImagePoint,
+    /** Proyección de `(point - lidCenter)` sobre [upperLidTangent] — cuánto
+     * (en píxeles, a lo largo de la tangente) está desplazado el ancla de
+     * render respecto al centroide real del párpado. [LashMeshBender]
+     * necesita sumar esto a su `pixelLocalX` (que está expresado relativo a
+     * `point`, porque ahí es donde se posiciona el centro del mesh) para
+     * evaluar la curva —ajustada alrededor de `lidCenter`— en el sistema de
+     * coordenadas correcto. Ver nota de la clase. */
+    val lashCurveAnchorOffsetPx: Float,
 )
 
 /**
@@ -56,6 +71,24 @@ data class EyeAnchor(
  * la raíz de la pestaña nace ahí — anatómicamente correcto por defecto.
  * HEIGHT_OFFSET > 0 → la raíz queda esa fracción de la altura del ojo por
  * ENCIMA del centroide, solo si hiciera falta un margen estético.
+ *
+ * **`lidCenter`/`lashCurveAnchorOffsetPx` (2026-08-02)**: `point` (el ancla
+ * de RENDER) está desplazado ~68% del ancho del ojo hacia la esquina
+ * externa por `NOSE_AVOID_SHIFT` (ver más abajo) — necesario para que el
+ * modelo 3D no invada la nariz, pero **no** es un buen origen para
+ * `LashLineCurve.fit()`: `LashMeshBender` muestrea la curva centrada en el
+ * punto medio del propio mesh (que se posiciona en `point`), así que si la
+ * curva se ajusta alrededor de `point` en vez de la nube real de landmarks,
+ * casi todos los vértices del mesh caen fuera del rango `[minLocalX,
+ * maxLocalX]` que la curva realmente ajustó — y ahí `deviationAt`/
+ * `slopeAt` extrapolan LINEALMENTE desde el borde en vez de seguir la
+ * parábola (ver [LashLineCurve]), lo que se ve como una pestaña recta/sin
+ * doblar en vez de curva. `lidCenter` (el centroide SIN desplazar) le da a
+ * `LashLineCurve.fit()` un origen que sí coincide con la nube de landmarks;
+ * `lashCurveAnchorOffsetPx` es la corrección que `LashMeshBender` necesita
+ * sumar a su `pixelLocalX` (expresado relativo a `point`) para seguir
+ * evaluando en el sistema de coordenadas de la curva (relativo a
+ * `lidCenter`).
  */
 object EyeAnchorCalculator {
 
@@ -107,7 +140,26 @@ object EyeAnchorCalculator {
 
         val tangent = fittedUpperLidTangent(eye.upperLid, meanX, meanY)
 
-        return EyeAnchor(point = anchor, widthPx = width, heightPx = height, upperLidTangent = tangent)
+        // lidCenter: centroide SIN el shift de NOSE_AVOID_SHIFT — origen
+        // correcto para LashLineCurve.fit() (ver nota de la clase,
+        // 2026-08-02). lashCurveAnchorOffsetPx: proyección de (anchor -
+        // lidCenter) sobre la tangente, mismo producto punto que usa
+        // LashLineCurve.fit para pasar a localX — permite a LashMeshBender
+        // convertir su pixelLocalX (relativo a `anchor`, porque ahí se
+        // posiciona el mesh) al sistema de coordenadas de la curva
+        // (relativo a `lidCenter`).
+        val lidCenter = ImagePoint(meanX, meanY)
+        val lashCurveAnchorOffsetPx =
+            (anchor.x - lidCenter.x) * tangent.x + (anchor.y - lidCenter.y) * tangent.y
+
+        return EyeAnchor(
+            point = anchor,
+            widthPx = width,
+            heightPx = height,
+            upperLidTangent = tangent,
+            lidCenter = lidCenter,
+            lashCurveAnchorOffsetPx = lashCurveAnchorOffsetPx,
+        )
     }
 
     private fun fittedUpperLidTangent(

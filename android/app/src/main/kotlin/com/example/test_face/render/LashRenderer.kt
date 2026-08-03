@@ -10,6 +10,7 @@ import com.google.android.filament.Engine
 import com.google.android.filament.IndirectLight
 import com.google.android.filament.RenderableManager
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import dev.romainguy.kotlin.math.Float3
 import io.github.sceneview.SceneView
 import io.github.sceneview.geometries.Geometry
 import io.github.sceneview.node.ModelNode
@@ -262,16 +263,71 @@ class LashRenderer(
         val damped = smoothed.copy(scale = smoothed.scale * damping)
         val nowNanos = System.nanoTime()
 
-        // DESACTIVADO DE NUEVO (2026-07-29): reactivar el doblado (aun con
-        // throttle + LASH_BEND_STRENGTH amortiguando + el guard bendPending)
-        // seguía metiendo lag notorio en dispositivo real — cada
-        // recalculo reconstruye miles de Vertex y los sube a GPU en el hilo
-        // principal, y a la cercanía de la entrega la prioridad es un
-        // modelo PLANO pero estable/fluido antes que uno curveado pero con
-        // lag. Toda la infraestructura (LashLineCurve, LashMeshBender,
-        // LASH_BEND_STRENGTH, bendPending) queda intacta para retomarlo con
-        // más tiempo — solo esta llamada queda apagada.
-        // engine/rawMesh/geometry quedan sin usar acá a propósito.
+        // REACTIVADO (ver historial arriba: se había apagado dos veces por
+        // lag real en dispositivo). La causa diagnosticada era reconstruir
+        // Y subir la malla al mismo tiempo dentro de mainHandler.post,
+        // bloqueando el hilo principal con AMBAS cosas. Acá se separan:
+        // LashMeshBender.bend() (la reconstrucción cara de la lista de
+        // Vertex) corre en ESTE hilo — el de MediaPipe, ya fuera del
+        // principal, igual que el resto de applyTransform — y solo la
+        // subida a GPU (geometry.setVertices(), que si necesita correr en
+        // el hilo del Engine de Filament) se despacha a mainHandler.
+        // Throttle (LASH_BEND_MIN_INTERVAL_NANOS) y backpressure
+        // (bendPending) sin cambios — ya estaban bien calibrados.
+        val curve = transform.lashLineCurve
+        val rawMesh = slot.rawMesh
+        val geometry = slot.geometry
+        val dueForBend = (nowNanos - slot.lastBendNanos) >= RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS
+        // DIAGNÓSTICO TEMPORAL (BEND_DIAG_2, quitar tras confirmar en
+        // dispositivo): antes no había forma de ver POR QUÉ el doblado no se
+        // aplicaba (curve/rawMesh/geometry nulos, bendPending atascado, o
+        // simplemente el throttle). Loguea a la misma cadencia del throttle
+        // — no en cada frame — para no inundar logcat.
+        if (dueForBend && !slot.bendPending) {
+            Log.d(
+                TAG,
+                "bendCheck curve=${curve != null} rawMesh=${rawMesh != null} " +
+                    "geometry=${geometry != null} eyeWidthPx=${transform.eyeWidthPx}",
+            )
+        }
+        if (curve != null &&
+            rawMesh != null &&
+            geometry != null &&
+            !slot.bendPending &&
+            dueForBend
+        ) {
+            slot.lastBendNanos = nowNanos
+            slot.bendPending = true
+            val rawBent = LashMeshBender.bend(rawMesh, curve, transform.eyeWidthPx, transform.lashCurveAnchorOffsetPx)
+            // Suaviza contra el doblado anterior (ver
+            // RendererConfiguration.LASH_BEND_SMOOTHING) — sin esto, el
+            // ruido frame-a-frame del ajuste cuadrático se veía como temblor
+            // en vez de una curva estable. Mismo rawMesh/índices que la vez
+            // anterior siempre (viene del mismo slot.rawMesh sin recargar),
+            // así que el blend por índice es válido.
+            val previous = slot.lastBentVertices
+            val bentVertices = if (previous != null && previous.size == rawBent.size) {
+                val k = RendererConfiguration.LASH_BEND_SMOOTHING
+                rawBent.mapIndexed { i, v ->
+                    val prevY = previous[i].position.y
+                    val blendedY = prevY + (v.position.y - prevY) * k
+                    v.copy(position = Float3(v.position.x, blendedY, v.position.z))
+                }
+            } else {
+                rawBent
+            }
+            slot.lastBentVertices = bentVertices
+            Log.d(TAG, "bendApply vertices=${bentVertices.size} deviationSample=${curve.deviationAt(0f)}")
+            mainHandler.post {
+                try {
+                    geometry.setVertices(engine, bentVertices)
+                } catch (e: Exception) {
+                    Log.e(TAG, "applyTransform: fallo subiendo malla doblada a GPU", e)
+                } finally {
+                    slot.bendPending = false
+                }
+            }
+        }
 
         // Push directo (sin mainHandler.post): evita añadir ~16ms de latencia
         // extra por esperar al próximo despacho del hilo principal. Los campos

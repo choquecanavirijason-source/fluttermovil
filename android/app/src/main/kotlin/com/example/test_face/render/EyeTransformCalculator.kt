@@ -24,6 +24,13 @@ data class EyeTransform(
      * [LashMeshBender], necesario para convertir [lashLineCurve] (en
      * píxeles) a unidades locales del mesh. */
     val eyeWidthPx: Float = 0f,
+    /** [EyeAnchor.lashCurveAnchorOffsetPx] — corrección que [LashMeshBender]
+     * debe sumar a su `pixelLocalX` (relativo al ancla de render) para
+     * evaluar [lashLineCurve] en el sistema de coordenadas en el que se
+     * ajustó (relativo a `EyeAnchor.lidCenter`, no al ancla). Se llena vía
+     * `.copy()` en [FaceRenderPipeline], igual que [lashLineCurve]/
+     * [eyeWidthPx] — ver nota de [EyeAnchorCalculator] (2026-08-02). */
+    val lashCurveAnchorOffsetPx: Float = 0f,
 )
 
 /**

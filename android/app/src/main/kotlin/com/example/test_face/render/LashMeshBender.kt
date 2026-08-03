@@ -35,6 +35,20 @@ object LashMeshBender {
         raw: RawMesh,
         curve: LashLineCurve?,
         eyeWidthPx: Float,
+        /** [EyeAnchor.lashCurveAnchorOffsetPx] / [EyeTransform.
+         * lashCurveAnchorOffsetPx] — `pixelLocalX` de acá abajo está
+         * expresado relativo al ANCLA de render (porque ahí es donde
+         * `EyeTransformCalculator` posiciona el centro del mesh), pero
+         * `curve` fue ajustada relativa a `EyeAnchor.lidCenter` (el
+         * centroide real del párpado, sin el shift de NOSE_AVOID_SHIFT —
+         * ver nota de [EyeAnchorCalculator], 2026-08-02). Sin sumar este
+         * offset, casi todos los vértices quedaban fuera del rango
+         * `[minLocalX, maxLocalX]` que la curva realmente ajustó y
+         * `deviationAt`/`slopeAt` extrapolaban linealmente en vez de
+         * seguir la parábola — la pestaña se veía recta. `0f` = mismo
+         * comportamiento que antes del fix (compatibilidad con callers que
+         * no lo pasen). */
+        anchorOffsetPx: Float = 0f,
         strength: Float = RendererConfiguration.LASH_BEND_STRENGTH,
     ): List<Geometry.Vertex> {
         if (curve == null || eyeWidthPx <= 0f || strength <= 0f) return raw.vertices
@@ -51,7 +65,7 @@ object LashMeshBender {
         return raw.vertices.map { vertex ->
             val pos = vertex.position
             val t = (pos.x - raw.minX) / span
-            val pixelLocalX = (t - 0.5f) * eyeWidthPx
+            val pixelLocalX = (t - 0.5f) * eyeWidthPx + anchorOffsetPx
 
             // `strength` amortigua la desviación calculada (ver
             // RendererConfiguration.LASH_BEND_STRENGTH) — se escala ANTES de

@@ -321,28 +321,65 @@ párpado superior, el MISMO conjunto y peso que ya usa `meanX`) en vez de
 antes/después comparados por screenshot — la pestaña ahora sigue la curva real
 del párpado en vez de quedar desplazada hacia la altura de la esquina.
 
-## 6. Curva del párpado y doblado de mesh (actualmente inactivo)
+### 5.5 Fix de la extrapolación sin límite — de "raya diagonal" a curva real (2026-08-02)
+
+Con 5.1-5.4 aplicados y `LASH_BEND_STRENGTH` subido a `1.0` (sin amortiguar), el doblado
+reactivado NO se veía como una curva exagerada ni recta — se veía como una **raya diagonal
+recta** saliendo del ojo hacia la ceja/frente, confirmado con logcat (`bendApply
+deviationSample` entre -2 y -5.5px, moderado) + screenshot en el mismo instante.
+
+**Causa**: `LashLineCurve.deviationAt()` extrapolaba MÁS ALLÁ del rango `[minLocalX,
+maxLocalX]` (el rango real de los landmarks del párpado que `fit()` ajustó) sumando
+`pendiente_del_borde × distancia` — una extrapolación lineal, pensada como alternativa segura
+a dejar seguir la parábola completa (que aceleraría mucho peor). Pero lineal SIGUE creciendo
+sin límite con la distancia. `anchorOffsetPx` (5.1-5.4, necesario para que la curva se ajuste
+en el centroide real del párpado) es grande (~68% del ancho del ojo), así que la mayoría de
+los vértices del mesh — sobre todo el "wing" de un estilo Cat Eye, que por diseño se extiende
+bien más allá del ancho natural del ojo — caían lejos del rango fitteado. Sobre esa distancia
+grande, `pendiente × distancia` se disparaba a decenas de píxeles: la raya diagonal.
+
+**Fix**: `deviationAt()` ahora se sostiene PLANA (el valor exacto del borde, sin ningún
+término adicional) más allá del rango fitteado, en vez de seguir extrapolando linealmente —
+no hay datos reales del párpado ahí, así que no hay base para asumir que la curva sigue
+cambiando; sostenerla plana es la única opción que no puede explotar sin importar cuán lejos
+esté `localX` del rango real. `slopeAt()` (usada solo para inclinar la normal/iluminación, no
+la posición) se dejó igual — no crece con la distancia, así que no había nada que arreglar
+ahí, y mantenerla evita un salto visual de iluminación justo en el borde del clamp.
+
+**Confirmado en dispositivo real**: misma pose, antes/después por screenshot — la pestaña
+ahora sigue la curva real del párpado (dentro del rango con datos reales) y se mantiene
+estable/plana en la parte "wing" en vez de dispararse. Se ve como una pestaña real.
+
+## 6. Curva del párpado y doblado de mesh (ACTIVO desde 2026-08-02, ver 5.1-5.5)
 
 `LashLineCurve.fit()` ajusta una parábola (`f(x) = ax² + bx + c`, mínimos
 cuadrados) a los puntos del párpado superior, en un sistema de coordenadas
-local alineado con la tangente del párpado — captura SOLO la curvatura
-adicional respecto a la inclinación promedio (la rotación recta ya la aplica
-el paso 4).
+local alineado con la tangente del párpado (ajustada alrededor de
+`EyeAnchor.lidCenter`, ver 5.4) — captura SOLO la curvatura adicional
+respecto a la inclinación promedio (la rotación recta ya la aplica el paso 4).
 
-`LashMeshBender.bend()` usaría esa curva para desplazar cada vértice del mesh
-en el eje Y local (glTF es Y-up) y así seguir la forma real del párpado en vez
-de la forma genérica de fábrica del `.glb`.
+`LashMeshBender.bend()` usa esa curva para desplazar cada vértice del mesh en
+el eje Y local (glTF es Y-up) y así seguir la forma real del párpado en vez de
+la forma genérica de fábrica del `.glb`.
 
-**Está desactivado.** En `LashRenderer.applyTransform()`
-([LashRenderer.kt:263-278](android/app/src/main/kotlin/com/example/test_face/render/LashRenderer.kt#L263-L278))
-hay un comentario explicando por qué: reconstruir la lista completa de
-vértices (17k-85k objetos según el modelo) y volver a subirla a GPU en CADA
-resultado de MediaPipe no fue solo "lento" — tumbó el proceso en dispositivo
-(GC bloqueando 600-850ms, heap al tope de 192MB, `OutOfMemoryError`).
-Reactivarlo necesita un rediseño que no reasigne buffers por vértice en cada
-frame (ej. `ByteBuffer` directo reusado + throttling real), no una versión más
-lenta de lo mismo. Hoy el modelo se ve rígido: solo se aplica el transform
-(posición/rotación/escala), sin seguir la curvatura fina del párpado.
+**Estado actual: ACTIVO y confirmado en dispositivo real** (ver 5.1-5.5 para
+el historial completo de bugs encontrados y arreglados). Resumen de la
+arquitectura vigente en `LashRenderer.applyTransform()`:
+- El doblado (`LashMeshBender.bend()`, la reconstrucción de la lista de
+  `Geometry.Vertex`) corre en el hilo de MediaPipe (no el principal).
+- Throttle: máximo `RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS`
+  (220ms ≈ 4.5Hz por ojo) — evita saturar de trabajo el hilo de MediaPipe/GPU.
+- Guard `EyeModelSlot.bendPending`: evita encolar más subidas a GPU de las
+  que el hilo principal puede consumir.
+- Suavizado temporal (`RendererConfiguration.LASH_BEND_SMOOTHING`, EMA sobre
+  la posición Y ya deformada) contra el doblado anterior — sin esto, el
+  ruido de landmarks frame a frame se veía como temblor en vez de una curva
+  estable.
+- Solo la subida final a GPU (`geometry.setVertices()`) se despacha al hilo
+  principal (`mainHandler.post`), no la reconstrucción de vértices.
+- `LASH_BEND_STRENGTH = 1.0` (curva completa, sin amortiguar) — valores
+  anteriores (0.25) fueron parches para tapar bugs de coordenadas ya
+  corregidos (5.1-5.5), no una calibración de estilo real.
 
 ## 7. Suavizado y predicción (independiente del cálculo de posición)
 

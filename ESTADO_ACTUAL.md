@@ -480,7 +480,7 @@ Notas de implementación vigentes:
 | Carga y posicionamiento del modelo 3D | ✅ **Confirmado en dispositivo real** (2026-07-24, ver 3.3.1/3.3.2): anclaje de raíz + partición fija párpado superior/inferior, validados con logcat+screenshot en frontal y roll extremo. `WIDTH_MULTIPLIER=1.65`/`HEIGHT_OFFSET=0.0`/nudges en `0.0` — ajuste fino estético pendiente pero no bloqueante |
 | Suavizado/timing (One Euro Filter + predicción adaptativa de latencia) | ✅ Compila; **sin confirmar en dispositivo de forma aislada** — nunca se probó un build limpio sin el crash de la sección 3.4 encima |
 | Calentamiento post-reset de `PoseInterpolator` (sección 3.3) | ✅ Compila; sin confirmar en dispositivo |
-| Doblado de mesh según curva del párpado | ❌ Desactivado — código presente, no se ejecuta por frame (ver 3.4) |
+| Doblado de mesh según curva del párpado | ✅ **Activo y confirmado en dispositivo real** (2026-08-02) — ver historial al final de este documento y [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) secciones 5.4/5.5/6 |
 | Reporte de "flote"/lag del modelo respecto al rostro | ⚠️ **Sin resolver** — ver intento revertido abajo |
 | Material anisotrópico de fibra (Fase 4 histórica) | ⏸️ Bloqueado — necesita `matc` (no disponible acá) y `.glb` con tangentes |
 | Hair cards proceduales (Fase 3 histórica) | ⏸️ Bloqueado — necesita Blender (no disponible acá) |
@@ -657,3 +657,27 @@ los puntos del párpado superior (centrado) pero `anchor.y` (`edgeLidY`) promedi
 centro — un desfase real de ~8px confirmado con datos de logcat. Fix: `anchor.y` ahora usa
 `meanY` (mismo conjunto y peso que `meanX`), sin sesgo de esquina. Confirmado con screenshot
 antes/después de la misma pose. Ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.4.
+
+**Reactivación del doblado de mesh (LashMeshBender) + dos bugs de coordenadas encontrados y
+arreglados (2026-08-02).** En algún punto fuera de esta conversación se reactivó
+`LashMeshBender.bend()` en `LashRenderer.applyTransform()` (cómputo en hilo de MediaPipe,
+subida a GPU despachada al principal, throttle `LASH_BEND_MIN_INTERVAL_NANOS`, guard
+`bendPending`, suavizado `LASH_BEND_SMOOTHING`) — pero la pestaña se veía recta, no curva.
+Diagnóstico: `LashLineCurve.fit()` ajustaba la parábola alrededor del ancla de RENDER
+(`anchor.point`), desplazada ~68% del ancho del ojo por `NOSE_AVOID_SHIFT` — pero
+`LashMeshBender` muestrea centrado en el propio mesh, así que casi todos los vértices caían
+fuera del rango real ajustado y la curva se extrapolaba linealmente (recta) en vez de seguir
+la parábola. Fix 1: se agregó `EyeAnchor.lidCenter` (centroide SIN desplazar) y
+`lashCurveAnchorOffsetPx` (la corrección de coordenadas entre ambos) — `LashLineCurve.fit()`
+ahora se ajusta contra `lidCenter`, `LashMeshBender` suma el offset a su muestreo. Con eso más
+`LASH_BEND_STRENGTH` subido de 0.25 a 1.0 (el valor bajo era un parche para el bug anterior),
+apareció un SEGUNDO bug: la pestaña salía como una raya diagonal recta hacia la ceja, no una
+curva. Fix 2: `LashLineCurve.deviationAt()` extrapolaba más allá del rango fitteado sumando
+`pendiente × distancia` — lineal, pero SIGUE creciendo sin límite; con `anchorOffsetPx` grande
+y estilos "wing" (Cat Eye) que extienden el mesh bien más allá del ojo, esa distancia era
+grande y la extrapolación se disparaba. Se cambió a sostener la desviación PLANA (constante,
+sin término adicional) más allá del rango — la única opción que no puede explotar. Ambos fixes
+confirmados en dispositivo real (Infinix X669) con logcat (`bendApply deviationSample`) +
+screenshot en el mismo instante, antes/después. Resultado final: pestaña siguiendo la curva
+real del párpado, sin raya ni temblor. Ver
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) secciones 5.4/5.5/6.

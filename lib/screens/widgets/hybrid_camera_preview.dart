@@ -8,9 +8,14 @@ import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
-/// Preview de cámara con **Hybrid Composition** (`initExpensiveAndroidView`).
-/// Necesario para que el vídeo de CameraX (TextureView) se renderice; con
-/// `AndroidView` simple el preview salía negro aunque el análisis sí corría.
+/// Preview de cámara con **Virtual Display** (`initExpensiveAndroidView`).
+/// Se intentó cambiar a Hybrid Composition (`initSurfaceAndroidView`) para
+/// mejorar el rendimiento, pero causó un crash en dispositivo real —
+/// probablemente por el SceneView/Filament (SurfaceView translúcido) de las
+/// pestañas 3D, que no es compatible con este modo tal como está configurado
+/// hoy. Revertido. Necesario para que el vídeo de CameraX (TextureView) se
+/// renderice; con `AndroidView` simple el preview salía negro aunque el
+/// análisis sí corría.
 ///
 /// Compartido entre [EyeTrackingPage] y [WorkAssistantScreen]: ambas
 /// pantallas apuntan al mismo `CameraXManager` nativo (una única sesión de

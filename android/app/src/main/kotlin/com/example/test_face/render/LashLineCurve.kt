@@ -24,36 +24,50 @@ class LashLineCurve private constructor(
      * a este rango antes de evaluar: una cuadrática evaluada MÁS ALLÁ de
      * donde se ajustó diverge rápido (por diseño de cualquier polinomio),
      * y [LashMeshBender] necesita evaluar hasta los BORDES de la malla del
-     * modelo (± mitad del ancho del ojo), que caen fuera del rango angosto
-     * de los landmarks reales del párpado usados en [fit] — confirmado en
-     * dispositivo real: sin este clamp, la desviación en los bordes salía
-     * 5-10× más grande que en el centro, "disparando" la pestaña hacia la
-     * ceja (ver diagnóstico BEND_DIAG, 2026-07-29). Más allá del rango
-     * fitteado, se sostiene el valor/pendiente del borde en vez de seguir
-     * la parábola — una extrapolación lineal (recta tangente en el borde),
-     * no una curva descontrolada.
+     * modelo (± mitad del ancho del ojo, MÁS `anchorOffsetPx` — ver
+     * [EyeAnchorCalculator.lashCurveAnchorOffsetPx] — que puede llevar esos
+     * bordes bien lejos del rango angosto de los landmarks reales del
+     * párpado usados en [fit]).
+     *
+     * CORRECCIÓN 2026-08-02 (BEND_DIAG_4): antes, más allá de este rango,
+     * [deviationAt] seguía sumando `pendiente_del_borde × distancia` — una
+     * extrapolación LINEAL, más segura que dejar seguir la parábola (que
+     * acelera), pero que IGUAL crece sin límite con la distancia. Con
+     * `anchorOffsetPx` grande (~68% del ancho del ojo, `NOSE_AVOID_SHIFT`)
+     * y estilos "wing" (Cat Eye) que extienden el mesh bien más allá del
+     * ancho natural del ojo, la mayoría de los vértices caían LEJOS del
+     * rango — la extrapolación lineal, sobre esa distancia, se disparaba a
+     * decenas de píxeles de desviación: la pestaña salía como una raya recta
+     * hacia la ceja/frente en vez de una pestaña curva (confirmado en
+     * dispositivo real con `LASH_BEND_STRENGTH=1.0`, ver ESTADO_ACTUAL.md).
+     * Ahora [deviationAt] se sostiene PLANA (el valor exacto del borde, sin
+     * ningún término adicional) más allá del rango fitteado — no hay datos
+     * reales del párpado ahí, así que no hay base para asumir que la curva
+     * SIGUE cambiando; sostenerla plana es la única opción que no puede
+     * explotar sin importar cuán lejos esté `localX` del rango. La pendiente
+     * ([slopeAt]) sigue sosteniendo el valor del borde (no cero) para que la
+     * normal no tenga un salto brusco de iluminación justo en el borde del
+     * clamp — eso no crece con la distancia, así que es seguro dejarlo.
      */
     private val minLocalX: Float,
     private val maxLocalX: Float,
 ) {
+    /** Plana (constante) más allá de `[minLocalX, maxLocalX]` — ver nota de
+     * la clase. Nunca devuelve más que el máximo/mínimo que la parábola
+     * alcanza DENTRO del rango realmente ajustado. */
     fun deviationAt(localX: Float): Float {
         val clamped = localX.coerceIn(minLocalX, maxLocalX)
-        val base = a * clamped * clamped + b * clamped + c
-        if (localX == clamped) return base
-        // Fuera del rango fitteado: extrapolación LINEAL desde el borde,
-        // usando la pendiente real de la curva en ese borde (no la propia
-        // parábola, que seguiría acelerando). "clamped" es minLocalX o
-        // maxLocalX acá porque localX != clamped.
-        val edgeSlope = 2f * a * clamped + b
-        return base + edgeSlope * (localX - clamped)
+        return a * clamped * clamped + b * clamped + c
     }
 
-    /** Pendiente local (derivada de [deviationAt]) — usada para inclinar la
-     * normal del vértice al doblar, no solo desplazarlo (ver
-     * [LashMeshBender]; si no, la iluminación se ve plana/incorrecta).
-     * Fuera del rango fitteado, [deviationAt] extrapola linealmente, así
-     * que la pendiente ahí es constante (la del borde), no la de la
-     * parábola completa. */
+    /** Pendiente local (derivada de la parábola en el punto clampeado) —
+     * usada para inclinar la normal del vértice al doblar, no solo
+     * desplazarlo (ver [LashMeshBender]; si no, la iluminación se ve plana/
+     * incorrecta). Se mantiene en el valor del borde más allá del rango
+     * fitteado — a diferencia de [deviationAt], esto no crece con la
+     * distancia (es un valor fijo), así que no hace falta aplanarlo también;
+     * mantenerlo evita un salto visual de iluminación justo en el borde del
+     * clamp. */
     fun slopeAt(localX: Float): Float {
         val clamped = localX.coerceIn(minLocalX, maxLocalX)
         return 2f * a * clamped + b

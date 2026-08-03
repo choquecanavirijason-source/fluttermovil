@@ -87,11 +87,19 @@ object FaceRenderPipeline {
         // Curva del párpado superior para el doblado del mesh (ver
         // LashMeshBender) — se ajusta acá porque eyeLandmarks/anchor ya
         // están calculados en este punto, sin duplicar ese trabajo.
-        val curve = LashLineCurve.fit(eyeLandmarks.upperLid, anchor.point, anchor.upperLidTangent)
+        // Origen = anchor.lidCenter (centroide SIN el shift de
+        // NOSE_AVOID_SHIFT), NO anchor.point — ver la nota de
+        // EyeAnchorCalculator (2026-08-02): ajustar la curva alrededor del
+        // ancla de render (desplazada) dejaba casi todos los vértices del
+        // mesh fuera del rango que la curva realmente ajustó, cayendo en la
+        // extrapolación lineal de LashLineCurve en vez de la parábola real
+        // — eso se veía como pestaña recta/sin doblar.
+        val curve = LashLineCurve.fit(eyeLandmarks.upperLid, anchor.lidCenter, anchor.upperLidTangent)
         return transform.copy(
             opennessRatio = eyeLandmarks.opennessRatio,
             lashLineCurve = curve,
             eyeWidthPx = anchor.widthPx,
+            lashCurveAnchorOffsetPx = anchor.lashCurveAnchorOffsetPx,
         )
     }
 
