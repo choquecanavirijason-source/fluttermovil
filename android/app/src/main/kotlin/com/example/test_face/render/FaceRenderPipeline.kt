@@ -30,6 +30,11 @@ object FaceRenderPipeline {
         /** [EyeModelSlot.rootLocalY] de cada ojo — ver [EyeTransformCalculator]. */
         leftRootLocalY: Float = 0f,
         rightRootLocalY: Float = 0f,
+        /** Estilo activo del diseño cargado (ver [LashStyleConfig]) — se
+         * aplica a los DOS ojos por igual (un mismo diseño para ambos; la
+         * asimetría izq/der la resuelve [RawMesh.mirroredAcrossX] por
+         * separado, no este parámetro). */
+        styleConfig: LashStyleConfig = LashStyleConfig.DEFAULT,
     ): Result? {
         if (result.faceLandmarks().isEmpty()) return null
         val landmarks: List<NormalizedLandmark> = result.faceLandmarks()[0]
@@ -55,11 +60,11 @@ object FaceRenderPipeline {
 
         val left = computeEye(
             landmarks, FaceLandmarkIndices.LEFT_EYE_RING, FaceLandmarkIndices.LEFT_IRIS,
-            headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY,
+            headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig,
         )
         val right = computeEye(
             landmarks, FaceLandmarkIndices.RIGHT_EYE_RING, FaceLandmarkIndices.RIGHT_IRIS,
-            headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY,
+            headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY, styleConfig,
         )
         // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
@@ -76,10 +81,11 @@ object FaceRenderPipeline {
         camera: CameraProjection,
         xNudgeNormalized: Float,
         rootLocalY: Float,
+        styleConfig: LashStyleConfig,
     ): EyeTransform? {
         val eyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
-        val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth) ?: return null
+        val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth, styleConfig) ?: return null
         val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
         val transform = EyeTransformCalculator.compute(
             headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,

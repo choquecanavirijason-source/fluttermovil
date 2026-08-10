@@ -10,7 +10,6 @@ import com.google.android.filament.Engine
 import com.google.android.filament.IndirectLight
 import com.google.android.filament.RenderableManager
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
-import dev.romainguy.kotlin.math.Float3
 import io.github.sceneview.SceneView
 import io.github.sceneview.geometries.Geometry
 import io.github.sceneview.node.ModelNode
@@ -35,6 +34,15 @@ class LashRenderer(
 
     private val leftSlot = EyeModelSlot()
     private val rightSlot = EyeModelSlot()
+
+    /** Estilo activo del diseño cargado (ver [LashStyleConfig]) — un mismo
+     * estilo se aplica a los dos ojos (la asimetría izq/der la resuelve
+     * [RawMesh.mirroredAcrossX] en [loadIntoSlot], no esto). Se actualiza
+     * desde [setStyle], invocado por el `MethodChannel` cuando Flutter
+     * cambia de diseño; se lee desde el hilo de MediaPipe en
+     * [onFaceResult]/[applyTransform] — @Volatile por el mismo motivo que
+     * el resto del estado compartido entre esos dos hilos. */
+    @Volatile private var currentStyleConfig: LashStyleConfig = LashStyleConfig.DEFAULT
 
     /**
      * Corre a vsync de pantalla (~60Hz+) mientras haya un [SceneView]
@@ -142,13 +150,43 @@ class LashRenderer(
      * ya está cargado con el mismo path no se recarga.
      */
     fun loadEyeModels(leftPath: String?, rightPath: String?) {
+        // Señal EXPLÍCITA de cuándo espejar (ver RawMesh.mirroredAcrossX):
+        // los diseños del backend solo guardan UN .glb por diseño (no un par
+        // izq/der como el catálogo local — ver `eye_tracking_page.dart`,
+        // "El backend solo guarda un .glb por diseño") y le pasan la MISMA
+        // ruta a los dos ojos. En ese caso, y SOLO en ese caso, hace falta
+        // espejar una de las dos copias — si el catálogo local ya carga dos
+        // archivos DISTINTOS (`leftPath != rightPath`), se asume que el
+        // artista ya los exportó como par espejado correcto (confirmado con
+        // un script propio comparando el perfil de profundidad Z de los 5
+        // pares de `assets/modelos/`: los 5 correlacionan mucho mejor en
+        // orden espejado que en el mismo orden) y este mirror NO se aplica
+        // — aplicarlo ahí duplicaría el espejado y volvería a romper la
+        // simetría que ya está bien.
+        val mirrorRightEye = leftPath != null && leftPath == rightPath
         Log.i(
             TAG,
             "loadEyeModels renderer=${System.identityHashCode(this)} " +
-                "sceneView=${sceneView?.let { System.identityHashCode(it) }} left=$leftPath right=$rightPath",
+                "sceneView=${sceneView?.let { System.identityHashCode(it) }} left=$leftPath right=$rightPath " +
+                "mirrorRightEye=$mirrorRightEye",
         )
-        loadIntoSlot(leftSlot, leftPath, "LEFT")
-        loadIntoSlot(rightSlot, rightPath, "RIGHT")
+        loadIntoSlot(leftSlot, leftPath, "LEFT", mirror = false)
+        loadIntoSlot(rightSlot, rightPath, "RIGHT", mirror = mirrorRightEye)
+    }
+
+    /**
+     * Actualiza [currentStyleConfig] a partir de un `styleId` enviado desde
+     * Flutter (ver [LashStyleConfig.forStyleId]) — se llama junto con
+     * [loadEyeModels] cuando cambia el diseño activo (mismo `MethodChannel`,
+     * ver `EyeTrackingPlugin`/`CameraXManager`). No toca `node`/`rawMesh` de
+     * ningún slot: el próximo [onFaceResult] ya usa el estilo nuevo para el
+     * ancla (`EyeAnchorCalculator`) y el doblado (`LashMeshBender`) sin
+     * necesidad de recargar el `.glb`.
+     */
+    fun setStyle(styleId: String?) {
+        val resolved = LashStyleConfig.forStyleId(styleId)
+        Log.i(TAG, "setStyle styleId=$styleId -> $resolved")
+        currentStyleConfig = resolved
     }
 
     /**
@@ -183,6 +221,7 @@ class LashRenderer(
                 camera = camera,
                 leftRootLocalY = leftSlot.rootLocalY,
                 rightRootLocalY = rightSlot.rootLocalY,
+                styleConfig = currentStyleConfig,
             )
         } catch (e: Exception) {
             Log.e(TAG, "onFaceResult: fallo calculando la transformación", e)
@@ -267,16 +306,22 @@ class LashRenderer(
         // lag real en dispositivo). La causa diagnosticada era reconstruir
         // Y subir la malla al mismo tiempo dentro de mainHandler.post,
         // bloqueando el hilo principal con AMBAS cosas. Acá se separan:
-        // LashMeshBender.bend() (la reconstrucción cara de la lista de
-        // Vertex) corre en ESTE hilo — el de MediaPipe, ya fuera del
+        // LashMeshBender.bendInPlace() (la deformación de miles de
+        // vértices) corre en ESTE hilo — el de MediaPipe, ya fuera del
         // principal, igual que el resto de applyTransform — y solo la
-        // subida a GPU (geometry.setVertices(), que si necesita correr en
-        // el hilo del Engine de Filament) se despacha a mainHandler.
-        // Throttle (LASH_BEND_MIN_INTERVAL_NANOS) y backpressure
-        // (bendPending) sin cambios — ya estaban bien calibrados.
+        // subida a GPU (geometry.setVertices(), que necesita correr en el
+        // hilo del Engine de Filament) se despacha a mainHandler. Throttle
+        // (LASH_BEND_MIN_INTERVAL_NANOS) y backpressure (bendPending) sin
+        // cambios — ya estaban bien calibrados.
         val curve = transform.lashLineCurve
         val rawMesh = slot.rawMesh
         val geometry = slot.geometry
+        // Double-buffer pre-asignado en loadIntoSlot (ver EyeModelSlot) —
+        // bendInPlace escribe en `target` sin alocar una List nueva; `prior`
+        // es el resultado del frame anterior, usado por el suavizado EMA
+        // fundido en el mismo pase (ver LashMeshBender.bendInPlace).
+        val target = if (slot.useBufferAAsTarget) slot.bufferA else slot.bufferB
+        val prior = if (slot.useBufferAAsTarget) slot.bufferB else slot.bufferA
         val dueForBend = (nowNanos - slot.lastBendNanos) >= RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS
         // DIAGNÓSTICO TEMPORAL (BEND_DIAG_2, quitar tras confirmar en
         // dispositivo): antes no había forma de ver POR QUÉ el doblado no se
@@ -287,40 +332,34 @@ class LashRenderer(
             Log.d(
                 TAG,
                 "bendCheck curve=${curve != null} rawMesh=${rawMesh != null} " +
-                    "geometry=${geometry != null} eyeWidthPx=${transform.eyeWidthPx}",
+                    "geometry=${geometry != null} target=${target != null} eyeWidthPx=${transform.eyeWidthPx}",
             )
         }
         if (curve != null &&
             rawMesh != null &&
             geometry != null &&
+            target != null &&
             !slot.bendPending &&
             dueForBend
         ) {
             slot.lastBendNanos = nowNanos
             slot.bendPending = true
-            val rawBent = LashMeshBender.bend(rawMesh, curve, transform.eyeWidthPx, transform.lashCurveAnchorOffsetPx)
-            // Suaviza contra el doblado anterior (ver
-            // RendererConfiguration.LASH_BEND_SMOOTHING) — sin esto, el
-            // ruido frame-a-frame del ajuste cuadrático se veía como temblor
-            // en vez de una curva estable. Mismo rawMesh/índices que la vez
-            // anterior siempre (viene del mismo slot.rawMesh sin recargar),
-            // así que el blend por índice es válido.
-            val previous = slot.lastBentVertices
-            val bentVertices = if (previous != null && previous.size == rawBent.size) {
-                val k = RendererConfiguration.LASH_BEND_SMOOTHING
-                rawBent.mapIndexed { i, v ->
-                    val prevY = previous[i].position.y
-                    val blendedY = prevY + (v.position.y - prevY) * k
-                    v.copy(position = Float3(v.position.x, blendedY, v.position.z))
-                }
-            } else {
-                rawBent
-            }
-            slot.lastBentVertices = bentVertices
-            Log.d(TAG, "bendApply vertices=${bentVertices.size} deviationSample=${curve.deviationAt(0f)}")
+            LashMeshBender.bendInPlace(
+                raw = rawMesh,
+                target = target,
+                previous = if (slot.hasBentBefore) prior else null,
+                smoothing = RendererConfiguration.LASH_BEND_SMOOTHING,
+                curve = curve,
+                styleConfig = currentStyleConfig,
+                eyeWidthPx = transform.eyeWidthPx,
+                anchorOffsetPx = transform.lashCurveAnchorOffsetPx,
+            )
+            slot.hasBentBefore = true
+            slot.useBufferAAsTarget = !slot.useBufferAAsTarget
+            Log.d(TAG, "bendApply vertices=${target.size} deviationSample=${curve.deviationAt(0f)}")
             mainHandler.post {
                 try {
-                    geometry.setVertices(engine, bentVertices)
+                    geometry.setVertices(engine, target)
                 } catch (e: Exception) {
                     Log.e(TAG, "applyTransform: fallo subiendo malla doblada a GPU", e)
                 } finally {
@@ -353,9 +392,15 @@ class LashRenderer(
 
     // ── Carga de modelos ──────────────────────────────────────────────────────
 
-    private fun loadIntoSlot(slot: EyeModelSlot, path: String?, eye: String) {
-       
-
+    private fun loadIntoSlot(
+        slot: EyeModelSlot,
+        path: String?,
+        eye: String,
+        /** Ver [loadEyeModels] / [RawMesh.mirroredAcrossX] — `true` solo
+         * cuando `leftPath == rightPath` (mismo archivo para los dos ojos,
+         * caso de los diseños del backend). */
+        mirror: Boolean,
+    ) {
         val sv = sceneView ?: run {
             // Si esto se ve en logcat, la carga se descarta silenciosamente:
             // confirma que el SceneView todavía no se había adjuntado en el
@@ -418,7 +463,11 @@ class LashRenderer(
                 // modelo no tiene RenderableNode, el modelo se sigue
                 // mostrando rígido (sin doblado) — no bloquea la carga.
                 try {
-                    val rawMesh = GlbMeshReader.read(path)
+                    val parsedMesh = GlbMeshReader.read(path)
+                    val rawMesh = if (mirror) parsedMesh.mirroredAcrossX() else parsedMesh
+                    if (mirror) {
+                        Log.i(TAG, "loadIntoSlot[$eye] mirroredAcrossX aplicado (mismo .glb en los dos ojos)")
+                    }
                     val geometry = Geometry.Builder(RenderableManager.PrimitiveType.TRIANGLES)
                         .vertices(rawMesh.vertices)
                         .indices(rawMesh.indices)
@@ -428,6 +477,17 @@ class LashRenderer(
                         renderableNode.setGeometry(geometry)
                         slot.rawMesh = rawMesh
                         slot.geometry = geometry
+                        // Double-buffer de LashMeshBender.bendInPlace — se
+                        // asigna UNA vez acá, con el tamaño exacto de este
+                        // mesh, y se reutiliza en cada resultado de
+                        // MediaPipe sin volver a alocar (ver EyeModelSlot).
+                        // Contenido inicial = la malla cruda (rígida, sin
+                        // doblar) tal cual — no importa: el nodo sigue
+                        // oculto (`node.isVisible = false`, más abajo) hasta
+                        // el primer resultado con rostro detectado, que ya
+                        // dispara un doblado real antes de mostrarse.
+                        slot.bufferA = ArrayList(rawMesh.vertices)
+                        slot.bufferB = ArrayList(rawMesh.vertices)
                     } else {
                         Log.w(TAG, "loadIntoSlot[$eye]: sin RenderableNode — sin doblado de párpado")
                     }

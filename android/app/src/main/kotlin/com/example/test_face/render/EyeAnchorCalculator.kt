@@ -100,7 +100,13 @@ object EyeAnchorCalculator {
      * derecho de MediaPipe (evita esa ambigüedad — ver nota en
      * [FaceLandmarkIndices]), solo de que el rostro esté razonablemente
      * centrado en el cuadro (caso normal de selfie). */
-    fun compute(eye: EyeLandmarks, imageWidth: Float): EyeAnchor? {
+    /** [styleConfig] reemplaza a los `const val` fijos de
+     * `RendererConfiguration.HEIGHT_OFFSET`/`NOSE_AVOID_SHIFT` — ver
+     * [LashStyleConfig]: esos dos parámetros varían legítimamente por
+     * estilo artístico (Cat Eye vs. Natural), no son calibración física de
+     * dispositivo. `LashStyleConfig.DEFAULT` reproduce el comportamiento
+     * anterior (mismos valores que las constantes globales). */
+    fun compute(eye: EyeLandmarks, imageWidth: Float, styleConfig: LashStyleConfig = LashStyleConfig.DEFAULT): EyeAnchor? {
         if (eye.upperLid.size < 2) return null
 
         val width = eye.width
@@ -116,27 +122,67 @@ object EyeAnchorCalculator {
 
         // Desplaza el ancla X hacia la esquina EXTERNA del ojo (la más
         // lejana al centro horizontal de la imagen, asumiendo rostro
-        // centrado) — ver RendererConfiguration.NOSE_AVOID_SHIFT y la nota
-        // de la clase (2026-07-24): evita que la expansión simétrica de
+        // centrado) — ver LashStyleConfig.noseAvoidShift y la nota de la
+        // clase (2026-07-24): evita que la expansión simétrica de
         // WIDTH_MULTIPLIER invada la nariz por el lado interno.
+        //
+        // `cornerA`/`cornerB` (los extremos en X del anillo de 16 puntos del
+        // ojo) SON, anatómicamente, el canto medial/lagrimal y el canto
+        // lateral/temporal — las únicas dos esquinas reales de un ojo — sin
+        // necesitar índices de landmark dedicados nuevos.
         val cornerA = eye.ring.minByOrNull { it.x }
         val cornerB = eye.ring.maxByOrNull { it.x }
         val imageCenterX = imageWidth / 2f
-        val outerCornerX = if (cornerA != null && cornerB != null) {
-            if (kotlin.math.abs(cornerA.x - imageCenterX) > kotlin.math.abs(cornerB.x - imageCenterX)) {
-                cornerA.x
-            } else {
-                cornerB.x
-            }
-        } else {
-            meanX
+        val cornerAIsLateral = cornerA != null && cornerB != null &&
+            kotlin.math.abs(cornerA.x - imageCenterX) > kotlin.math.abs(cornerB.x - imageCenterX)
+        val outerCornerX = when {
+            cornerA != null && cornerB != null -> if (cornerAIsLateral) cornerA.x else cornerB.x
+            else -> meanX
         }
         val shiftSign = if (outerCornerX >= meanX) 1f else -1f
-        val shiftedX = meanX + shiftSign * width * RendererConfiguration.NOSE_AVOID_SHIFT
+        val shiftedX = meanX + shiftSign * width * styleConfig.noseAvoidShift
 
-        // El ancla sube (Y decrece) desde el centroide según HEIGHT_OFFSET.
-        val anchorY = meanY - height * RendererConfiguration.HEIGHT_OFFSET
-        val anchor = ImagePoint(shiftedX, anchorY)
+        // El ancla sube (Y decrece) desde el centroide según heightOffset.
+        val anchorY = meanY - height * styleConfig.heightOffset
+
+        // CORRECCIÓN 2026-08-08 (LATERAL_LASH_OFFSET, ver
+        // RendererConfiguration): reportado en dispositivo real que el
+        // conjunto seguía viéndose corrido hacia el canto medial/lagrimal
+        // incluso con NOSE_AVOID_SHIFT activo. Causa: el desplazamiento de
+        // arriba es puramente horizontal (un signo × una magnitud en X), no
+        // a lo largo del eje REAL del ojo — con la cabeza en roll, ese eje
+        // tiene una componente en Y que el shift horizontal no cubre.
+        //
+        // Corrección ADITIVA (no reemplaza el shift de arriba, se suma
+        // encima) siguiendo el vector real medial→lateral:
+        //   lateralDirection = normalize(canthusLateral − canthusMedial)
+        //   correctedPoint   = shiftedPoint + lateralDirection × (distancia(cantos) × lateralLashOffset)
+        // `distancia(cantos)` es la distancia real entre los dos cantos (no
+        // `width`, que es el ancho del bounding box — puede diferir si el
+        // ojo está rotado), así que el offset sigue siendo proporcional al
+        // tamaño REAL del ojo en la imagen, no un valor fijo en píxeles.
+        // Al quedar expresado en píxeles de imagen (como el resto del
+        // ancla), la misma des-proyección real de EyeTransformCalculator
+        // (`camera.unproject`, ver Fase 1 del plan de motor) lo lleva a
+        // espacio de mundo de forma correcta a cualquier distancia de
+        // cámara — no hace falta ninguna corrección de perspectiva aparte
+        // ni un desplazamiento fijo en unidades de mundo.
+        var pointX = shiftedX
+        var pointY = anchorY
+        if (cornerA != null && cornerB != null) {
+            val medialCanthus = if (cornerAIsLateral) cornerB else cornerA
+            val lateralCanthus = if (cornerAIsLateral) cornerA else cornerB
+            val lateralDx = lateralCanthus.x - medialCanthus.x
+            val lateralDy = lateralCanthus.y - medialCanthus.y
+            val canthusDistance = kotlin.math.hypot(lateralDx.toDouble(), lateralDy.toDouble())
+                .toFloat().coerceAtLeast(1e-4f)
+            val lateralDirX = lateralDx / canthusDistance
+            val lateralDirY = lateralDy / canthusDistance
+            val lateralOffsetPx = canthusDistance * styleConfig.lateralLashOffset
+            pointX = shiftedX + lateralDirX * lateralOffsetPx
+            pointY = anchorY + lateralDirY * lateralOffsetPx
+        }
+        val anchor = ImagePoint(pointX, pointY)
 
         val tangent = fittedUpperLidTangent(eye.upperLid, meanX, meanY)
 

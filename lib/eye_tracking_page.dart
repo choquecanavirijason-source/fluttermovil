@@ -52,6 +52,15 @@ class _LocalLashPreset {
   });
 }
 
+/// Deriva el `styleId` que espera `LashStyleConfig.forStyleId` (Kotlin) a
+/// partir del nombre visible del diseño/preset — "Cat Eye" -> "cateye". Un
+/// id que Kotlin no tenga registrado simplemente cae a un estilo neutro
+/// (`LashStyleConfig.DEFAULT`, ver el comentario en `setLashStyle`), así
+/// que esto es seguro incluso para diseños del backend cuyo nombre no
+/// coincida con ninguno de los presets ajustados a mano.
+String _lashStyleIdFor(String displayName) =>
+    displayName.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
 const _localLashPresets = [
   _LocalLashPreset(
     name: 'Cat Eye',
@@ -221,6 +230,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // antes) filtraba un motor gráfico por cada diseño tocado — con el
       // tiempo/varios cambios de diseño terminaba tronando la app.
       await _service.loadEyeModels(leftPath: path, rightPath: path);
+      await _service.setLashStyle(_lashStyleIdFor(design.name));
     } catch (e) {
       debugPrint('No se pudo cargar el modelo del diseño ${design.id}: $e');
       if (mounted) {
@@ -246,6 +256,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _leftModelPath = leftPath;
       _rightModelPath = rightPath;
       await _service.loadEyeModels(leftPath: leftPath, rightPath: rightPath);
+      await _service.setLashStyle(_lashStyleIdFor(preset.name));
     } catch (e) {
       debugPrint('No se pudo cargar el preset local ${preset.name}: $e');
       if (mounted) {

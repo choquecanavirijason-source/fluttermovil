@@ -110,6 +110,27 @@ class NativeEyeTrackingService {
       rethrow;
     }
   }
+
+  /// Informa a Kotlin qué `LashStyleConfig` usar (ver
+  /// `render/LashStyleConfig.kt`) para el diseño que se acaba de cargar con
+  /// [loadEyeModels] — heightOffset/noseAvoidShift/envolvente en Z varían
+  /// por estilo artístico (Cat Eye, Natural, Wispy...), no son calibración
+  /// fija del motor. `styleId` desconocido/no registrado en Kotlin cae a un
+  /// estilo neutro (`LashStyleConfig.DEFAULT`) en vez de fallar — no hace
+  /// falta `rethrow` acá como en [loadEyeModels]: un estilo sin ajuste fino
+  /// no es un error bloqueante, el modelo se sigue viendo (solo sin el
+  /// ajuste particular de ese diseño), a diferencia de que el `.glb` en sí
+  /// no cargue.
+  Future<void> setLashStyle(String? styleId) async {
+    try {
+      await _methodChannel.invokeMethod<void>(
+        'setLashStyle',
+        <String, dynamic>{'styleId': styleId},
+      );
+    } catch (e) {
+      debugPrint('[EyeTracking] setLashStyle error: $e');
+    }
+  }
 }
 
 /// Provider global del servicio nativo. Al ser singleton, devuelve siempre

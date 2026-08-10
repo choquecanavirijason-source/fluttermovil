@@ -92,6 +92,11 @@ class EyeTrackingPlugin(
                 cameraXManager?.loadEyeModels(leftPath, rightPath)
                 result.success(null)
             }
+            "setLashStyle" -> {
+                val styleId = call.argument<String>("styleId")
+                cameraXManager?.setLashStyle(styleId)
+                result.success(null)
+            }
             else -> result.notImplemented()
         }
     }

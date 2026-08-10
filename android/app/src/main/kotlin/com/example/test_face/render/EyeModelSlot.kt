@@ -46,7 +46,7 @@ class EyeModelSlot {
     @Volatile var geometry: Geometry? = null
 
     /** Marca de tiempo (nanoTime) del último doblado aplicado — throttle de
-     * [LashMeshBender.bend], ver [RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS].
+     * [LashMeshBender.bendInPlace], ver [RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS].
      * Se lee y escribe solo desde el hilo de MediaPipe (mismo hilo que llama
      * a applyTransform en cada resultado), no necesita @Volatile. */
     var lastBendNanos = 0L
@@ -60,12 +60,35 @@ class EyeModelSlot {
      * desde el hilo principal (dentro del propio Runnable). */
     @Volatile var bendPending = false
 
-    /** Última malla doblada aplicada (ver [RendererConfiguration.LASH_BEND_SMOOTHING])
-     * — se usa para suavizar el doblado nuevo contra el anterior en vez de
-     * saltar directo al valor recién calculado. Solo se lee/escribe desde el
-     * hilo de MediaPipe (mismo hilo que [LashRenderer.applyTransform]), no
-     * necesita @Volatile. */
-    var lastBentVertices: List<Geometry.Vertex>? = null
+    /** Buffers de doblado PRE-ASIGNADOS (double-buffer) — ver
+     * [LashMeshBender.bendInPlace] / [LashRenderer.applyTransform]. Evitan
+     * alocar una `List<Geometry.Vertex>` nueva en cada resultado de
+     * MediaPipe (antes: `.map`/`.mapIndexed` sobre miles de vértices,
+     * ~30Hz — presión de GC real, ver ESTADO_ACTUAL.md sección 3.4). Se
+     * necesitan DOS buffers, no uno: el suavizado EMA de `bendInPlace` lee
+     * el resultado del frame ANTERIOR mientras escribe el de este frame —
+     * con un solo buffer, escribir sobre el índice `i` destruiría el valor
+     * "anterior" de `i` antes de que otro vértice pudiera necesitarlo (no
+     * hay aliasing entre dos buffers distintos, si fuera el mismo sí lo
+     * habría en el caso general). Se asignan una única vez, en
+     * `loadIntoSlot`, con el tamaño exacto de `rawMesh.vertices` — nunca se
+     * reasignan mientras el mismo modelo esté cargado. @Volatile por el
+     * mismo motivo que [rawMesh]/[geometry]: escritos en el hilo de
+     * MediaPipe, publicados hacia `mainHandler.post`. */
+    @Volatile var bufferA: MutableList<Geometry.Vertex>? = null
+    @Volatile var bufferB: MutableList<Geometry.Vertex>? = null
+
+    /** Alterna cuál de [bufferA]/[bufferB] es el destino de este frame (el
+     * otro queda como "anterior" para el suavizado del próximo) — solo se
+     * lee/escribe desde el hilo de MediaPipe, no necesita @Volatile. */
+    var useBufferAAsTarget = true
+
+    /** `false` hasta el primer doblado exitoso — antes de eso no hay
+     * "frame anterior" real contra el que suavizar (el buffer opuesto
+     * todavía tiene la malla cruda sin doblar, no un doblado previo
+     * válido), así que `bendInPlace` no debe fundirlo con el nuevo
+     * resultado. */
+    var hasBentBefore = false
 
     fun reset() {
         node = null
@@ -78,6 +101,9 @@ class EyeModelSlot {
         geometry = null
         lastBendNanos = 0L
         bendPending = false
-        lastBentVertices = null
+        bufferA = null
+        bufferB = null
+        useBufferAAsTarget = true
+        hasBentBefore = false
     }
 }

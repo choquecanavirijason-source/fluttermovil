@@ -35,7 +35,57 @@ data class RawMesh(
     val minX: Float,
     val maxX: Float,
     val minY: Float,
-)
+) {
+    /**
+     * Espeja la malla a lo largo del eje X local (`x → -x`). Usado por
+     * [LashRenderer.loadIntoSlot] cuando el mismo archivo `.glb` se carga
+     * para los dos ojos (diseños del backend, que solo guardan un modelo
+     * por diseño — ver `eye_tracking_page.dart`): sin espejar uno de los
+     * dos, el ala asimétrica del asset (pensada para un solo lado) queda
+     * apuntando hacia el lado equivocado en ese ojo.
+     *
+     * No es solo `position.x = -x`:
+     * - `normal.x` también se invierte, si no la iluminación queda
+     *   especularmente incorrecta en el lado espejado.
+     * - El winding de cada triángulo (`indices`, de a 3) se invierte
+     *   (swap del 2do/3er índice) — espejar en un solo eje invierte el
+     *   frente de cada cara; sin corregirlo, las normales de cara quedan
+     *   mirando hacia adentro (se ve mal iluminado o el culling lo
+     *   esconde).
+     * - `minX`/`maxX` se recalculan (`-maxX`/`-minX` del original) para
+     *   que el resto del pipeline (`LashMeshBender`, que depende de
+     *   `raw.minX`/`raw.maxX`/`span`) opere sobre los datos ya espejados
+     *   sin tener que saber que ocurrió un mirror.
+     *
+     * `minY` no cambia — el mirror es solo en X, la raíz de la pestaña
+     * (ver [LashRenderer.loadIntoSlot] / `EyeTransformCalculator`) sigue
+     * en el mismo lugar en Y.
+     */
+    fun mirroredAcrossX(): RawMesh {
+        val mirroredVertices = vertices.map { vertex ->
+            val p = vertex.position
+            val n = vertex.normal
+            vertex.copy(
+                position = Float3(-p.x, p.y, p.z),
+                normal = n?.let { Float3(-it.x, it.y, it.z) },
+            )
+        }
+        val mirroredIndices = ArrayList<Int>(indices.size)
+        var i = 0
+        while (i + 2 < indices.size) {
+            mirroredIndices.add(indices[i])
+            mirroredIndices.add(indices[i + 2])
+            mirroredIndices.add(indices[i + 1])
+            i += 3
+        }
+        return copy(
+            vertices = mirroredVertices,
+            indices = mirroredIndices,
+            minX = -maxX,
+            maxX = -minX,
+        )
+    }
+}
 
 /**
  * Parsea un `.glb` (glTF binario) directamente, sin pasar por el loader de

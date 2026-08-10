@@ -681,3 +681,137 @@ confirmados en dispositivo real (Infinix X669) con logcat (`bendApply deviationS
 screenshot en el mismo instante, antes/después. Resultado final: pestaña siguiendo la curva
 real del párpado, sin raya ni temblor. Ver
 [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) secciones 5.4/5.5/6.
+
+**Asimetría entre ojos: mismo `.glb` cargado en los dos ojos para diseños del backend
+(2026-08-07).** Reportado: con un diseño elegido del catálogo del backend, un ojo sigue bien
+la curva del párpado y el otro se ve deformado, con el ala apuntando al lado equivocado. Se
+revisaron los 9 archivos de `render/` — todo el cálculo de ancla/tangente/rotación es
+agnóstico de ojo izq/der, correcto. La causa real está en Dart: `eye_tracking_page.dart`
+carga el MISMO `.glb` para `leftPath`/`rightPath` cuando el diseño viene del backend (solo
+guarda un archivo por diseño, a diferencia del catálogo local que sí tiene pares
+`cateyeleft`/`cateyeright` distintos). Se verificó con un script propio (Node, comparando el
+perfil de profundidad Z de los 5 pares locales) que esos 5 pares SÍ están correctamente
+espejados por el artista — no hay que tocarlos. Fix: `RawMesh.mirroredAcrossX()` en
+`GlbMeshReader.kt` (posición X, normal X, winding de triángulos, minX/maxX, todo antes de que
+`LashMeshBender` use la malla), activado en `LashRenderer.loadEyeModels()` solo cuando
+`leftPath == rightPath` (señal explícita — el catálogo local con archivos distintos no se
+toca). Compila limpio. **Sin confirmar en dispositivo real** — pendiente confirmar que
+espejar el ojo DERECHO (elección no verificable sin dispositivo) es el lado correcto. Ver
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.7.
+
+**Falloff C1-continuo: de "esquina/deformación" a curva redonda, con bug de signo corregido
+(2026-08-05, documentado en esta misma pasada).** Reportado: "se doblan, se deforman... quiero
+que tenga forma redonda". Causa: el fix de 5.5 (`deviationAt()` plana más allá del rango
+fitteado) es continua en VALOR pero no en DERIVADA — la pendiente cae de golpe a 0 en el
+borde, y un shear vertical con esa discontinuidad produce un pico/pliegue visible en la
+silueta. Fix: la pendiente decae suavemente a cero con un smoothstep sobre una distancia
+derivada del ancho ajustado (no una constante inventada), y `deviationAt()` es la integral
+cerrada de esa pendiente — C1 exacto en el borde. Al implementar esto se encontró y corrigió
+un bug de signo: el término de la integral se sumaba sin importar el lado, pero del lado de
+`minLocalX` (`localX` decreciente) tiene que restarse — sin eso, la derivada saltaba de signo
+justo en ese borde, el mismo tipo de defecto que el fix buscaba eliminar. Verificado
+numéricamente (Node, no solo inspección): continuidad de valor y derivada confirmada hasta
+1e-6 en ambos bordes. Compila limpio. **Sin confirmar visualmente en dispositivo real.** Ver
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.6.
+
+**"Sale volando" en la comisura exterior: envolvente en Z, falloff más ancho, suavizado
+vectorial completo (2026-08-08).** Reportado: el modelo encaja bien en el lagrimal pero se
+despega/"sale volando" hacia la comisura exterior, sobre todo en Cat Eye. Tres causas: (1)
+`LashMeshBender.bend()` no tocaba Z — el ala se quedaba plana frente a la cámara en vez de
+retroceder hacia la órbita; fix: caída cuadrática en Z derivada de la geometría de una esfera
+(`x²/2R`), con un clamp a `radiusPx` que se agregó después de verificar numéricamente que la
+aproximación diverge sin límite para `|x|>R` (rutinario en el ala) — mismo patrón que el bug de
+extrapolación de la sección 5.5, detectado a tiempo esta vez. (2) `LashLineCurve.
+falloffDistancePx()` aplanaba la curva demasiado rápido (0.5× el rango ajustado) para alas que
+caen mayormente fuera de ese rango; subido a 1.75× (`LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER`). (3)
+El EMA de suavizado en `LashRenderer.applyTransform()` solo interpolaba Y, no X/Z — cada
+vértice se movía en diagonal en vez de en línea recta hacia su posición nueva; corregido para
+blend los tres ejes con el mismo `k`. Compila limpio. **Sin confirmar visualmente en
+dispositivo real.** Ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.8.
+
+**Sistema de estilos por diseño (`LashStyleConfig`) + doblado sin alocar por frame
+(2026-08-08).** Motivación: `HEIGHT_OFFSET`/`NOSE_AVOID_SHIFT`/la envolvente en Z de 5.8 eran
+`const val` fijos — correcto con un solo estilo, pero el catálogo tiene diseños genuinamente
+distintos (Cat Eye vs. Wispy) que necesitan esos valores DISTINTOS por diseño. Además,
+`LashMeshBender.bend()` + el suavizado EMA reconstruían una `List<Geometry.Vertex>` nueva por
+resultado de MediaPipe (~30Hz/ojo) — la causa original del OOM de la sección 3.4. Fix en 4
+partes: (1) `LashStyleConfig.kt` nuevo — `data class` con `heightOffset`/`noseAvoidShift`/
+`zDepthDropRadiusFraction`/`foxyLiftMultiplier` + 3 presets (Cat Eye/Natural/Wispy) resueltos
+por `styleId` con fallback seguro a `DEFAULT`; hilado por `FaceRenderPipeline` hasta
+`EyeAnchorCalculator`/`LashMeshBender`. (2) `LashMeshBender.bendInPlace()` reemplaza a
+`bend()`: escribe en un buffer PRE-ASIGNADO y funde doblado+suavizado en un solo pase (antes
+dos `.map` encadenados). Límite honesto verificado con `javap` sobre el `.aar` de
+sceneview-android: `Geometry.Vertex`/`Float3` son inmutables (todos los campos `final`), así
+que no hay forma de mutar un vértice sin bypassear esa API — lo que sí se elimina es la
+`List` nueva por frame y la doble instanciación de `Vertex` por vértice (ahora 1 sola). (3)
+Double-buffer en `EyeModelSlot` (`bufferA`/`bufferB`) para que el suavizado EMA pueda leer el
+frame anterior mientras se escribe el nuevo, sin aliasing. (4) `setLashStyle` nuevo en el
+`MethodChannel` (`EyeTrackingPlugin` → `CameraXManager` → `LashRenderer.setStyle`), invocado
+desde Dart (`NativeEyeTrackingService.setLashStyle`) junto con `loadEyeModels` en
+`eye_tracking_page.dart`, derivando el `styleId` del nombre visible del diseño. Compila limpio
+(`gradlew compileDebugKotlin`) y `flutter analyze` sin errores sobre los 2 archivos Dart
+tocados. **Sin confirmar visualmente en dispositivo real.** Ver
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.9.
+
+**Regresión confirmada y revertida con dispositivo real disponible (2026-08-08, misma
+sesión).** Con un Infinix X669 conectado por `adb` durante esta sesión, se pudo por fin
+verificar visualmente 5.8/5.9 — y la pestaña salía disparada en diagonal hacia la ceja en vez
+de seguir el párpado, en ambos ojos (capturado con `adb exec-out screencap` + logcat en vivo,
+no a partir de una descripción). Sin tiempo para aislar cuál de los dos cambios nuevos era el
+causante exacto, se revirtieron los dos a la vez: `LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER` de
+1.75 a 0.5 (el valor ya confirmado en 5.5-5.7) y `LASH_BEND_DEPTH_DROP_STRENGTH` de 1.0 a 0.0
+(envolvente en Z apagada), más los 3 presets de `LashStyleConfig` neutralizados a `DEFAULT`
+(sus valores originales sumaban más variables sin controlar a la vez). Recompilado, reinstalado
+con `flutter build apk --debug` + `adb install -r`, y **confirmado visualmente en el mismo
+dispositivo**: la pestaña vuelve a apoyarse sobre el párpado. Ver
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.10 para el diagnóstico completo y la
+lección de proceso (verificar cada cambio nuevo por separado en vez de apilar varios sin
+confirmar).
+
+**Calibración fina post-regresión: raíz al borde + ala sin levantarse (2026-08-08, misma
+sesión).** Con 5.10 resuelto, quedaba una leve tendencia del ala exterior a levantarse hacia la
+ceja. Ajustes: `HEIGHT_OFFSET` de -0.15 a -0.05 y `LASH_BEND_STRENGTH` de 1.0 a 0.5 (amortigua
+la parábola, sobre todo en los extremos del ala). Se revisó `LashMeshBender.kt` y se confirmó
+que no hay ningún ajuste manual de pendiente artificial — `slope` sale directo de
+`curve.slopeAt(...) * strength`. Nota de transparencia: por la convención de signos de
+`EyeAnchorCalculator` (Y de imagen crece hacia abajo), `-0.15f → -0.05f` matemáticamente REDUCE
+la corrección hacia abajo del ancla, no la aumenta — lo contrario de "bajar la raíz" tomado
+literalmente; se probó igual como punto de partida y se verificó el resultado real en
+dispositivo en vez de asumir la dirección por el nombre. Recompilado, reinstalado, y
+**confirmado visualmente en dispositivo real** (Infinix X669) en dos poses (de frente y con la
+cabeza inclinada): la pestaña sigue el párpado en ambos ojos sin el levantamiento hacia la ceja.
+Ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.11.
+
+**Raíz exactamente en el borde palpebral (2026-08-08, misma sesión).** El usuario reportó que la
+raíz seguía sin tocar el borde real del párpado con `HEIGHT_OFFSET=-0.05f`. Para medirlo con
+precisión (no a ojo sobre la foto completa), se recortó y amplió 2× la zona de los ojos con
+`ffmpeg` sobre el mismo `adb screencap` — confirmó un espacio de piel visible entre la raíz y el
+párpado en los dos ojos. Causa: la sospecha de signo ya anotada en la entrada anterior era
+correcta — `-0.05f` baja el ancla MENOS que `-0.15f`, no más. Subido a `-0.22f`; comparado el
+mismo recorte antes/después: la raíz ahora traza directo sobre la línea real del párpado, sin
+el espacio visible y sin pasarse hacia el globo ocular. Confirmado en dispositivo real (Infinix
+X669). Lección de proceso: para calibraciones de pocos píxeles, una captura completa a
+resolución de pantalla no alcanza — hace falta recortar/ampliar antes de comparar. Ver
+[COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.12.
+
+**Corrección longitudinal hacia el canto lateral (2026-08-08, misma sesión).** Reportado: el
+conjunto de pestañas queda demasiado cerca del canto medial/lagrimal. Causa: `NOSE_AVOID_SHIFT`
+(ya existente) desplaza solo en X puro, no a lo largo de la dirección real medial→lateral del
+ojo — con roll de cabeza esa dirección tiene componente en Y que el shift horizontal no cubre.
+Fix aditivo en `EyeAnchorCalculator.compute()`: `cornerA`/`cornerB` (ya existentes, extremos en
+X del anillo del ojo) SON el canto medial/lateral; se calcula
+`normalize(lateralCanthus−medialCanthus) * (distancia(cantos) × LATERAL_LASH_OFFSET)` y se suma
+al ancla ya calculada. Nuevo `RendererConfiguration.LATERAL_LASH_OFFSET=0.08f` +
+`LashStyleConfig.lateralLashOffset`. Al ser proporcional a la distancia REAL entre cantos (no
+píxeles fijos ni offset de mundo) y pasar por la misma des-proyección real que el resto del
+ancla, escala correctamente a cualquier distancia de cámara sin tocar `EyeTransformCalculator`,
+escala, rotación, curva ni el `.glb`. Compila limpio, confirmado en dispositivo real sin
+crashes ni distorsión.
+
+**Calibración iterativa de `LATERAL_LASH_OFFSET` hasta valor final (2026-08-08, misma
+sesión).** Con la corrección de arriba implementada, se calibró el valor en dispositivo real
+con captura recortada/ampliada en cada paso: `0.08` (correcto pero insuficiente, feedback del
+usuario) → `0.16` (seguía insuficiente) → `0.28` (sobre-corrigió, la punta del ala se pasaba
+hacia la sien/nacimiento del pelo en un ojo) → **`0.20` confirmado**: ambos ojos con el ala
+contenida dentro del contorno real del ojo, simétrico, sin pico ni deformación, logcat limpio.
+Valor final de esta ronda. Ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.13.

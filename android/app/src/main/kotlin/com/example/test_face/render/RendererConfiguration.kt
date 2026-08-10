@@ -81,7 +81,23 @@ object RendererConfiguration {
     // del párpado superior, que por promediar todo el arco queda algo más
     // arriba que el punto más bajo visible en la mayor parte del ancho del
     // ojo). Negativo = baja el ancla (suma a meanY en vez de restar).
-    const val HEIGHT_OFFSET = -0.15f
+    // Ajuste 2026-08-08 (calibración fina, con el envolvente en Z de 5.8 ya
+    // confirmado funcionando): se probó -0.05 (sección 5.11) razonando que
+    // "menos negativo = menos agresivo" — INCORRECTO: por la convención de
+    // signos de esta fórmula, menos negativo es MENOS corrección hacia
+    // abajo, no menos "agresividad" hacia arriba. Confirmado con captura de
+    // cámara real recortada/ampliada (`adb screencap` + `ffmpeg crop`): con
+    // -0.05 la raíz queda claramente por ENCIMA del borde visible del
+    // párpado, con un espacio de piel de por medio en los dos ojos. Subido
+    // (más negativo) a -0.22 para cerrar ese espacio.
+    //
+    // Ajuste 2026-08-10 (sección 5.15): el usuario marcó con una línea verde,
+    // sobre una foto real, dónde debe caer la línea de pestañas (justo sobre
+    // el borde del párpado, cerca del iris) — con -0.22 la raíz seguía
+    // renderizando claramente por ENCIMA de esa línea, con piel de por medio
+    // en los dos ojos (la misma clase de hueco que motivó el ajuste
+    // anterior, solo que insuficiente). Subido (más negativo) a -0.38.
+    const val HEIGHT_OFFSET = -0.38f
     const val HEAD_TILT_MULTIPLIER = 1.0f
     // Multiplicador SOLO sobre el eje Y local del modelo (además del
     // scaleFactor isotrópico que ya iguala el ancho al ojo real) — le da
@@ -108,6 +124,61 @@ object RendererConfiguration {
     // horizontal de la imagen — ver EyeAnchorCalculator) para reducir el
     // invasión del lado interno sin tocar la escala. 0.0 = sin desplazar.
     const val NOSE_AVOID_SHIFT = 0.68f
+
+    // CORRECCIÓN 2026-08-08: reportado en dispositivo real que el conjunto
+    // de pestañas sigue quedando visiblemente más cerca del canto medial/
+    // lagrimal de lo esperado, incluso con NOSE_AVOID_SHIFT ya activo.
+    // Causa: NOSE_AVOID_SHIFT desplaza SOLO en el eje X de la imagen (un
+    // signo × una magnitud escalar), no a lo largo de la dirección real
+    // canto-medial→canto-lateral — con la cabeza en roll (inclinada de
+    // costado), esa dirección real tiene una componente en Y que el
+    // desplazamiento puramente horizontal no cubre, así que el ancla queda
+    // corta respecto al eje verdadero del ojo.
+    //
+    // LATERAL_LASH_OFFSET es una corrección ADICIONAL (no reemplaza a
+    // NOSE_AVOID_SHIFT, se suma encima) calculada como vector real:
+    // `normalize(canthusLateral - canthusMedial) * (distancia(canthus) ×
+    // LATERAL_LASH_OFFSET)` — ver EyeAnchorCalculator.compute(). Al ser
+    // proporcional a la distancia REAL entre los dos cantos (no un valor
+    // fijo en píxeles ni un desplazamiento en espacio de mundo), escala
+    // solo con el tamaño del ojo en la imagen — el mismo mecanismo de
+    // des-proyección real que ya usa el resto del ancla (ver
+    // EyeTransformCalculator) se encarga de que sea correcto a cualquier
+    // distancia de cámara, no hace falta ningún ajuste aparte por
+    // perspectiva.
+    //
+    // 0.0 = sin corrección adicional (comportamiento anterior). Positivo =
+    // empuja más hacia el canto LATERAL/temporal.
+    //
+    // Ajuste 2026-08-08 (feedback en dispositivo real, mismo día,
+    // iterativo): 0.08 → correcto pero insuficiente ("sigue alejado del
+    // canto externo") → 0.16 → SIGUE insuficiente → 0.28 → SOBRE-CORRIGE
+    // (la punta del ala se pasaba del canto lateral real hacia la sien/
+    // nacimiento del pelo, visible en captura recortada/ampliada) → 0.20.
+    //
+    // CONFIRMADO en dispositivo real (Infinix X669) con 0.20: captura
+    // recortada/ampliada de los dos ojos — el ala queda CONTENIDA dentro
+    // del contorno real del ojo en ambos (ni se pasa hacia la sien ni deja
+    // hueco en el lagrimal), simétrico entre los dos ojos, sin pico ni
+    // deformación.
+    //
+    // REVISADO 2026-08-10: con dispositivo real disponible de nuevo (mismo
+    // Infinix X669), captura fresca (`adb screencap`) recortada con grid de
+    // referencia en píxeles mostró que 0.20 deja un ojo bien contenido
+    // (margen ~7px hacia el canto lateral) pero el OTRO ojo con un hueco
+    // real de ~95px entre la punta del ala y el canto lateral real — no un
+    // desajuste menor. Confirma lo que la sección 5.13 ya dejaba anotado
+    // como sospecha sin resolver ("probablemente por pose, no
+    // necesariamente asimetría de código"): la magnitud de este caso
+    // (95px vs 7px con la MISMA fórmula/constante en los dos ojos) es
+    // grande para explicarse solo por ruido de landmarks. Subido a 0.30
+    // como paso intermedio.
+    //
+    // Ajuste 2026-08-10 (sección 5.15): con 0.30, el usuario marcó con
+    // flechas sobre una foto real que TODAVÍA queda un hueco visible entre
+    // la punta del ala y el canto lateral real, en los DOS ojos esta vez
+    // (no uno solo como en la ronda anterior). Subido a 0.38.
+    const val LATERAL_LASH_OFFSET = 0.38f
 
     // ── Parpadeo ────────────────────────────────────────────────────────
     const val EYE_CLOSED_OPENNESS_THRESHOLD = 0.12f
@@ -176,7 +247,15 @@ object RendererConfiguration {
     // MUY exagerado/inestable, bajar este número; si sigue plano, el
     // problema ya no está acá (revisar minLocalX/maxLocalX del log o el
     // riesgo de espejado de eje X documentado en LashMeshBender).
-    const val LASH_BEND_STRENGTH = 1.0f
+    //
+    // Ajuste 2026-08-08 (calibración fina, con el envolvente en Z ya
+    // confirmado funcionando): con 1.0f el ala exterior de Cat Eye seguía
+    // con una leve tendencia a levantarse hacia la ceja en las puntas.
+    // Bajado a 0.5f para amortiguar la parábola vertical (menos agresiva en
+    // los extremos, donde `deviationAt` alcanza sus valores más altos) sin
+    // aplanarla del todo — pendiente de confirmar en dispositivo, ver
+    // sección 5.11.
+    const val LASH_BEND_STRENGTH = 0.5f
 
     /**
      * Suavizado temporal (EMA) del doblado, en posición Y ya deformada —
@@ -192,4 +271,59 @@ object RendererConfiguration {
      * valores bajos = más estable pero más lento en alcanzar la forma real.
      */
     const val LASH_BEND_SMOOTHING = 0.3f
+
+    // ── Envolvente de curvatura del párpado (LashLineCurve/LashMeshBender) ──
+    //
+    // Multiplicador sobre el ancho real ajustado (`maxLocalX - minLocalX`)
+    // que define la distancia de transición en la que la pendiente del
+    // borde decae a cero (ver `LashLineCurve.falloffDistancePx`) — antes
+    // `0.5f` (la mitad del ancho ajustado).
+    //
+    // CORRECCIÓN 2026-08-08 (hipótesis, sin confirmar): reportado en
+    // dispositivo real que el ala se despega hacia la comisura exterior en
+    // estilos "wing" (Cat Eye) — la hipótesis era que la mayoría de esos
+    // vértices caían fuera de `[minLocalX, maxLocalX]` y chocaban con la
+    // meseta casi de inmediato. Subir el multiplicador a 1.75 alarga esa
+    // zona de transición.
+    //
+    // REVERTIDO 2026-08-08 (mismo día, confirmado en dispositivo real,
+    // Infinix X669): con 1.75 la pestaña se ve MUCHO peor que antes — la
+    // punta sale disparada en diagonal hacia la ceja/frente en vez de
+    // seguir el párpado, en ambos ojos por igual (capturado con `adb
+    // screencap` + logcat en vivo). Causa más probable: `edgeSlope ×
+    // falloffDist × 0.5` (el techo de la meseta en `deviationAt`, ver
+    // `LashLineCurve`) crece proporcional a `falloffDist`, así que
+    // multiplicar el ancho de la zona de transición por 3.5× (0.5→1.75)
+    // también multiplica la meseta ~3.5× — con un `edgeSlope` no trivial en
+    // el borde del rango fitteado (normal en un párpado real), eso es
+    // suficiente para disparar la punta del ala muy por encima de donde
+    // debería quedar. Vuelto a `0.5f` (el valor confirmado funcionando en
+    // 5.5/5.6/5.7, antes de este experimento) hasta poder recalibrar con
+    // captura en vivo en vez de a ciegas.
+    const val LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER = 0.5f
+
+    // Fuerza de la envolvente en Z (profundidad) que hace que la pestaña
+    // retroceda hacia adentro de la órbita a medida que se aleja del centro
+    // del ojo, en vez de quedar plana frente a la cámara — ver
+    // `LashMeshBender.bendInPlace()`. 0 = sin envolvente (Z intacto); 1 =
+    // la aproximación cuadrática de una esfera de radio `eyeWidthPx/2` sin
+    // amortiguar. Desde la sección 5.9 del doc (`LashStyleConfig`), este
+    // valor es solo el DEFECTO de `LashStyleConfig.foxyLiftMultiplier` — el
+    // knob real por-estilo vive ahí, no acá.
+    //
+    // APAGADO 2026-08-08 (confirmado en dispositivo real, Infinix X669,
+    // mismo día que se agregó): con `1.0f` la pestaña salía deformada en
+    // ambos ojos — no fue posible aislar en el momento si el causante
+    // principal era esto o `LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER` (ver esa
+    // constante, también revertida el mismo día), así que se apagaron los
+    // DOS efectos nuevos a la vez para volver al último estado confirmado
+    // bueno (5.1-5.7) en vez de seguir ajustando a ciegas sin poder ver el
+    // resultado en tiempo real. `radiusPx = eyeWidthPx × fracción` acota el
+    // PIXEL crudo, pero convertido a unidades locales del mesh
+    // (`× meshUnitsPerPixel`) puede seguir siendo grande respecto al propio
+    // espesor en Z de un mesh de pestaña (una tarjeta casi plana) — sospecha
+    // sin confirmar todavía, pendiente de aislar con captura en vivo antes
+    // de reactivar. `0f` = comportamiento idéntico a antes de la sección 5.8
+    // (solo shear en Y, sin envolvente en Z).
+    const val LASH_BEND_DEPTH_DROP_STRENGTH = 0.0f
 }

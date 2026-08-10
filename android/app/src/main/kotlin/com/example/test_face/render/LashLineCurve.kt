@@ -20,60 +20,107 @@ class LashLineCurve private constructor(
     private val b: Float,
     private val c: Float,
     /** Rango real (en `localX`, píxeles) de los puntos usados para el
-     * ajuste — ver [fit]. [deviationAt]/[slopeAt] hacen clamp de su entrada
-     * a este rango antes de evaluar: una cuadrática evaluada MÁS ALLÁ de
-     * donde se ajustó diverge rápido (por diseño de cualquier polinomio),
-     * y [LashMeshBender] necesita evaluar hasta los BORDES de la malla del
-     * modelo (± mitad del ancho del ojo, MÁS `anchorOffsetPx` — ver
-     * [EyeAnchorCalculator.lashCurveAnchorOffsetPx] — que puede llevar esos
-     * bordes bien lejos del rango angosto de los landmarks reales del
-     * párpado usados en [fit]).
+     * ajuste — ver [fit]. Más allá de este rango no hay datos reales del
+     * párpado; [deviationAt]/[slopeAt] hacen decaer la influencia de la
+     * parábola suavemente en vez de evaluarla sin límite (diverge rápido,
+     * por diseño de cualquier polinomio) o cortarla en seco.
      *
-     * CORRECCIÓN 2026-08-02 (BEND_DIAG_4): antes, más allá de este rango,
-     * [deviationAt] seguía sumando `pendiente_del_borde × distancia` — una
-     * extrapolación LINEAL, más segura que dejar seguir la parábola (que
-     * acelera), pero que IGUAL crece sin límite con la distancia. Con
-     * `anchorOffsetPx` grande (~68% del ancho del ojo, `NOSE_AVOID_SHIFT`)
-     * y estilos "wing" (Cat Eye) que extienden el mesh bien más allá del
-     * ancho natural del ojo, la mayoría de los vértices caían LEJOS del
-     * rango — la extrapolación lineal, sobre esa distancia, se disparaba a
-     * decenas de píxeles de desviación: la pestaña salía como una raya recta
-     * hacia la ceja/frente en vez de una pestaña curva (confirmado en
-     * dispositivo real con `LASH_BEND_STRENGTH=1.0`, ver ESTADO_ACTUAL.md).
-     * Ahora [deviationAt] se sostiene PLANA (el valor exacto del borde, sin
-     * ningún término adicional) más allá del rango fitteado — no hay datos
-     * reales del párpado ahí, así que no hay base para asumir que la curva
-     * SIGUE cambiando; sostenerla plana es la única opción que no puede
-     * explotar sin importar cuán lejos esté `localX` del rango. La pendiente
-     * ([slopeAt]) sigue sosteniendo el valor del borde (no cero) para que la
-     * normal no tenga un salto brusco de iluminación justo en el borde del
-     * clamp — eso no crece con la distancia, así que es seguro dejarlo.
+     * CORRECCIÓN 2026-08-02 (BEND_DIAG_4): la primera versión de este fix
+     * sostenía la desviación PLANA (constante, igual al valor del borde)
+     * más allá de este rango — evitaba que una extrapolación lineal previa
+     * se disparara sin límite (con `anchorOffsetPx` grande, ~68% del ancho
+     * del ojo, y estilos "wing" como Cat Eye, la mayoría de los vértices
+     * caían lejos del rango fitteado y esa extrapolación lineal se disparaba
+     * a decenas de píxeles — la pestaña salía como una raya recta hacia la
+     * ceja/frente, confirmado en dispositivo real). Sostener PLANO evitaba
+     * eso, pero es continuo en VALOR (C0) y discontinuo en DERIVADA (la
+     * pendiente cae de golpe a 0 justo en el borde) — geométricamente, un
+     * shear vertical con esa discontinuidad produce, en la silueta del mesh,
+     * un pico/esquina justo en `minLocalX`/`maxLocalX` en vez de una curva
+     * redonda continua ("se doblan, se deforman" en vez de una pestaña
+     * redondeada).
+     *
+     * CORRECCIÓN 2026-08-07 (BEND_DIAG_5, con fix de signo — ver
+     * [deviationAt]): la PENDIENTE ahora decae suavemente a cero con un
+     * smoothstep (`u²(3−2u)`, la misma función que ya usa
+     * `LashRenderer.opennessDamping`) sobre una distancia derivada del
+     * propio ancho ajustado (mitad de `[minLocalX,maxLocalX]`, ni una
+     * constante inventada ni un valor fijo en píxeles), y la desviación es
+     * la integral CERRADA de esa pendiente decayente. Resultado:
+     * continuidad C1 EXACTA en el borde (mismo valor y misma pendiente que
+     * la parábola ahí mismo — no una aproximación) y la desviación sigue
+     * acotada más allá de la zona de transición (se aplana en una meseta),
+     * preservando la garantía original de que nunca puede explotar.
      */
     private val minLocalX: Float,
     private val maxLocalX: Float,
 ) {
-    /** Plana (constante) más allá de `[minLocalX, maxLocalX]` — ver nota de
-     * la clase. Nunca devuelve más que el máximo/mínimo que la parábola
-     * alcanza DENTRO del rango realmente ajustado. */
+    /** Ver nota de la clase. Dentro de `[minLocalX, maxLocalX]`, la parábola
+     * tal cual. Más allá, el valor del borde más/menos la integral de la
+     * pendiente decayente — continuidad C1 exacta en el borde, acotada
+     * (meseta) más allá de la zona de transición. */
     fun deviationAt(localX: Float): Float {
-        val clamped = localX.coerceIn(minLocalX, maxLocalX)
-        return a * clamped * clamped + b * clamped + c
+        if (localX in minLocalX..maxLocalX) {
+            return a * localX * localX + b * localX + c
+        }
+        val edge = localX.coerceIn(minLocalX, maxLocalX)
+        val edgeVal = a * edge * edge + b * edge + c
+        val edgeSlope = 2f * a * edge + b
+        val falloffDist = falloffDistancePx()
+        val signedDist = localX - edge
+        val u = (abs(signedDist) / falloffDist).coerceIn(0f, 1f)
+        // Integral cerrada de edgeSlope·(1 − smoothstep(u')) du', de 0 a u,
+        // reescalada por falloffDist (smoothstep(u) = u²(3−2u)):
+        //   ∫₀ᵘ (1 − u'²(3−2u')) du' = u − u³ + u⁴/2
+        val integral = u - u * u * u + 0.5f * u * u * u * u
+        // Del lado de maxLocalX, `localX` crece en la MISMA dirección en
+        // que se integra la pendiente (hacia +x) → el término se SUMA. Del
+        // lado de minLocalX, `localX` decrece (se aleja del borde hacia -x)
+        // → recorrer esa dirección acumula la integral con signo CONTRARIO
+        // (equivalente a integrar "hacia atrás"). Sin este signo, F'(minLocalX⁻)
+        // saldría -edgeSlope en vez de +edgeSlope — un salto de signo en la
+        // derivada justo en el borde, exactamente donde se buscaba
+        // continuidad C1 — y se ve como un pliegue/deformación en ese lado
+        // en vez de una curva redondeada continua.
+        val sign = if (signedDist < 0f) -1f else 1f
+        return edgeVal + sign * edgeSlope * falloffDist * integral
     }
 
-    /** Pendiente local (derivada de la parábola en el punto clampeado) —
-     * usada para inclinar la normal del vértice al doblar, no solo
-     * desplazarlo (ver [LashMeshBender]; si no, la iluminación se ve plana/
-     * incorrecta). Se mantiene en el valor del borde más allá del rango
-     * fitteado — a diferencia de [deviationAt], esto no crece con la
-     * distancia (es un valor fijo), así que no hace falta aplanarlo también;
-     * mantenerlo evita un salto visual de iluminación justo en el borde del
-     * clamp. */
+    /** Pendiente local — usada para inclinar la normal del vértice al
+     * doblar (ver [LashMeshBender]; si no, la iluminación se ve plana/
+     * incorrecta). Dentro del rango, la derivada real de la parábola. Más
+     * allá, decae suavemente a cero con un smoothstep sobre
+     * [falloffDistancePx] — para que [deviationAt] se aplane gradualmente
+     * en vez de con un quiebre de derivada (ver nota de la clase). */
     fun slopeAt(localX: Float): Float {
-        val clamped = localX.coerceIn(minLocalX, maxLocalX)
-        return 2f * a * clamped + b
+        if (localX in minLocalX..maxLocalX) {
+            return 2f * a * localX + b
+        }
+        val edge = localX.coerceIn(minLocalX, maxLocalX)
+        val edgeSlope = 2f * a * edge + b
+        val falloffDist = falloffDistancePx()
+        val u = (abs(localX - edge) / falloffDist).coerceIn(0f, 1f)
+        val smoothstep = u * u * (3f - 2f * u)
+        return edgeSlope * (1f - smoothstep)
     }
+
+    /** Distancia (en `localX`, píxeles) sobre la que la pendiente del borde
+     * decae a cero — proporcional al ancho real del rango ajustado (ver
+     * [RendererConfiguration.LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER]), no una
+     * constante inventada: un ala más ancha (ojo más grande / más
+     * landmarks) obtiene una zona de transición proporcionalmente más
+     * ancha. [MIN_FALLOFF_PX] es solo un piso de seguridad numérica (evitar
+     * división por cero si el rango fitteado fuera degeneradamente angosto),
+     * no un parámetro de ajuste visual. */
+    private fun falloffDistancePx(): Float =
+        ((maxLocalX - minLocalX) * RendererConfiguration.LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER)
+            .coerceAtLeast(MIN_FALLOFF_PX)
 
     companion object {
+        /** Piso de seguridad numérica para [falloffDistancePx] — no un
+         * parámetro de ajuste visual, ver esa función. */
+        private const val MIN_FALLOFF_PX = 1e-2f
+
         /**
          * `null` si no hay suficientes puntos para un ajuste significativo
          * (menos de 3) o si el sistema resulta degenerado — el llamador

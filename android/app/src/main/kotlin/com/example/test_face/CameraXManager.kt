@@ -191,6 +191,12 @@ class CameraXManager(
         lashRenderer.loadEyeModels(leftPath, rightPath)
     }
 
+    /** Ver [LashRenderer.setStyle]. */
+    fun setLashStyle(styleId: String?) {
+        Log.i(TAG, "setLashStyle manager=${System.identityHashCode(this)} styleId=$styleId")
+        lashRenderer.setStyle(styleId)
+    }
+
     fun start() {
         analysisExecutor.execute {
             if (helper.getLandmarker() == null) {
