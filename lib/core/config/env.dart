@@ -21,8 +21,8 @@ class Env {
   //     nuevo (no hot-restart: esta pantalla usa cámara nativa, ver nota en
   //     el chat sobre crashes de hot-restart con PlatformView).
   // Antes de compilar el APK para el salón, vuelve a ponerlo en false.
-  static const bool kUseLocalBackend = false;
-  static const String _localLanIp = '34.55.150.142';
+  static const bool kUseLocalBackend = true;
+  static const String _localLanIp = '192.168.0.13';
 
   /// Host raíz del backend (sin `/api`). Usado para imágenes `/media/...`.
   static const String host =
