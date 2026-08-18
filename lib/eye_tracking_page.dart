@@ -56,32 +56,32 @@ const _localLashPresets = [
   _LocalLashPreset(
     name: 'Cat Eye',
     thumbnailAsset: 'assets/p1.png',
-    leftModelAsset: defaultLeftEyeModelAsset,
-    rightModelAsset: defaultRightEyeModelAsset,
+    leftModelAsset: defaultRightEyeModelAsset,
+    rightModelAsset: defaultLeftEyeModelAsset,
   ),
   _LocalLashPreset(
     name: 'Wispy',
     thumbnailAsset: 'assets/p2.png',
-    leftModelAsset: 'assets/modelos/wispy/wispy_left.glb',
-    rightModelAsset: 'assets/modelos/wispy/wispy_right.glb',
+    leftModelAsset: 'assets/modelos/wispy/wispy_right.glb',
+    rightModelAsset: 'assets/modelos/wispy/wispy_left.glb',
   ),
   _LocalLashPreset(
     name: 'Cat Classic',
     thumbnailAsset: 'assets/p3.png',
-    leftModelAsset: 'assets/modelos/catclassic/cat_classic_left.glb',
-    rightModelAsset: 'assets/modelos/catclassic/cat_classic_right.glb',
+    leftModelAsset: 'assets/modelos/catclassic/cat_classic_right.glb',
+    rightModelAsset: 'assets/modelos/catclassic/cat_classic_left.glb',
   ),
   _LocalLashPreset(
     name: 'Foxy Eye',
     thumbnailAsset: 'assets/p4.png',
-    leftModelAsset: 'assets/modelos/foxyeyex/foxy_intense_left.glb',
-    rightModelAsset: 'assets/modelos/foxyeyex/foxy_intense_right.glb',
+    leftModelAsset: 'assets/modelos/foxyeyex/foxy_intense_right.glb',
+    rightModelAsset: 'assets/modelos/foxyeyex/foxy_intense_left.glb',
   ),
   _LocalLashPreset(
     name: 'Natural',
     thumbnailAsset: 'assets/p5.png',
-    leftModelAsset: 'assets/modelos/natural/natural_left.glb',
-    rightModelAsset: 'assets/modelos/natural/natural_right.glb',
+    leftModelAsset: 'assets/modelos/natural/natural_right.glb',
+    rightModelAsset: 'assets/modelos/natural/natural_left.glb',
   ),
 ];
 
@@ -268,10 +268,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (!Platform.isAndroid) return;
     try {
       final leftPath = await extractEyeModelAssetToFile(
-        defaultLeftEyeModelAsset,
+        // La cámara frontal se analiza espejada. Por eso el slot izquierdo
+        // del renderer necesita el GLB derecho para que el extremo externo
+        // del diseño apunte hacia la sien, no hacia la nariz.
+        defaultRightEyeModelAsset,
       );
       final rightPath = await extractEyeModelAssetToFile(
-        defaultRightEyeModelAsset,
+        defaultLeftEyeModelAsset,
       );
       if (!mounted) return;
       setState(() {

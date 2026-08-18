@@ -50,7 +50,10 @@ object RendererConfiguration {
     const val FACE_DISTANCE_MULTIPLIER = 1.0f
 
     // ── Escala del modelo ───────────────────────────────────────────────
-    const val WIDTH_MULTIPLIER = 1.8f
+    // El span del GLB incluye las puntas de las pestañas; 1.8x extendía el
+    // diseño muy por fuera de las comisuras. 1.25 conserva un margen
+    // estético sin convertir la escala en un desplazamiento aparente.
+    const val WIDTH_MULTIPLIER = 1.25f
     // HEIGHT_OFFSET controla dónde queda la RAÍZ real de la pestaña 3D
     // (EyeModelSlot.rootLocalY, ver EyeTransformCalculator) respecto al
     // BORDE del párpado superior (la línea donde nace la pestaña real).
@@ -92,7 +95,9 @@ object RendererConfiguration {
     // WIDTH_MULTIPLIER×scaleFactor) para el desplazamiento de rootLocalY,
     // porque ese desplazamiento es a lo largo del mismo eje Y que ahora
     // tiene esta escala extra.
-    const val HEIGHT_VOLUME_MULTIPLIER = 1.55f
+    // Escala vertical moderada: evita que la raíz corregida por `rootLocalY`
+    // quede visualmente separada de la línea real de pestañas.
+    const val HEIGHT_VOLUME_MULTIPLIER = 1.15f
 
     // ── Corrección por ojo ──────────────────────────────────────────────
     const val RIGHT_EYE_X_NUDGE = 0.0f
