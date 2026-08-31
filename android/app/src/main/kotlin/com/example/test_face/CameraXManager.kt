@@ -29,7 +29,9 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.example.test_face.render.FaceMeshRenderer
 import com.example.test_face.render.LashRenderer
+import com.example.test_face.render.LinerRenderer
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import io.flutter.plugin.common.MethodChannel
 import io.github.sceneview.SceneView
@@ -59,6 +61,15 @@ class CameraXManager(
 
     private val lashRenderer = LashRenderer(activity, mainHandler)
 
+    /** Fase 1 del plan de migración a face-mesh (ver FaceMeshRenderer) —
+     * completamente en paralelo a [lashRenderer], no interfiere con él. */
+    private val faceMeshRenderer = FaceMeshRenderer(mainHandler)
+
+    /** Fase 4 (ver plan) — segundo efecto sobre la malla, delineado. En
+     * paralelo a [lashRenderer]/[faceMeshRenderer], sin depender de ninguno
+     * de los dos. */
+    private val linerRenderer = LinerRenderer(mainHandler)
+
     /** Media móvil exponencial de la latencia real de MediaPipe en ms.
      * Se usa como offset de predicción forward en PoseInterpolator para
      * compensar EXACTAMENTE la latencia de ESTE dispositivo, no un valor
@@ -71,7 +82,7 @@ class CameraXManager(
 
     private val helper = FaceLandmarkerHelper(
         context = activity,
-        onResult = { data, rawResult ->
+        onResult = { data, rawResult, resultBitmap ->
             // Medir la latencia REAL de MediaPipe en este dispositivo
             val submitMs = lastFrameSubmitMs
             val nowMs = SystemClock.uptimeMillis()
@@ -91,14 +102,45 @@ class CameraXManager(
                 )
             }
             debugLastResultMs = nowMs
-            onTrackingResult(data)
-            val imageWidth = (data["imageWidth"] as? Int) ?: 0
-            val imageHeight = (data["imageHeight"] as? Int) ?: 0
-            if (data["faceDetected"] == true && imageWidth > 0 && imageHeight > 0) {
-                // Pasar la latencia medida para predicción adaptativa
-                lashRenderer.onFaceResult(rawResult, imageWidth, imageHeight, smoothedLatencyMs)
+
+            // Calcular posición REAL de las pestañas con LashEdgeDetector
+            // (busca el píxel más oscuro cerca de cada landmark del párpado superior)
+            // y añadirla al mapa antes de enviarlo a Flutter.
+            val augmentedData: Map<String, Any?> = if (resultBitmap != null && data["faceDetected"] == true) {
+                fun toImagePoints(key: String): List<com.example.test_face.render.ImagePoint> =
+                    (data[key] as? List<*>)?.mapNotNull { pt ->
+                        val m = pt as? Map<*, *> ?: return@mapNotNull null
+                        val x = (m["x"] as? Double)?.toFloat() ?: return@mapNotNull null
+                        val y = (m["y"] as? Double)?.toFloat() ?: return@mapNotNull null
+                        com.example.test_face.render.ImagePoint(x, y)
+                    } ?: emptyList()
+
+                fun toMapList(pts: List<com.example.test_face.render.ImagePoint>) =
+                    pts.map { mapOf("x" to it.x.toDouble(), "y" to it.y.toDouble()) }
+
+                val leftLash = com.example.test_face.render.LashEdgeDetector
+                    .detectRealLashLine(resultBitmap, toImagePoints("leftUpperLid"))
+                val rightLash = com.example.test_face.render.LashEdgeDetector
+                    .detectRealLashLine(resultBitmap, toImagePoints("rightUpperLid"))
+
+                data + mapOf(
+                    "leftLashLine" to toMapList(leftLash),
+                    "rightLashLine" to toMapList(rightLash),
+                )
+            } else {
+                data
+            }
+            onTrackingResult(augmentedData)
+            val imageWidth = (augmentedData["imageWidth"] as? Int) ?: 0
+            val imageHeight = (augmentedData["imageHeight"] as? Int) ?: 0
+            if (augmentedData["faceDetected"] == true && imageWidth > 0 && imageHeight > 0) {
+                lashRenderer.onFaceResult(rawResult, imageWidth, imageHeight, smoothedLatencyMs, resultBitmap)
+                faceMeshRenderer.onFaceResult(rawResult)
+                linerRenderer.onFaceResult(rawResult, imageWidth, imageHeight)
             } else {
                 lashRenderer.onFaceLost()
+                faceMeshRenderer.onFaceLost()
+                linerRenderer.onFaceLost()
             }
         },
         onError = onError,
@@ -177,12 +219,16 @@ class CameraXManager(
     fun attachSceneView(view: SceneView) {
         Log.i(TAG, "attachSceneView manager=${System.identityHashCode(this)} view=${System.identityHashCode(view)}")
         lashRenderer.attachSceneView(view)
+        faceMeshRenderer.attachSceneView(view)
+        linerRenderer.attachSceneView(view)
     }
 
     /** Ver la nota de [detachPreview] — misma protección para el SceneView. */
     fun detachSceneView(view: SceneView) {
         Log.i(TAG, "detachSceneView manager=${System.identityHashCode(this)} view=${System.identityHashCode(view)}")
         lashRenderer.detachSceneView(view)
+        faceMeshRenderer.detachSceneView(view)
+        linerRenderer.detachSceneView(view)
     }
 
     /** Ver [LashRenderer.loadEyeModels]. */
@@ -217,6 +263,8 @@ class CameraXManager(
         cancelPendingBind()
         bindGeneration.incrementAndGet()
         lashRenderer.onFaceLost()
+        faceMeshRenderer.onFaceLost()
+        linerRenderer.onFaceLost()
 
         // Corta cualquier grabación en curso antes de desenlazar la cámara,
         // para que el .mp4 quede finalizado en vez de truncado por unbindAll().
@@ -470,10 +518,6 @@ class CameraXManager(
         }
     }
 
-    /** Buffer orientado reutilizable — evita crear un Bitmap nuevo en cada
-     * frame solo para la rotación/espejo. Se reasigna solo si cambia el
-     * tamaño de salida. */
-    private var orientedBitmap: Bitmap? = null
 
     private fun processFrame(imageProxy: ImageProxy) {
         val landmarker = helper.getLandmarker()
@@ -550,6 +594,17 @@ class CameraXManager(
          * 1440x1080 sigue siendo nítido en pantalla y es un tamaño que
          * prácticamente cualquier HAL de cámara puede entregar a framerate
          * completo en una sesión multi-surface.
+         *
+         * REVERTIDO (misma sesión): se probó subir esto en dos pasos (1920x1440,
+         * luego HIGHEST_AVAILABLE_STRATEGY) por un reporte de "calidad horrible" —
+         * ninguno de los dos cambió el síntoma, y terminó describiéndose como
+         * colores raros/apagados/oscuros, no como falta de nitidez o resolución.
+         * Eso apunta a que la resolución de preview NUNCA fue la causa real — se
+         * revierte al valor original para sacar esta variable de la ecuación y
+         * confirmar si el problema de color es anterior a esta sesión (no
+         * introducido por estos cambios) antes de seguir investigando otra cosa
+         * (candidatos: `PreviewView.ImplementationMode`, procesamiento de color del
+         * propio HAL en distintas resoluciones — ninguno de los dos se tocó todavía).
          */
         private val previewResolutionSelector: ResolutionSelector =
             ResolutionSelector.Builder()

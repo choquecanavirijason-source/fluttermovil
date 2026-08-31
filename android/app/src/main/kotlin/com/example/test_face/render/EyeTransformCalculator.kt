@@ -24,13 +24,6 @@ data class EyeTransform(
      * [LashMeshBender], necesario para convertir [lashLineCurve] (en
      * píxeles) a unidades locales del mesh. */
     val eyeWidthPx: Float = 0f,
-    /** [EyeAnchor.lashCurveAnchorOffsetPx] — corrección que [LashMeshBender]
-     * debe sumar a su `pixelLocalX` (relativo al ancla de render) para
-     * evaluar [lashLineCurve] en el sistema de coordenadas en el que se
-     * ajustó (relativo a `EyeAnchor.lidCenter`, no al ancla). Se llena vía
-     * `.copy()` en [FaceRenderPipeline], igual que [lashLineCurve]/
-     * [eyeWidthPx] — ver nota de [EyeAnchorCalculator] (2026-08-02). */
-    val lashCurveAnchorOffsetPx: Float = 0f,
 )
 
 /**
@@ -112,19 +105,22 @@ object EyeTransformCalculator {
         // en X (ver RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER).
         val scaleY = scaleFactor * RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER
 
-        // `position` de arriba es donde renderiza el ORIGEN local (0,0,0)
-        // del modelo, no necesariamente su raíz visual — [rootLocalY] mide
-        // cuánto más abajo, en unidades locales del `.glb`, está la raíz
-        // real respecto a ese origen (ver EyeModelSlot/RawMesh). Para que la
-        // RAÍZ (no el origen) quede exactamente en `position` (el punto de
-        // anclaje del ojo), el origen debe renderizar más ARRIBA que el
-        // anclaje, por la distancia local escalada al MISMO factor que se
-        // usa para el eje Y del modelo (`scaleY`, no `scaleFactor` — el
-        // desplazamiento es a lo largo del eje Y, así que tiene que usar la
-        // escala de ESE eje, ahora que X/Z y Y escalan distinto).
-        // `rootLocalY` es negativo (está por debajo del origen), así que
-        // `-rootLocalY` es positivo: `position - up*(scaleY*rootLocalY)` =
-        // `position + up*(scaleY*|rootLocalY|)`, es decir, sube el origen.
+        // RESTAURADO 2026-08-10: el `.glb` está centrado en su bounding box
+        // (minY = -maxY, verificado), pero la RAÍZ VISUAL real del mesh (la
+        // banda densa donde nace la fibra) está muy por debajo de ese centro
+        // — confirmado con histograma de densidad de vértices en Y (sección
+        // 5.1 del doc, confirmado en dispositivo real 2026-07-24). Anclar el
+        // CENTRO geométrico en `position` (como hacía una versión sin
+        // commitear de este archivo, encontrada en esta sesión) reintroduce
+        // exactamente ese bug: la mitad superior/dispersa del abanico de
+        // fibras queda cerca del ancla y la mitad inferior/densa (la raíz
+        // real) cuelga lejos de la línea de pestañas real — visible en
+        // dispositivo como el modelo "flotando" desconectado del párpado.
+        // `rootLocalY` es negativo (está por debajo del origen local) y usa
+        // `scaleY`, no `scaleFactor` (el desplazamiento de la raíz es a lo
+        // largo del eje Y del modelo — ver sección 5.3), así que el signo
+        // menos desplaza el origen hacia ARRIBA la distancia justa para que
+        // sea la RAÍZ, no el centro, la que quede en `position`.
         val rootCorrectedPosition = position - eyePlane.up * (scaleY * rootLocalY)
 
         return EyeTransform(

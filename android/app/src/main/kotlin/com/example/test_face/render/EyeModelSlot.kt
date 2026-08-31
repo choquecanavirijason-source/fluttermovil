@@ -2,6 +2,7 @@ package com.example.test_face.render
 
 import io.github.sceneview.geometries.Geometry
 import io.github.sceneview.node.ModelNode
+import java.nio.FloatBuffer
 
 /** Estado por ojo: nodo del `.glb` cargado, tamaño natural medido, su filtro
  * de suavizado propio, su interpolador de pose (desacopla el framerate de
@@ -40,45 +41,56 @@ class EyeModelSlot {
     @Volatile var rawMesh: RawMesh? = null
 
     /** Geometry propia activa en el nodo (reemplaza la que carga gltfio por
-     * defecto), actualizada según throttle vía [LashMeshBender] — ver
-     * [RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS]. @Volatile por la
-     * misma razón que [rawMesh]. */
+     * defecto) — su `vertexBuffer` se actualiza en cada resultado de
+     * MediaPipe vía [LashMeshBender]/`VertexBuffer.setBufferAt`, sin
+     * throttle (ver historial de reescritura a buffer directo). @Volatile
+     * por la misma razón que [rawMesh]. */
     @Volatile var geometry: Geometry? = null
 
-    /** Marca de tiempo (nanoTime) del último doblado aplicado — throttle de
-     * [LashMeshBender.bendInPlace], ver [RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS].
-     * Se lee y escribe solo desde el hilo de MediaPipe (mismo hilo que llama
-     * a applyTransform en cada resultado), no necesita @Volatile. */
-    var lastBendNanos = 0L
-
-    /** `true` mientras hay un `geometry.setVertices()` encolado en el hilo
-     * principal sin ejecutar todavía. Sin este guard, si el hilo principal
-     * va lento (jank), applyTransform sigue encolando `Runnable`s nuevos en
-     * cada resultado de MediaPipe más rápido de lo que el principal los
-     * puede consumir — la cola crece sin límite y el lag se acumula en vez
-     * de estabilizarse. @Volatile: escrito desde el hilo de MediaPipe y
-     * desde el hilo principal (dentro del propio Runnable). */
+    /** `true` mientras hay un `setBufferAt` encolado en el hilo principal sin
+     * ejecutar todavía. Sin este guard, si el hilo principal va lento
+     * (jank), applyTransform sigue encolando `Runnable`s nuevos en cada
+     * resultado de MediaPipe más rápido de lo que el principal los puede
+     * consumir — la cola crece sin límite y el lag se acumula en vez de
+     * estabilizarse. @Volatile: escrito desde el hilo de MediaPipe y desde
+     * el hilo principal (dentro del propio Runnable). */
     @Volatile var bendPending = false
 
-    /** Buffers de doblado PRE-ASIGNADOS (double-buffer) — ver
-     * [LashMeshBender.bendInPlace] / [LashRenderer.applyTransform]. Evitan
-     * alocar una `List<Geometry.Vertex>` nueva en cada resultado de
-     * MediaPipe (antes: `.map`/`.mapIndexed` sobre miles de vértices,
-     * ~30Hz — presión de GC real, ver ESTADO_ACTUAL.md sección 3.4). Se
-     * necesitan DOS buffers, no uno: el suavizado EMA de `bendInPlace` lee
-     * el resultado del frame ANTERIOR mientras escribe el de este frame —
-     * con un solo buffer, escribir sobre el índice `i` destruiría el valor
-     * "anterior" de `i` antes de que otro vértice pudiera necesitarlo (no
-     * hay aliasing entre dos buffers distintos, si fuera el mismo sí lo
-     * habría en el caso general). Se asignan una única vez, en
-     * `loadIntoSlot`, con el tamaño exacto de `rawMesh.vertices` — nunca se
-     * reasignan mientras el mismo modelo esté cargado. @Volatile por el
-     * mismo motivo que [rawMesh]/[geometry]: escritos en el hilo de
-     * MediaPipe, publicados hacia `mainHandler.post`. */
-    @Volatile var bufferA: MutableList<Geometry.Vertex>? = null
-    @Volatile var bufferB: MutableList<Geometry.Vertex>? = null
+    /** Double-buffer de POSICIONES, `FloatBuffer` DIRECTO (memoria nativa,
+     * no heap de la JVM/ART) — reemplaza al `MutableList<Geometry.Vertex>`
+     * anterior (ver historial: reescritura para cero asignaciones por
+     * vértice, mismo patrón que [FaceMeshRenderer]). [LashMeshBender.bendInPlace]
+     * escribe con `put(index, valor)` absoluto, sin alocar `Geometry.Vertex`/
+     * `Float3` nuevos. Se necesitan DOS buffers, no uno: el suavizado EMA
+     * lee el resultado del frame ANTERIOR mientras escribe el de este frame
+     * — con un solo buffer, escribir sobre el índice `i` destruiría el
+     * valor "anterior" antes de que se pudiera leer. Se asignan una única
+     * vez, en `loadIntoSlot`, con el tamaño exacto de `rawMesh.vertices`
+     * (vertexCount×3 floats) — nunca se reasignan mientras el mismo modelo
+     * esté cargado. @Volatile por el mismo motivo que [rawMesh]/[geometry].*/
+    @Volatile var positionBufferA: FloatBuffer? = null
+    @Volatile var positionBufferB: FloatBuffer? = null
 
-    /** Alterna cuál de [bufferA]/[bufferB] es el destino de este frame (el
+    /** Cuaternión de tangente "de reposo" (mesh sin doblar) por vértice —
+     * [FloatArray] plano (`vertexCount*4`, x,y,z,w), calculado UNA vez al
+     * cargar el modelo vía [LashMeshBender.computeRestTangents] (costo
+     * único, como parsear el `.glb`). Insumo de [LashMeshBender.bendInPlace]
+     * para rotar la tangente por frame sin reconstruir la base ortonormal
+     * completa (`normalToTangent`, que sí asigna). @Volatile por el mismo
+     * motivo que [rawMesh]. */
+    @Volatile var restTangents: FloatArray? = null
+
+    /** Tangente por vértice YA rotada para este frame — `FloatBuffer`
+     * DIRECTO (`vertexCount*4` floats), subido a GPU en el bufferIndex 1
+     * (TANGENTS) de [geometry]'s `vertexBuffer`, junto con la posición. NO
+     * necesita double-buffer como [positionBufferA]/[positionBufferB]: no
+     * se suaviza entre frames (ver nota en [LashMeshBender.bendInPlace]),
+     * se recalcula fresca cada vez — un solo buffer alcanza porque
+     * [bendPending] ya serializa "nueva escritura" vs. "subida GPU anterior
+     * en curso". @Volatile por el mismo motivo que [rawMesh]. */
+    @Volatile var tangentBuffer: FloatBuffer? = null
+
+    /** Alterna cuál de [positionBufferA]/[positionBufferB] es el destino de este frame (el
      * otro queda como "anterior" para el suavizado del próximo) — solo se
      * lee/escribe desde el hilo de MediaPipe, no necesita @Volatile. */
     var useBufferAAsTarget = true
@@ -99,10 +111,11 @@ class EyeModelSlot {
         interpolator.reset()
         rawMesh = null
         geometry = null
-        lastBendNanos = 0L
         bendPending = false
-        bufferA = null
-        bufferB = null
+        positionBufferA = null
+        positionBufferB = null
+        restTangents = null
+        tangentBuffer = null
         useBufferAAsTarget = true
         hasBentBefore = false
     }

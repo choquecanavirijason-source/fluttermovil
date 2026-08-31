@@ -59,7 +59,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   Timer? _aiCycleTimer;
 
   String _assistantMessage =
-      'Centra tu rostro en cámara para recibir guía en vivo.';
+      'Iniciando evaluación de pestañas en tiempo real…';
   DateTime? _aiMessageHoldUntil;
   DateTime? _lastMessageUpdate;
 
@@ -93,6 +93,15 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     unawaited(_tts.setLanguage('es-MX'));
     unawaited(_tts.setSpeechRate(0.46));
     unawaited(_configureSpanishFemaleVoice());
+
+    // Arrancar el ciclo de IA automáticamente al entrar:
+    // espera 2.5 s para que CameraX termine de inicializar
+    // y el primer frame ya esté disponible para capturar.
+    _aiGuidanceActive = true;
+    Future.delayed(const Duration(milliseconds: 2500), () {
+      if (!mounted) return;
+      _runAiCycleNow();
+    });
   }
 
   /// Busca entre las voces instaladas en el celular una en español marcada
@@ -254,17 +263,24 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   void _toggleAiGuidance() {
     if (!_aiGuidanceActive) {
       setState(() => _aiGuidanceActive = true);
-      unawaited(_runAiReview());
-      _aiCycleTimer?.cancel();
-      _aiCycleTimer = Timer.periodic(_aiCycleInterval, (_) {
-        if (!mounted || !_aiGuidanceActive) return;
-        unawaited(_runAiReview());
-      });
+      _runAiCycleNow();
     } else {
       _aiCycleTimer?.cancel();
       _aiCycleTimer = null;
       setState(() => _aiGuidanceActive = false);
     }
+  }
+
+  /// Dispara una evaluación inmediata y arranca el timer periódico.
+  /// Llamado tanto desde [_toggleAiGuidance] como desde el auto-start en
+  /// [initState] (con delay de 2.5 s para que la cámara esté lista).
+  void _runAiCycleNow() {
+    unawaited(_runAiReview());
+    _aiCycleTimer?.cancel();
+    _aiCycleTimer = Timer.periodic(_aiCycleInterval, (_) {
+      if (!mounted || !_aiGuidanceActive) return;
+      unawaited(_runAiReview());
+    });
   }
 
   /// Captura el frame actual de la cámara en vivo y pide un consejo real a

@@ -1,5 +1,6 @@
 package com.example.test_face.render
 
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -12,20 +13,21 @@ data class EyeAnchor(
     val heightPx: Float,
     val upperLidTangent: ImagePoint,
     /** Centroide REAL del párpado superior (`meanX`/`meanY`, ver [compute]),
-     * SIN el desplazamiento de [RendererConfiguration.NOSE_AVOID_SHIFT] que
-     * sí tiene [point]. [LashLineCurve.fit] debe ajustarse alrededor de este
-     * punto (no de [point]) para que su rango `[minLocalX, maxLocalX]`
-     * quede centrado donde realmente están los landmarks del párpado — ver
-     * nota de la clase, diagnóstico BEND_DIAG 2026-08-02. */
+     * SIN los desplazamientos de estilo ([LashStyleConfig.noseAvoidShift]/
+     * [LashStyleConfig.lateralLashOffset]/[LashStyleConfig.heightOffset])
+     * que sí tiene [point]. Solo para diagnóstico/debug — [LashLineCurve.fit]
+     * ya NO se ajusta alrededor de este punto (ver nota de la clase,
+     * "unificación de frame" 2026-08-10). */
     val lidCenter: ImagePoint,
-    /** Proyección de `(point - lidCenter)` sobre [upperLidTangent] — cuánto
-     * (en píxeles, a lo largo de la tangente) está desplazado el ancla de
-     * render respecto al centroide real del párpado. [LashMeshBender]
-     * necesita sumar esto a su `pixelLocalX` (que está expresado relativo a
-     * `point`, porque ahí es donde se posiciona el centro del mesh) para
-     * evaluar la curva —ajustada alrededor de `lidCenter`— en el sistema de
-     * coordenadas correcto. Ver nota de la clase. */
-    val lashCurveAnchorOffsetPx: Float,
+    /** Canto medial (lagrimal, hacia la nariz) — uno de los dos extremos
+     * reales en X del anillo de 16 puntos del ojo. Nombrado explícitamente
+     * (en vez de "cornerA/cornerB" sin significado) para que cualquier
+     * cálculo que necesite el extremo interno del ojo lo use por nombre, no
+     * por índice ni por min/max recalculado aparte. */
+    val medialCanthus: ImagePoint,
+    /** Canto lateral (temporal, hacia la sien) — el otro extremo real en X
+     * del anillo. Ver [medialCanthus]. */
+    val lateralCanthus: ImagePoint,
 )
 
 /**
@@ -37,8 +39,10 @@ data class EyeAnchor(
  * bounding box del modelo. Se verificó con los 10 `.glb` reales de
  * `assets/modelos/` que su bounding box en Y está centrado en el origen
  * local, pero la masa/raíz visual del mesh está muy por debajo de ese
- * centro — anclar el centro (como se hacía antes) empujaba la pestaña
- * sistemáticamente hacia la ceja. Para extensiones de pestañas reales:
+ * centro — anclar el centro (como se hacía antes, y como una versión sin
+ * commitear de `EyeTransformCalculator` encontrada y revertida en esta
+ * sesión volvía a hacer) empuja la pestaña sistemáticamente lejos de la
+ * línea real del párpado. Para extensiones de pestañas reales:
  *   - El borde del párpado (lash line) es el ORIGEN de las pestañas
  *   - Las pestañas se extienden HACIA ARRIBA desde ahí
  *
@@ -53,42 +57,20 @@ data class EyeAnchor(
  * el ancla hacia arriba (Y más pequeño = más arriba en la imagen = hacia
  * la frente).
  *
- * CORRECCIÓN 2026-07-24 (ajuste fino): antes `anchorY` usaba `edgeLidY`
- * (promedio del 30% de puntos con MAYOR Y del párpado superior) en vez de
- * `meanY`. Para un párpado con forma de arco (más alto — Y menor — en el
- * centro, más bajo en las esquinas, que es la forma real de un ojo), "el
- * 30% con mayor Y" son casi siempre las ESQUINAS, no una muestra
- * representativa de toda la línea de pestañas — mientras que `meanX` sí
- * promedia TODOS los puntos (queda centrado). Esa mezcla (X centrado, Y de
- * esquina) desplazaba el ancla verticalmente respecto a dónde está la
- * línea de pestañas real en el CENTRO del ojo (donde cae `meanX`) — un
- * desfase real de varios píxeles, confirmado con logcat en dispositivo
- * real. `meanY` no tiene ese sesgo: es el centroide del mismo conjunto de
- * puntos que ya usa `meanX`.
- *
- * HEIGHT_OFFSET = 0.0 (valor actual) → ancla en el centroide del párpado
- * superior, y como ahora se ancla la RAÍZ real (no el centro del modelo),
- * la raíz de la pestaña nace ahí — anatómicamente correcto por defecto.
- * HEIGHT_OFFSET > 0 → la raíz queda esa fracción de la altura del ojo por
- * ENCIMA del centroide, solo si hiciera falta un margen estético.
- *
- * **`lidCenter`/`lashCurveAnchorOffsetPx` (2026-08-02)**: `point` (el ancla
- * de RENDER) está desplazado ~68% del ancho del ojo hacia la esquina
- * externa por `NOSE_AVOID_SHIFT` (ver más abajo) — necesario para que el
- * modelo 3D no invada la nariz, pero **no** es un buen origen para
- * `LashLineCurve.fit()`: `LashMeshBender` muestrea la curva centrada en el
- * punto medio del propio mesh (que se posiciona en `point`), así que si la
- * curva se ajusta alrededor de `point` en vez de la nube real de landmarks,
- * casi todos los vértices del mesh caen fuera del rango `[minLocalX,
- * maxLocalX]` que la curva realmente ajustó — y ahí `deviationAt`/
- * `slopeAt` extrapolan LINEALMENTE desde el borde en vez de seguir la
- * parábola (ver [LashLineCurve]), lo que se ve como una pestaña recta/sin
- * doblar en vez de curva. `lidCenter` (el centroide SIN desplazar) le da a
- * `LashLineCurve.fit()` un origen que sí coincide con la nube de landmarks;
- * `lashCurveAnchorOffsetPx` es la corrección que `LashMeshBender` necesita
- * sumar a su `pixelLocalX` (expresado relativo a `point`) para seguir
- * evaluando en el sistema de coordenadas de la curva (relativo a
- * `lidCenter`).
+ * **Unificación de frame (2026-08-10)**: hasta esta fecha, `LashLineCurve`
+ * se ajustaba alrededor de `lidCenter` (el centroide SIN desplazar) en vez
+ * de `point` (el ancla de RENDER, desplazada por `noseAvoidShift`/
+ * `lateralLashOffset`), porque el ajuste anterior (una parábola por mínimos
+ * cuadrados) se mal-condicionaba numéricamente si se centraba lejos de la
+ * nube real de puntos — eso obligaba a mantener DOS orígenes distintos
+ * (`point` para el transform rígido, `lidCenter` para la curva) y una
+ * corrección aparte (`lashCurveAnchorOffsetPx`, ya eliminada) solo para
+ * reconciliarlos. Con el spline de Hermite/Catmull-Rom que reemplazó a esa
+ * parábola (ver `LashLineCurve`, interpola los puntos reales en vez de
+ * aproximarlos), ese mal-condicionamiento ya no existe — el spline es
+ * válido en cualquier origen. Por eso ahora `FaceRenderPipeline` ajusta la
+ * curva directamente alrededor de `point`: transform, curva y doblado del
+ * mesh comparten el MISMO frame, sin offset de reconciliación.
  */
 object EyeAnchorCalculator {
 
@@ -111,7 +93,7 @@ object EyeAnchorCalculator {
 
         val width = eye.width
         val height = eye.height
-        if (width < 1f || height < 0.5f) return null
+        if (width < 1f || height < 0.5f || !width.isFinite() || !height.isFinite()) return null
 
         // Centroide del párpado superior = promedio de X e Y de TODOS sus
         // puntos. Ambos se calculan del MISMO conjunto de puntos con el
@@ -120,26 +102,32 @@ object EyeAnchorCalculator {
         val meanX = eye.upperLid.sumOf { it.x.toDouble() }.toFloat() / eye.upperLid.size
         val meanY = eye.upperLid.sumOf { it.y.toDouble() }.toFloat() / eye.upperLid.size
 
-        // Desplaza el ancla X hacia la esquina EXTERNA del ojo (la más
-        // lejana al centro horizontal de la imagen, asumiendo rostro
-        // centrado) — ver LashStyleConfig.noseAvoidShift y la nota de la
-        // clase (2026-07-24): evita que la expansión simétrica de
-        // WIDTH_MULTIPLIER invada la nariz por el lado interno.
-        //
         // `cornerA`/`cornerB` (los extremos en X del anillo de 16 puntos del
         // ojo) SON, anatómicamente, el canto medial/lagrimal y el canto
         // lateral/temporal — las únicas dos esquinas reales de un ojo — sin
-        // necesitar índices de landmark dedicados nuevos.
+        // necesitar índices de landmark dedicados nuevos. Se calculan UNA
+        // sola vez acá y se exponen nombrados en [EyeAnchor] (ver
+        // `medialCanthus`/`lateralCanthus`) para que ningún otro archivo
+        // necesite recalcular min/max sobre `eye.ring`.
         val cornerA = eye.ring.minByOrNull { it.x }
         val cornerB = eye.ring.maxByOrNull { it.x }
         val imageCenterX = imageWidth / 2f
         val cornerAIsLateral = cornerA != null && cornerB != null &&
-            kotlin.math.abs(cornerA.x - imageCenterX) > kotlin.math.abs(cornerB.x - imageCenterX)
-        val outerCornerX = when {
-            cornerA != null && cornerB != null -> if (cornerAIsLateral) cornerA.x else cornerB.x
-            else -> meanX
+            abs(cornerA.x - imageCenterX) > abs(cornerB.x - imageCenterX)
+        val medialCanthus = when {
+            cornerA != null && cornerB != null -> if (cornerAIsLateral) cornerB else cornerA
+            else -> ImagePoint(meanX, meanY)
         }
-        val shiftSign = if (outerCornerX >= meanX) 1f else -1f
+        val lateralCanthus = when {
+            cornerA != null && cornerB != null -> if (cornerAIsLateral) cornerA else cornerB
+            else -> ImagePoint(meanX, meanY)
+        }
+
+        // Desplaza el ancla X hacia la esquina EXTERNA del ojo — ver
+        // LashStyleConfig.noseAvoidShift y la nota de la clase (2026-07-24):
+        // evita que la expansión simétrica de WIDTH_MULTIPLIER invada la
+        // nariz por el lado interno.
+        val shiftSign = if (lateralCanthus.x >= meanX) 1f else -1f
         val shiftedX = meanX + shiftSign * width * styleConfig.noseAvoidShift
 
         // El ancla sube (Y decrece) desde el centroide según heightOffset.
@@ -155,56 +143,33 @@ object EyeAnchorCalculator {
         //
         // Corrección ADITIVA (no reemplaza el shift de arriba, se suma
         // encima) siguiendo el vector real medial→lateral:
-        //   lateralDirection = normalize(canthusLateral − canthusMedial)
+        //   lateralDirection = normalize(lateralCanthus − medialCanthus)
         //   correctedPoint   = shiftedPoint + lateralDirection × (distancia(cantos) × lateralLashOffset)
         // `distancia(cantos)` es la distancia real entre los dos cantos (no
         // `width`, que es el ancho del bounding box — puede diferir si el
         // ojo está rotado), así que el offset sigue siendo proporcional al
         // tamaño REAL del ojo en la imagen, no un valor fijo en píxeles.
-        // Al quedar expresado en píxeles de imagen (como el resto del
-        // ancla), la misma des-proyección real de EyeTransformCalculator
-        // (`camera.unproject`, ver Fase 1 del plan de motor) lo lleva a
-        // espacio de mundo de forma correcta a cualquier distancia de
-        // cámara — no hace falta ninguna corrección de perspectiva aparte
-        // ni un desplazamiento fijo en unidades de mundo.
-        var pointX = shiftedX
-        var pointY = anchorY
-        if (cornerA != null && cornerB != null) {
-            val medialCanthus = if (cornerAIsLateral) cornerB else cornerA
-            val lateralCanthus = if (cornerAIsLateral) cornerA else cornerB
-            val lateralDx = lateralCanthus.x - medialCanthus.x
-            val lateralDy = lateralCanthus.y - medialCanthus.y
-            val canthusDistance = kotlin.math.hypot(lateralDx.toDouble(), lateralDy.toDouble())
-                .toFloat().coerceAtLeast(1e-4f)
-            val lateralDirX = lateralDx / canthusDistance
-            val lateralDirY = lateralDy / canthusDistance
-            val lateralOffsetPx = canthusDistance * styleConfig.lateralLashOffset
-            pointX = shiftedX + lateralDirX * lateralOffsetPx
-            pointY = anchorY + lateralDirY * lateralOffsetPx
-        }
+        val lateralDx = lateralCanthus.x - medialCanthus.x
+        val lateralDy = lateralCanthus.y - medialCanthus.y
+        val canthusDistance = hypot(lateralDx.toDouble(), lateralDy.toDouble())
+            .toFloat().coerceAtLeast(1e-4f)
+        val lateralDirX = lateralDx / canthusDistance
+        val lateralDirY = lateralDy / canthusDistance
+        val lateralOffsetPx = canthusDistance * styleConfig.lateralLashOffset
+        val pointX = shiftedX + lateralDirX * lateralOffsetPx
+        val pointY = anchorY + lateralDirY * lateralOffsetPx
         val anchor = ImagePoint(pointX, pointY)
 
         val tangent = fittedUpperLidTangent(eye.upperLid, meanX, meanY)
-
-        // lidCenter: centroide SIN el shift de NOSE_AVOID_SHIFT — origen
-        // correcto para LashLineCurve.fit() (ver nota de la clase,
-        // 2026-08-02). lashCurveAnchorOffsetPx: proyección de (anchor -
-        // lidCenter) sobre la tangente, mismo producto punto que usa
-        // LashLineCurve.fit para pasar a localX — permite a LashMeshBender
-        // convertir su pixelLocalX (relativo a `anchor`, porque ahí se
-        // posiciona el mesh) al sistema de coordenadas de la curva
-        // (relativo a `lidCenter`).
-        val lidCenter = ImagePoint(meanX, meanY)
-        val lashCurveAnchorOffsetPx =
-            (anchor.x - lidCenter.x) * tangent.x + (anchor.y - lidCenter.y) * tangent.y
 
         return EyeAnchor(
             point = anchor,
             widthPx = width,
             heightPx = height,
             upperLidTangent = tangent,
-            lidCenter = lidCenter,
-            lashCurveAnchorOffsetPx = lashCurveAnchorOffsetPx,
+            lidCenter = ImagePoint(meanX, meanY),
+            medialCanthus = medialCanthus,
+            lateralCanthus = lateralCanthus,
         )
     }
 

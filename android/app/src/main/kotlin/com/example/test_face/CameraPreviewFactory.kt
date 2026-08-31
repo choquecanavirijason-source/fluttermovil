@@ -38,6 +38,15 @@ class CameraPreviewFactory(
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
             scaleType = PreviewView.ScaleType.FILL_CENTER
+            // REVERTIDO: se probó PERFORMANCE (SurfaceView) para un reporte
+            // de color raro/oscuro — confirmado en dispositivo real que no
+            // cambió NADA (mismo problema, cero diferencia). No es la causa,
+            // así que no vale la pena mantener el riesgo de compositing con
+            // la UI de Flutter que PERFORMANCE trae sin ningún beneficio a
+            // cambio. Además se confirmó que el problema es SOLO en la
+            // cámara frontal (la trasera se ve bien con este mismo código),
+            // lo que descarta cualquier configuración que afecte a las dos
+            // cámaras por igual — ver el análisis en CameraXManager.kt.
             // TextureView: mejor composición con Flutter encima del vídeo.
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }

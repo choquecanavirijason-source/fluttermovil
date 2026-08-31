@@ -15,32 +15,30 @@ import dev.romainguy.kotlin.math.Float3
  */
 object RendererConfiguration {
 
-    // ── One Euro Filter: MÍNIMO suavizado, MÁXIMA velocidad ─────────────
+    // ── One Euro Filter: balance estabilidad/respuesta ──────────────────
     //
-    // Con predicción forward adaptativa, el filtro ya NO necesita compensar
-    // la latencia — solo necesita limpiar el ruido de MediaPipe.
+    // PROBLEMA resuelto: con minCutoff=3.0Hz el filtro era casi transparente
+    // y el jitter de MediaPipe pasaba directo al modelo, causando movimiento
+    // errático ("pestañas locas"). Con 1.8Hz hay suficiente suavizado para
+    // limpiar el jitter sin agregar lag visible en movimiento normal.
     //
-    // minCutoff = 3.0Hz → τ ≈ 53ms en reposo (solo limpia jitter)
-    // Target rápido = 25Hz → τ ≈ 6.4ms (sub-frame, invisible)
-    //
-    // Comparación con antes:
-    // - Antes: minCutoff=1.0, target=12Hz → lag de ~100ms visible
-    // - Ahora: minCutoff=3.0, target=25Hz → lag de ~6ms invisible
+    // minCutoff = 1.8Hz → τ ≈ 88ms en reposo (suaviza jitter de landmarks)
+    // Target rápido = 20Hz → τ ≈ 8ms (movimiento rápido responde bien)
     const val ONE_EURO_D_CUTOFF = 1.0f
 
-    private const val FAST_MOTION_TARGET_CUTOFF_HZ = 25f
+    private const val FAST_MOTION_TARGET_CUTOFF_HZ = 20f
 
-    const val POSITION_MIN_CUTOFF = 3.0f
+    const val POSITION_MIN_CUTOFF = 1.8f
     private const val FAST_MOTION_POSITION_VELOCITY_MPS = 1.0f
     const val POSITION_BETA =
         (FAST_MOTION_TARGET_CUTOFF_HZ - POSITION_MIN_CUTOFF) / FAST_MOTION_POSITION_VELOCITY_MPS
 
-    const val ROTATION_MIN_CUTOFF = 2.0f
-    private const val FAST_MOTION_ROTATION_VELOCITY = 1.8f
+    const val ROTATION_MIN_CUTOFF = 1.5f
+    private const val FAST_MOTION_ROTATION_VELOCITY = 1.5f
     const val ROTATION_BETA =
         (FAST_MOTION_TARGET_CUTOFF_HZ - ROTATION_MIN_CUTOFF) / FAST_MOTION_ROTATION_VELOCITY
 
-    const val SCALE_MIN_CUTOFF = 2.0f
+    const val SCALE_MIN_CUTOFF = 1.5f
     private const val SCALE_TO_POSITION_BETA_RATIO = 0.05f / 0.3f
     const val SCALE_BETA = POSITION_BETA * SCALE_TO_POSITION_BETA_RATIO
 
@@ -50,54 +48,12 @@ object RendererConfiguration {
     const val FACE_DISTANCE_MULTIPLIER = 1.0f
 
     // ── Escala del modelo ───────────────────────────────────────────────
-    const val WIDTH_MULTIPLIER = 1.8f
-    // HEIGHT_OFFSET controla dónde queda la RAÍZ real de la pestaña 3D
-    // (EyeModelSlot.rootLocalY, ver EyeTransformCalculator) respecto al
-    // BORDE del párpado superior (la línea donde nace la pestaña real).
-    //
-    // 0.0 = raíz exactamente en el borde del párpado (valor por defecto —
-    //       anatómicamente correcto: una extensión de pestañas se pega justo
-    //       sobre la línea de pestañas real, sin margen)
-    // >0  = raíz desplazada hacia ARRIBA esa fracción de la altura del ojo
-    //       (margen de "flote"/glue visible, si hiciera falta por estética)
-    //
-    // IMPORTANTE (corrección 2026-07-24): antes este offset se aplicaba
-    // sobre el CENTRO GEOMÉTRICO del bounding box del modelo (asumiendo que
-    // el .glb estaba centrado en su raíz visual), en 0.30 — pero se verificó
-    // con los 10 modelos reales de assets/modelos/ (histograma de densidad
-    // de vértices en Y) que la raíz visual de cada pestaña está muy por
-    // debajo del centro geométrico del bounding box, cerca de su Y mínimo.
-    // Ancorar el centro (en vez de la raíz real) + este offset extra
-    // empujaba la pestaña sistemáticamente hacia la ceja, en cualquier
-    // ángulo de cabeza — justo el síntoma reportado con capturas reales.
-    // Ahora EyeTransformCalculator ancla EyeModelSlot.rootLocalY (la raíz
-    // real, medida del mesh) directamente al punto de anclaje del ojo, así
-    // que este offset vuelve a tener el significado simple y literal de su
-    // nombre. 0.0f es el punto de partida teóricamente correcto — falta
-    // confirmar visualmente en dispositivo real (no disponible en este
-    // entorno) y ajustar solo si hace falta un pequeño margen estético.
-    // Ajuste 2026-08-02: reportado en dispositivo real que la raíz quedaba
-    // un poco por ENCIMA de la línea de pestañas real (0.0 usa el centroide
-    // del párpado superior, que por promediar todo el arco queda algo más
-    // arriba que el punto más bajo visible en la mayor parte del ancho del
-    // ojo). Negativo = baja el ancla (suma a meanY en vez de restar).
-    // Ajuste 2026-08-08 (calibración fina, con el envolvente en Z de 5.8 ya
-    // confirmado funcionando): se probó -0.05 (sección 5.11) razonando que
-    // "menos negativo = menos agresivo" — INCORRECTO: por la convención de
-    // signos de esta fórmula, menos negativo es MENOS corrección hacia
-    // abajo, no menos "agresividad" hacia arriba. Confirmado con captura de
-    // cámara real recortada/ampliada (`adb screencap` + `ffmpeg crop`): con
-    // -0.05 la raíz queda claramente por ENCIMA del borde visible del
-    // párpado, con un espacio de piel de por medio en los dos ojos. Subido
-    // (más negativo) a -0.22 para cerrar ese espacio.
-    //
-    // Ajuste 2026-08-10 (sección 5.15): el usuario marcó con una línea verde,
-    // sobre una foto real, dónde debe caer la línea de pestañas (justo sobre
-    // el borde del párpado, cerca del iris) — con -0.22 la raíz seguía
-    // renderizando claramente por ENCIMA de esa línea, con piel de por medio
-    // en los dos ojos (la misma clase de hueco que motivó el ajuste
-    // anterior, solo que insuficiente). Subido (más negativo) a -0.38.
-    const val HEIGHT_OFFSET = -0.38f
+    const val WIDTH_MULTIPLIER = 1.6f
+    // HEIGHT_OFFSET = 0.12: mueve el ancla 12% de la altura del ojo hacia arriba
+    // desde el centroide. Como rootLocalY=0 (centro del modelo en el ancla),
+    // esto sitúa el centro del modelo en la línea real de pestañas (borde inferior
+    // del párpado superior, donde nacen las pestañas reales).
+    const val HEIGHT_OFFSET = 0.12f
     const val HEAD_TILT_MULTIPLIER = 1.0f
     // Multiplicador SOLO sobre el eje Y local del modelo (además del
     // scaleFactor isotrópico que ya iguala el ancho al ojo real) — le da
@@ -114,81 +70,26 @@ object RendererConfiguration {
     const val RIGHT_EYE_X_NUDGE = 0.0f
     const val LEFT_EYE_X_NUDGE = 0.0f
 
-    // Con WIDTH_MULTIPLIER=1.65 el modelo se agranda simétricamente desde
-    // el centro del ojo — pero el lado interno (hacia la nariz/lagrimal)
-    // tiene mucho menos espacio anatómico libre que el lado externo (hacia
-    // la sien), así que esa misma expansión simétrica invade la nariz de
-    // un lado y se ve bien del otro (reportado en dispositivo real,
-    // 2026-07-24). NOSE_AVOID_SHIFT desplaza el ancla X, como fracción del
-    // ancho del ojo, hacia el corner EXTERNO (el más lejano al centro
-    // horizontal de la imagen — ver EyeAnchorCalculator) para reducir el
-    // invasión del lado interno sin tocar la escala. 0.0 = sin desplazar.
-    const val NOSE_AVOID_SHIFT = 0.68f
+    // NOSE_AVOID_SHIFT = 0: sin desplazamiento horizontal del ancla.
+    // El centro del modelo va exactamente sobre el centroide de los puntos verdes.
+    const val NOSE_AVOID_SHIFT = 0.0f
 
-    // CORRECCIÓN 2026-08-08: reportado en dispositivo real que el conjunto
-    // de pestañas sigue quedando visiblemente más cerca del canto medial/
-    // lagrimal de lo esperado, incluso con NOSE_AVOID_SHIFT ya activo.
-    // Causa: NOSE_AVOID_SHIFT desplaza SOLO en el eje X de la imagen (un
-    // signo × una magnitud escalar), no a lo largo de la dirección real
-    // canto-medial→canto-lateral — con la cabeza en roll (inclinada de
-    // costado), esa dirección real tiene una componente en Y que el
-    // desplazamiento puramente horizontal no cubre, así que el ancla queda
-    // corta respecto al eje verdadero del ojo.
-    //
-    // LATERAL_LASH_OFFSET es una corrección ADICIONAL (no reemplaza a
-    // NOSE_AVOID_SHIFT, se suma encima) calculada como vector real:
-    // `normalize(canthusLateral - canthusMedial) * (distancia(canthus) ×
-    // LATERAL_LASH_OFFSET)` — ver EyeAnchorCalculator.compute(). Al ser
-    // proporcional a la distancia REAL entre los dos cantos (no un valor
-    // fijo en píxeles ni un desplazamiento en espacio de mundo), escala
-    // solo con el tamaño del ojo en la imagen — el mismo mecanismo de
-    // des-proyección real que ya usa el resto del ancla (ver
-    // EyeTransformCalculator) se encarga de que sea correcto a cualquier
-    // distancia de cámara, no hace falta ningún ajuste aparte por
-    // perspectiva.
-    //
-    // 0.0 = sin corrección adicional (comportamiento anterior). Positivo =
-    // empuja más hacia el canto LATERAL/temporal.
-    //
-    // Ajuste 2026-08-08 (feedback en dispositivo real, mismo día,
-    // iterativo): 0.08 → correcto pero insuficiente ("sigue alejado del
-    // canto externo") → 0.16 → SIGUE insuficiente → 0.28 → SOBRE-CORRIGE
-    // (la punta del ala se pasaba del canto lateral real hacia la sien/
-    // nacimiento del pelo, visible en captura recortada/ampliada) → 0.20.
-    //
-    // CONFIRMADO en dispositivo real (Infinix X669) con 0.20: captura
-    // recortada/ampliada de los dos ojos — el ala queda CONTENIDA dentro
-    // del contorno real del ojo en ambos (ni se pasa hacia la sien ni deja
-    // hueco en el lagrimal), simétrico entre los dos ojos, sin pico ni
-    // deformación.
-    //
-    // REVISADO 2026-08-10: con dispositivo real disponible de nuevo (mismo
-    // Infinix X669), captura fresca (`adb screencap`) recortada con grid de
-    // referencia en píxeles mostró que 0.20 deja un ojo bien contenido
-    // (margen ~7px hacia el canto lateral) pero el OTRO ojo con un hueco
-    // real de ~95px entre la punta del ala y el canto lateral real — no un
-    // desajuste menor. Confirma lo que la sección 5.13 ya dejaba anotado
-    // como sospecha sin resolver ("probablemente por pose, no
-    // necesariamente asimetría de código"): la magnitud de este caso
-    // (95px vs 7px con la MISMA fórmula/constante en los dos ojos) es
-    // grande para explicarse solo por ruido de landmarks. Subido a 0.30
-    // como paso intermedio.
-    //
-    // Ajuste 2026-08-10 (sección 5.15): con 0.30, el usuario marcó con
-    // flechas sobre una foto real que TODAVÍA queda un hueco visible entre
-    // la punta del ala y el canto lateral real, en los DOS ojos esta vez
-    // (no uno solo como en la ronda anterior). Subido a 0.38.
-    const val LATERAL_LASH_OFFSET = 0.38f
+    // LATERAL_LASH_OFFSET = 0: sin corrección lateral adicional.
+    const val LATERAL_LASH_OFFSET = 0.0f
 
     // ── Parpadeo ────────────────────────────────────────────────────────
     const val EYE_CLOSED_OPENNESS_THRESHOLD = 0.12f
     const val EYE_OPEN_OPENNESS_THRESHOLD = 0.22f
 
-    // ── Iluminación ─────────────────────────────────────────────────────
-    const val INDIRECT_LIGHT_INTENSITY = 15000f
-    const val KEY_LIGHT_INTENSITY = 100000f
-    val KEY_LIGHT_COLOR = Float3(1f, 0.97f, 0.90f)
-    val KEY_LIGHT_DIRECTION = Float3(-0.35f, -0.7f, -0.6f)
+    // ── Iluminación mejorada para pestañas estéticas ────────────────────
+    // Luz ambiente más intensa y cálida para que las pestañas se vean
+    // bien iluminadas como en fotos de belleza profesionales.
+    const val INDIRECT_LIGHT_INTENSITY = 35000f
+    const val KEY_LIGHT_INTENSITY = 60000f
+    val KEY_LIGHT_COLOR = Float3(1f, 0.95f, 0.88f)  // Blanco cálido
+    // Luz casi frontal, ligeramente desde arriba — ilumina las pestañas
+    // sin crear sombras duras que las oscurezcan.
+    val KEY_LIGHT_DIRECTION = Float3(-0.1f, -0.5f, -0.85f)
 
     // ── Calidad de render ───────────────────────────────────────────────
     const val MSAA_SAMPLE_COUNT = 4
@@ -219,6 +120,15 @@ object RendererConfiguration {
     // upload/GC a poco más de la mitad. Ver también EyeModelSlot.bendPending,
     // que evita que se seguya encolando trabajo si el hilo principal ya va
     // atrasado.
+    //
+    // SIN USO desde la reescritura de LashMeshBender a FloatBuffer directo +
+    // VertexBuffer.setBufferAt in-place (ver LashMeshBender/EyeModelSlot):
+    // ese throttle existía para acotar la TASA de asignaciones de heap
+    // (Geometry.Vertex/Float3 por vértice + FloatBuffer.allocate() de
+    // geometry.setVertices()), no la tasa de recálculo en sí — con cero
+    // asignaciones por vértice, ya no hay presión de GC que limitar. Se deja
+    // definida por su valor histórico/documental (todo el comentario de
+    // arriba), no porque algo la siga leyendo.
     const val LASH_BEND_MIN_INTERVAL_NANOS = 220_000_000L
 
     // Multiplicador de intensidad del doblado (0 = recto, 1 = la curva
@@ -255,7 +165,46 @@ object RendererConfiguration {
     // los extremos, donde `deviationAt` alcanza sus valores más altos) sin
     // aplanarla del todo — pendiente de confirmar en dispositivo, ver
     // sección 5.11.
-    const val LASH_BEND_STRENGTH = 0.5f
+    //
+    // Subido de vuelta a 1.0f (2026-08-10, ver sección 6.1 del doc): pedido
+    // explícito del usuario de que el modelo 3D tenga "esa misma silueta"
+    // que los 8 puntos reales del párpado — con `strength < 1f`, el mesh
+    // sigue solo una fracción de `LashLineCurve.deviationAt()`, así que NO
+    // puede coincidir exactamente con la curva aunque esta ya interpole los
+    // 8 puntos con precisión (6.1). El caso que motivó bajarlo a 0.5f era
+    // específicamente la PUNTA del ala de Cat Eye, que cae FUERA de
+    // `[minLocalX, maxLocalX]` (fuera del rango con datos reales) — ahí
+    // sigue aplicando el falloff con smoothstep (ver `LashLineCurve`,
+    // sección 5.6/5.8), que ya amortigua esa zona por separado de
+    // `strength`; la sospecha era que la combinación de AMBOS mecanismos
+    // amortiguando lo mismo era lo que sobre-corregía.
+    //
+    // REVERTIDO 2026-08-10 (confirmado en dispositivo real, Infinix X669,
+    // misma sesión, con `LASH_DEFORMATION_ENABLED=false` como prueba de
+    // aislamiento — sección 6.2): con el TRANSFORM solo (sin doblado), la
+    // pestaña queda perfecta en los dos ojos — raíz y dirección correctas.
+    // Al reactivar el doblado con `strength=1.0f` (uniforme, sin distinguir
+    // zona), el ala se distorsionaba de nuevo. Bajado a `0.5f` (5.11) como
+    // parche uniforme — amortiguaba TODO, incluida la zona con los 8 puntos
+    // reales, donde el spline (6.1) no tiene ningún riesgo de overshoot.
+    //
+    // SEPARADO 2026-08-10 (sección 6.4): en vez de un único `strength`
+    // uniforme, `LashMeshBender.bendInPlace()` ahora amortigua distinto
+    // según la zona (ver [LashLineCurve.wingBlend]) — este valor vuelve a
+    // `1.0f` porque SOLO se aplica dentro de `[minLocalX, maxLocalX]` (los 8
+    // landmarks reales), donde es matemáticamente seguro (spline exacto,
+    // monótono, sin overshoot). La amortiguación que antes hacía este valor
+    // en el ala ahora vive en [LASH_BEND_WING_STRENGTH], por separado.
+    const val LASH_BEND_STRENGTH = 1.0f
+
+    // Fuerza en la extrapolación MÁS ALLÁ de los 8 puntos reales (ej. la
+    // punta del ala de un Cat Eye, sección 6.4) — zona sin datos reales,
+    // donde `strength=1.0` uniforme causó una distorsión confirmada en
+    // dispositivo real (sección 6.3). Mismo valor que el `LASH_BEND_STRENGTH`
+    // ya confirmado seguro en 5.11 — punto de partida conservador; subir
+    // esto (no [LASH_BEND_STRENGTH]) si hace falta más fidelidad en el ala,
+    // siempre confirmando en dispositivo real antes de dejarlo.
+    const val LASH_BEND_WING_STRENGTH = 0.5f
 
     /**
      * Suavizado temporal (EMA) del doblado, en posición Y ya deformada —
@@ -326,4 +275,112 @@ object RendererConfiguration {
     // de reactivar. `0f` = comportamiento idéntico a antes de la sección 5.8
     // (solo shear en Y, sin envolvente en Z).
     const val LASH_BEND_DEPTH_DROP_STRENGTH = 0.0f
+
+    // ── Diagnóstico: aislar TRANSFORM de DEFORMACIÓN ──────────────────────
+    // `false` desactiva el doblado de mesh (LashMeshBender) por completo —
+    // el modelo se renderiza con su forma de fábrica, solo con
+    // posición/rotación/escala (EyeTransformCalculator) aplicadas. Sirve
+    // para confirmar, en dispositivo real, si un desalineamiento viene del
+    // ANCLA/TRANSFORM (con esto en `false`, el mesh sin doblar debería
+    // seguir naciendo en la línea del párpado) o del DOBLADO (si el mesh sin
+    // doblar ya está bien ubicado pero se desvía al activar esto de nuevo).
+    // `true` = comportamiento normal en producción.
+    //
+    // REESCRITO Y REACTIVADO: LashMeshBender ya no asigna Geometry.Vertex/
+    // Float3 por vértice ni pasa por geometry.setVertices() (que
+    // internamente hacía FloatBuffer.allocate() + recálculo de AABB en cada
+    // llamada) — usa FloatBuffer directo preasignado +
+    // VertexBuffer.setBufferAt() in-place, el mismo patrón que
+    // FaceMeshRenderer (Fase 1). El OOM original venía de esas asignaciones
+    // a ~30Hz sin límite, no de recalcular el doblado en sí — con cero
+    // asignaciones por vértice, ya no hace falta el throttle de
+    // LASH_BEND_MIN_INTERVAL_NANOS (ver esa constante, ya sin uso). También
+    // recalcula TANGENTS por frame (ver LashMeshBender.computeRestTangents),
+    // agregado tras confirmar en dispositivo que dejar la normal estática
+    // se veía como una línea negra dura junto a la pestaña.
+    // TEST DE AISLAMIENTO TEMPORAL (a pedido, no permanente): con esto en
+    // `false`, la línea negra de la base debería seguir apareciendo IGUAL
+    // (predicción, ver historial de conversación: se reportó por primera vez
+    // con el doblado ya apagado, junto con el fix de rootLocalY) — si es así,
+    // confirma que el doblado/tangentes NO la causaron. Revertir a `true`
+    // después de esta prueba puntual.
+    const val LASH_DEFORMATION_ENABLED = false
+
+    // Piso de color por vértice (ver RawMesh.withColorFloor) — el COLOR_0
+    // del .glb trae un degradado raíz→punta intencional del artista
+    // (raíz≈0.03 casi negro puro, punta≈0.14, medido en cateyeleft.glb).
+    // Con la raíz ahora anclada exactamente en el borde del párpado, ese
+    // extremo casi-negro-sólido se leía como una línea dura en dispositivo
+    // real. 0.08f es un primer valor sin confirmar todavía — mismo criterio
+    // que cualquier constante nueva de este proyecto: ajustar según lo que
+    // se vea, no asumir que es el correcto. Subir (más cerca de 0.14) si
+    // sigue viéndose como línea; bajar (más cerca de 0.03) si la pestaña
+    // queda demasiado clara/plana.
+    const val LASH_COLOR_FLOOR = 0.08f
+
+    // ── Malla facial de 468 puntos (Fase 1, ver FaceMeshRenderer) ─────────
+    // Interruptor maestro: `false` no crea ni actualiza la malla — rollback
+    // de una línea, mismo espíritu que LASH_DEFORMATION_ENABLED. El pipeline
+    // de pestañas (LashRenderer/FaceRenderPipeline) es independiente de esto
+    // en cualquier caso: no se ve afectado ni con esto en `true` ni en `false`.
+    const val FACE_MESH_ENABLED = false
+
+    // Signo de la profundidad relativa que entrega MediaPipe por landmark
+    // (NormalizedLandmark.z()) al convertirla a Z de mundo en
+    // FaceMeshRenderer.onFaceResult. SIN CONFIRMAR EN DISPOSITIVO — misma
+    // situación que la convención row/column-major de EyePoseEstimator: si
+    // en pantalla la malla se ve con la nariz HUNDIDA en vez de sobresaliendo
+    // (cóncava en vez de convexa), cambiar a -1f.
+    const val FACE_MESH_DEPTH_Z_SIGN = 1f
+
+    // Color de depuración semitransparente (Fase 1: sin textura ni pestañas
+    // ancladas todavía — solo para validar visualmente que la malla sigue la
+    // cara). metallic=0/roughness=1/reflectance=0 en FaceMeshRenderer para
+    // que el material PBR de SceneView se vea lo más plano/parejo posible sin
+    // normales por vértice reales (esas llegan recién en una fase futura).
+    const val FACE_MESH_DEBUG_COLOR_R = 0.15f
+    const val FACE_MESH_DEBUG_COLOR_G = 0.85f
+    const val FACE_MESH_DEBUG_COLOR_B = 1.0f
+    const val FACE_MESH_DEBUG_COLOR_A = 0.35f
+
+    // ── Anclaje de pestaña desde la malla facial (Fase 2) ─────────────────
+    // `false` (default): EyePlaneCalculator + EyeTransformCalculator, tal
+    // cual funcionan hoy — sin cambio de comportamiento. `true`: posición/
+    // rotación/escala se derivan de MeshEyeTransformCalculator (3 landmarks
+    // reales de la malla de 468 puntos por ojo) en vez de pose de cabeza +
+    // residuo 2D. Rollback de una línea, mismo espíritu que
+    // LASH_DEFORMATION_ENABLED/FACE_MESH_ENABLED — comparar A/B en
+    // dispositivo cambiando solo esto.
+    const val LASH_ANCHOR_FROM_FACE_MESH = false
+
+    // ── Delineado (Fase 4) ──────────────────────────────────────────────
+    // Interruptor maestro de LinerRenderer — mismo patrón que
+    // FACE_MESH_ENABLED (guard temprano en attachSceneView/onFaceResult).
+    // `false`: LinerRenderer nunca crea su nodo/ribbon ni recibe resultados
+    // de MediaPipe — se aísla por completo del resto de la escena. Se
+    // apagó para descartar el ribbon placeholder (opaco, plano, sin
+    // textura, comparte LASH_DEFORMATION_ENABLED con LashMeshBender.
+    // bendInPlace) como origen de la "línea negra recta y dura" reportada
+    // en dispositivo — más consistente con ese síntoma que el mesh de
+    // pestañas con fibras. Reactivar solo tras confirmar en dispositivo
+    // que la línea desaparece con esto en `false`.
+    const val ENABLE_EYELINER = false
+
+    // Flag PROPIO, independiente de LASH_ANCHOR_FROM_FACE_MESH — el
+    // anclaje-por-malla de pestañas todavía no se confirmó en dispositivo,
+    // así que el delineado no debe heredar ese riesgo sin probar (ver plan
+    // Fase 4). Mismo significado que su contraparte de pestañas: `false` =
+    // EyePlaneCalculator+EyeTransformCalculator (2D+headPose, probado);
+    // `true` = MeshEyeTransformCalculator (3 landmarks de la malla).
+    const val EYELINER_ANCHOR_FROM_FACE_MESH = false
+
+    // Color sólido placeholder del ribbon procedural de delineado (ver
+    // LinerRibbonMesh/LinerRenderer) — no hay `.glb`/material de arte
+    // todavía. Alpha=1 -> material OPACO (ver MaterialLoader.
+    // createColorInstance): un delineado real no es translúcido como el
+    // overlay de debug de la malla facial.
+    const val LINER_PLACEHOLDER_COLOR_R = 0.08f
+    const val LINER_PLACEHOLDER_COLOR_G = 0.06f
+    const val LINER_PLACEHOLDER_COLOR_B = 0.05f
+    const val LINER_PLACEHOLDER_COLOR_A = 1.0f
 }

@@ -134,15 +134,18 @@ class PoseInterpolator {
     private fun length(v: Float3): Float = sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
 
     private companion object {
-        /** Máxima extrapolación: 3× el intervalo entre muestras. Subido de
-         * 2.5× para cubrir mejor dispositivos donde MediaPipe tarda mucho. */
-        const val MAX_EXTRAPOLATION_FACTOR = 3.0f
+        /** Máxima extrapolación: 1.5× el intervalo entre muestras.
+         * Reducido de 3.0×: con MediaPipe a ~20Hz (50ms/frame) y 3.0×,
+         * se predecía 150ms hacia el futuro, causando overshoot visible
+         * (pestañas "saltando"). Con 1.5× = ~75ms, justo lo suficiente para
+         * compensar la latencia sin causar inestabilidad. */
+        const val MAX_EXTRAPOLATION_FACTOR = 1.5f
 
-        /** Límite de aceleración para evitar overshoot en movimientos bruscos
-         * (ej: sacudir la cabeza rápidamente). En unidades de mundo/ns². */
-        const val MAX_ACCEL = 1e-13f
+        /** Límite de aceleración más conservador para evitar overshoot. */
+        const val MAX_ACCEL = 5e-14f
 
-        /** Pushes de calentamiento antes de activar predicción. */
-        const val WARMUP_PUSHES = 3
+        /** Más calentamiento antes de activar predicción, para evitar
+         * saltos en los primeros frames tras detectar el rostro. */
+        const val WARMUP_PUSHES = 5
     }
 }

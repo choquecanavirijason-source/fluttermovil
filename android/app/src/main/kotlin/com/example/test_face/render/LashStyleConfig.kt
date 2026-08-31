@@ -95,10 +95,26 @@ data class LashStyleConfig(
          * [DEFAULT]. */
         val WISPY = LashStyleConfig()
 
+        /** Delineado clásico, silueta más contenida que [CAT_EYE]. Pendiente
+         * de calibrar — hoy idéntico a [DEFAULT]. Preset local "Cat Classic"
+         * (`assets/modelos/catclassic/`) — antes de esto no tenía entrada
+         * acá y caía al `?: DEFAULT` de [forStyleId] sin que nadie lo
+         * planeara así (mismo resultado numérico, pero por accidente, no
+         * por diseño). */
+        val CAT_CLASSIC = LashStyleConfig()
+
+        /** Efecto zorro, ala extendida hacia arriba/afuera. Pendiente de
+         * calibrar — hoy idéntico a [DEFAULT]. Preset local "Foxy Eye"
+         * (`assets/modelos/foxyeyex/`) — mismo caso que [CAT_CLASSIC], sin
+         * entrada registrada hasta ahora. */
+        val FOXY_EYE = LashStyleConfig()
+
         private val BY_ID = mapOf(
             "cateye" to CAT_EYE,
             "natural" to NATURAL,
             "wispy" to WISPY,
+            "catclassic" to CAT_CLASSIC,
+            "foxyeye" to FOXY_EYE,
         )
 
         /**

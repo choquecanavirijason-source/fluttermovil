@@ -1,11 +1,11 @@
 package com.example.test_face.render
 
 import dev.romainguy.kotlin.math.Float3
-import io.github.sceneview.geometries.Geometry
+import io.github.sceneview.math.normalToTangent
+import java.nio.FloatBuffer
 import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /**
  * Deforma [RawMesh.vertices] para que la pestaña siga la curva real del
@@ -18,94 +18,127 @@ import kotlin.math.sqrt
  *
  * Dos deformaciones, cada una en un eje distinto:
  * - **Y (shear vertical puro, NO rotación)**: sigue la curva del párpado
- *   ([LashLineCurve]). Se probó y revirtió un bend por rotación (marco
- *   tangente/normal 2D) — este asset es un ABANICO de fibras individuales,
- *   no una cinta continua; rotar cada vértice según la pendiente LOCAL de
- *   su propia columna X hace que fibras vecinas giren cantidades distintas
- *   y sus puntas se crucen/enrosquen (confirmado en dispositivo real). El
+ *   ([LashLineCurve]). Este asset es un ABANICO de fibras individuales, no
+ *   una cinta continua; rotar cada vértice según la pendiente LOCAL de su
+ *   propia columna X hace que fibras vecinas giren cantidades distintas y
+ *   sus puntas se crucen/enrosquen (confirmado en dispositivo real). El
  *   shear puro (`x`/`z` intactos en este eje, solo `y' = y + desviación`)
  *   es lo correcto para este tipo de malla.
  * - **Z (envolvente esférica)**: aproximación cuadrática de una esfera de
- *   radio `eyeWidthPx · styleConfig.zDepthDropRadiusFraction` (ver sección
- *   5.8 del doc) — sin esto, el ala exterior de un Cat Eye se queda plana
- *   frente a la cámara en vez de retroceder hacia adentro de la órbita
- *   como hace el párpado real.
+ *   radio `eyeWidthPx · styleConfig.zDepthDropRadiusFraction` — sin esto,
+ *   el ala exterior de un Cat Eye se queda plana frente a la cámara en vez
+ *   de retroceder hacia adentro de la órbita como hace el párpado real.
  *
- * Eje de doblado en Y: glTF exige espacio Y-up, y los assets de este
- * proyecto están exportados con "Khronos glTF Blender I/O" (confirmado
- * leyendo el JSON de cada `.glb`), que convierte automáticamente el Z-up
- * nativo de Blender a Y-up al exportar — la garantía viene del formato + la
- * herramienta, no de mirar el modelo.
+ * REESCRITO a buffer directo (ver plan): antes escribía en un
+ * `MutableList<Geometry.Vertex>`, construyendo un `Geometry.Vertex`
+ * (y su `Float3` de posición) NUEVO por vértice por resultado de MediaPipe
+ * — eso, sumado a que `geometry.setVertices()` (SceneView) internamente
+ * hacía `FloatBuffer.allocate()` nuevo + recálculo de AABB en cada llamada,
+ * fue lo que causó el OOM real en dispositivo que documentaba este archivo.
+ * Acá se aplica el mismo patrón ya probado en [FaceMeshRenderer]: [target]/
+ * [tangentTarget] son `FloatBuffer` DIRECTOS preasignados por el llamador,
+ * escritos con `put(index, valor)` absoluto — cero `Geometry.Vertex`/
+ * `Float3`/`Quaternion` nuevos por vértice.
  *
- * Riesgo NO verificable sin dispositivo: el sentido (izquierda/derecha) del
- * eje X local respecto a la tangente del párpado — si está invertido, el
- * doblado queda espejado en vez de seguir la curva real (ver
- * [RawMesh.mirroredAcrossX], que ya cubre el caso confirmado de esto).
+ * NORMAL/TANGENTS (agregado tras confirmar en dispositivo real que dejarla
+ * estática se veía como una línea negra dura junto a la pestaña — el
+ * material `LashPBR` del propio `.glb` es bastante brilloso,
+ * `roughness=0.42`/`specularFactor=0.9`, muy sensible a una normal que ya
+ * no coincide con la superficie doblada): en vez de reconstruir la base
+ * ortonormal completa (`normalToTangent`, que arma tangente/bitangente
+ * desde cero con `Float3`/`Quaternion` — SÍ asigna) en cada frame, esa
+ * función se llama UNA SOLA VEZ por vértice al cargar el modelo (ver
+ * [computeRestTangents], costo único como parsear el `.glb`, no por frame),
+ * y por frame solo se le aplica una rotación alrededor del eje Z LOCAL por
+ * el mismo ángulo que ya usa el shear de posición (`atan(slope)`) —
+ * multiplicación de cuaterniones en escalares puros, cerrada y barata,
+ * sin reconstruir la base.
  */
 object LashMeshBender {
 
+    private const val POSITION_COMPONENTS = 3
+    private const val TANGENT_COMPONENTS = 4
+
     /**
-     * Dobla [raw] y escribe el resultado en [target] — sin alocar una lista
-     * nueva por frame. [target] debe venir PRE-ASIGNADO con el mismo tamaño
-     * que `raw.vertices` (ver [EyeModelSlot.bufferA]/[EyeModelSlot.bufferB],
-     * llenados una única vez al cargar el modelo). Si [previous] no es
-     * `null`, el suavizado EMA contra el frame anterior (ver
-     * [RendererConfiguration.LASH_BEND_SMOOTHING]) se funde en el MISMO
-     * pase — antes eran dos pasadas separadas (doblado en esta función +
-     * suavizado en `LashRenderer`), cada una construyendo un `Vertex` nuevo
-     * por vértice; acá se calcula la posición/normal final una sola vez y
-     * se construye 1 solo `Vertex` por vértice por frame, el mínimo posible
-     * sin cambiar de API (ver límite honesto más abajo).
+     * Calcula el cuaternión de tangente "de reposo" (mesh sin doblar) de
+     * cada vértice — UNA sola vez, al cargar el modelo (ver
+     * [LashRenderer.loadIntoSlot]), reusando [normalToTangent] tal como lo
+     * hacía `Geometry.Builder` internamente. Resultado: `FloatArray` plano
+     * (`vertexCount * 4`, orden x,y,z,w), insumo de [bendInPlace] para
+     * rotarlo por frame sin reconstruir la base ortonormal.
+     */
+    fun computeRestTangents(vertices: List<io.github.sceneview.geometries.Geometry.Vertex>): FloatArray {
+        val out = FloatArray(vertices.size * TANGENT_COMPONENTS)
+        for (i in vertices.indices) {
+            val normal = vertices[i].normal ?: DEFAULT_NORMAL
+            val q = normalToTangent(normal)
+            val base = i * TANGENT_COMPONENTS
+            out[base] = q.x
+            out[base + 1] = q.y
+            out[base + 2] = q.z
+            out[base + 3] = q.w
+        }
+        return out
+    }
+
+    /**
+     * Dobla [raw] y escribe posición en [target] y tangente en
+     * [tangentTarget] — sin alocar nada por vértice (ver KDoc de la clase).
+     * [target]/[previous] son los `EyeModelSlot.positionBufferA`/
+     * `positionBufferB` (double-buffer alternado por el llamador, para el
+     * suavizado EMA de posición); [tangentTarget] es un único buffer (no
+     * necesita double-buffer: no se suaviza entre frames, ver nota abajo) y
+     * [restTangents] es el resultado de [computeRestTangents], constante
+     * mientras el modelo esté cargado.
      *
-     * `curve == null`, `eyeWidthPx <= 0` o `strength <= 0` → sin curvatura
-     * adicional para este frame: copia los vértices crudos a [target] (sin
-     * alocar `Vertex` nuevos, solo referencias) en vez de recorrer nada.
+     * La tangente NO pasa por el suavizado EMA de posición — se recalcula
+     * fresca cada frame desde el `slope` de este frame. Es una
+     * simplificación deliberada (evita mezclar cuaterniones, que necesita
+     * slerp, no una mezcla lineal): si se nota temblor fino en el brillo
+     * especular (no en la forma, que sí está suavizada), es lo próximo a
+     * ajustar.
      *
-     * **LÍMITE HONESTO de "cero asignaciones"**: `io.github.sceneview.
-     * geometries.Geometry.Vertex` y `dev.romainguy.kotlin.math.Float3` son
-     * INMUTABLES — todos sus campos son `val`/`final`, verificado
-     * decompilando `sceneview-2.1.1-api.jar` con `javap` (no a ojo): no
-     * exponen setters ni una variante mutable, solo `copy()`. No hay forma
-     * de mutar un `Vertex` ya existente en el sitio sin bypassear esta API
-     * por completo (manejar un `VertexBuffer`/`FloatBuffer` de Filament
-     * directamente — fuera de alcance de este cambio, ver nota en el doc).
-     * Lo que SÍ se elimina acá, y es lo que realmente presionaba al GC a
-     * ~30Hz por ojo: (a) la `List`/`ArrayList` nueva por frame (`target` se
-     * reutiliza, solo se sobreescribe por índice), y (b) la doble
-     * instanciación de `Vertex` por vértice que había antes (doblado +
-     * suavizado como dos `.map`/`.mapIndexed` encadenados).
+     * Devuelve `false` (sin escribir nada) si `LASH_DEFORMATION_ENABLED` es
+     * `false`, no hay curva para este frame, o el ancho del ojo/`strength`
+     * son inválidos — el llamador no debe subir nada a GPU en ese caso (el
+     * mesh queda en la última forma subida, normalmente la de reposo del
+     * `.glb`, cargada una única vez al construir la `Geometry`).
      */
     fun bendInPlace(
         raw: RawMesh,
-        target: MutableList<Geometry.Vertex>,
+        target: FloatBuffer,
         /** Resultado ya doblado del frame anterior (buffer distinto a
          * [target] — ver double-buffer en [EyeModelSlot]), o `null` en el
          * primer doblado de este slot (sin frame previo contra el que
          * suavizar). */
-        previous: List<Geometry.Vertex>?,
+        previous: FloatBuffer?,
+        restTangents: FloatArray,
+        tangentTarget: FloatBuffer,
         /** [RendererConfiguration.LASH_BEND_SMOOTHING] — `1f` = sin
          * suavizar (equivalente a ignorar [previous]). */
         smoothing: Float,
         curve: LashLineCurve?,
         styleConfig: LashStyleConfig,
         eyeWidthPx: Float,
-        /** [EyeAnchor.lashCurveAnchorOffsetPx] — ver la nota extensa en el
-         * historial de este archivo / `EyeAnchorCalculator`: sin sumar
-         * esto, casi todos los vértices caían fuera de `[minLocalX,
-         * maxLocalX]` que `curve` realmente ajustó. */
-        anchorOffsetPx: Float = 0f,
+        /** Fuerza dentro de `[minLocalX, maxLocalX]` — la zona con los 8
+         * landmarks REALES del párpado, donde el spline es exacto y
+         * monótono (sin riesgo de overshoot, ver [LashLineCurve]). `1f` =
+         * fidelidad total a esos 8 puntos. */
         strength: Float = RendererConfiguration.LASH_BEND_STRENGTH,
-    ) {
-        require(target.size == raw.vertices.size) {
-            "target (${target.size}) debe tener el mismo tamaño que raw.vertices (${raw.vertices.size})"
-        }
-
+        /** Fuerza en la extrapolación MÁS ALLÁ de los 8 puntos reales (ej.
+         * la punta del ala de un Cat Eye) — zona sin datos reales, donde
+         * `strength=1` uniforme confirmó distorsión en dispositivo real. La
+         * transición entre [strength] y esto usa [LashLineCurve.wingBlend],
+         * con derivada cero en el borde. */
+        wingStrength: Float = RendererConfiguration.LASH_BEND_WING_STRENGTH,
+    ): Boolean {
         val span = raw.maxX - raw.minX
-        val canBend = curve != null && eyeWidthPx > 0f && strength > 0f && span > 1e-4f
-        if (!canBend) {
-            for (i in raw.vertices.indices) target[i] = raw.vertices[i]
-            return
-        }
+        // LASH_DEFORMATION_ENABLED=false aísla el TRANSFORM (posición/
+        // rotación/escala) de la DEFORMACIÓN (este doblado) para diagnóstico
+        // — ver RendererConfiguration.
+        val canBend = RendererConfiguration.LASH_DEFORMATION_ENABLED &&
+            curve != null && eyeWidthPx > 0f && strength > 0f && span > 1e-4f
+        if (!canBend) return false
 
         // El span local del mesh (unidades propias del .glb) corresponde al
         // ancho real del ojo en píxeles (eyeWidthPx) — de ahí la conversión
@@ -115,71 +148,77 @@ object LashMeshBender {
 
         // Radio de la esfera del globo ocular, como fracción de eyeWidthPx
         // (ver LashStyleConfig.zDepthDropRadiusFraction) — coerceAtLeast
-        // solo por seguridad numérica (evitar división por cero con un
-        // estilo mal configurado a fracción 0), no un ajuste visual.
+        // solo por seguridad numérica.
         val radiusPx = (eyeWidthPx * styleConfig.zDepthDropRadiusFraction).coerceAtLeast(1e-3f)
         val blend = previous != null && smoothing < 1f
 
-        for (i in raw.vertices.indices) {
-            val vertex = raw.vertices[i]
-            val pos = vertex.position
+        val vertices = raw.vertices
+        val n = vertices.size
+
+        for (i in 0 until n) {
+            // vertex.position es un Float3 EXISTENTE (parseado una única vez
+            // al cargar el modelo, no por frame) — leer sus componentes acá
+            // es solo acceso a campo, no asigna nada nuevo.
+            val pos = vertices[i].position
             val t = (pos.x - raw.minX) / span
-            val pixelLocalX = (t - 0.5f) * eyeWidthPx + anchorOffsetPx
+            val pixelLocalX = (t - 0.5f) * eyeWidthPx
 
-            // `strength` amortigua la desviación calculada — se escala
-            // ANTES de la pendiente/normal también, así la inclinación de
-            // la normal queda consistente con el desplazamiento real
-            // aplicado (si no, la iluminación insinuaría más curva de la
-            // que realmente se ve).
-            val deviationPx = curve!!.deviationAt(pixelLocalX) * strength
-            val slope = curve.slopeAt(pixelLocalX) * strength
+            // Fuerza efectiva: `strength` dentro del rango con datos reales,
+            // amortiguando suave y continuamente hacia `wingStrength` en la
+            // extrapolación — ver [LashLineCurve.wingBlend].
+            val effectiveStrength = strength - (strength - wingStrength) * curve!!.wingBlend(pixelLocalX)
+            val deviationPx = curve.deviationAt(pixelLocalX) * effectiveStrength
+            val slope = curve.slopeAt(pixelLocalX) * effectiveStrength
 
-            // Envolvente esférica en Z (sección 5.8 del doc): aproximación
-            // de círculo z = R − √(R²−x²) ≈ x²/(2R) para |x| ≪ R (primer
-            // término no nulo de Taylor) — una caída CUADRÁTICA derivada de
-            // la geometría real de una esfera, no un valor inventado.
-            // Clamp a `radiusPx` (verificado numéricamente: la aproximación
-            // diverge sin límite para |x|>R, que el ala de un Cat Eye
-            // alcanza de forma rutinaria) — la profundidad física máxima de
-            // esa esfera es su propio radio, así que es la meseta correcta.
+            // Envolvente esférica en Z: z = R − √(R²−x²) ≈ x²/(2R) para
+            // |x| ≪ R (primer término no nulo de Taylor). Clamp a `radiusPx`
+            // — la profundidad física máxima de esa esfera es su propio
+            // radio, así que es la meseta correcta.
             val depthDropPx = ((pixelLocalX * pixelLocalX) / (2f * radiusPx)).coerceAtMost(radiusPx)
-            // foxyLiftMultiplier reemplaza a LASH_BEND_DEPTH_DROP_STRENGTH
-            // como el knob por-estilo — negativo invierte el sentido (lift
-            // hacia +Z en vez de drop hacia -Z, ver LashStyleConfig).
             val depthDropLocal = depthDropPx * meshUnitsPerPixel * styleConfig.foxyLiftMultiplier * strength
 
-            val bentPosition = Float3(pos.x, pos.y + deviationPx * meshUnitsPerPixel, pos.z - depthDropLocal)
-            val bentNormal = tiltNormal(vertex.normal ?: DEFAULT_NORMAL, slope)
+            val bentX = pos.x
+            val bentY = pos.y + deviationPx * meshUnitsPerPixel
+            val bentZ = pos.z - depthDropLocal
 
-            val finalPosition = if (blend) {
-                val prevPos = previous!![i].position
-                Float3(
-                    prevPos.x + (bentPosition.x - prevPos.x) * smoothing,
-                    prevPos.y + (bentPosition.y - prevPos.y) * smoothing,
-                    prevPos.z + (bentPosition.z - prevPos.z) * smoothing,
-                )
+            val base = i * POSITION_COMPONENTS
+            if (blend) {
+                // previous no-null garantizado por `blend` — !! es solo para
+                // el compilador, nunca lanza en este camino.
+                val prevX = previous!!.get(base)
+                val prevY = previous.get(base + 1)
+                val prevZ = previous.get(base + 2)
+                target.put(base, prevX + (bentX - prevX) * smoothing)
+                target.put(base + 1, prevY + (bentY - prevY) * smoothing)
+                target.put(base + 2, prevZ + (bentZ - prevZ) * smoothing)
             } else {
-                bentPosition
+                target.put(base, bentX)
+                target.put(base + 1, bentY)
+                target.put(base + 2, bentZ)
             }
 
-            target[i] = Geometry.Vertex(finalPosition, bentNormal, vertex.uvCoordinate, vertex.color)
+            // Tangente: rotar el cuaternión DE REPOSO (precalculado, ver
+            // computeRestTangents) alrededor del eje Z local por `angle`,
+            // mismo ángulo que el shear de posición — multiplicación de
+            // cuaterniones cerrada (q_tilt * q_rest), sin reconstruir la
+            // base tangente/bitangente/normal desde cero. q_tilt = rotación
+            // alrededor de Z: (x=0, y=0, z=sin(angle/2), w=cos(angle/2)) —
+            // con x=y=0 el producto de Hamilton se simplifica a esto:
+            val angle = atan(slope)
+            val half = angle * 0.5f
+            val sinHalf = sin(half)
+            val cosHalf = cos(half)
+            val tb = i * TANGENT_COMPONENTS
+            val rx = restTangents[tb]
+            val ry = restTangents[tb + 1]
+            val rz = restTangents[tb + 2]
+            val rw = restTangents[tb + 3]
+            tangentTarget.put(tb, cosHalf * rx - sinHalf * ry)
+            tangentTarget.put(tb + 1, cosHalf * ry + sinHalf * rx)
+            tangentTarget.put(tb + 2, cosHalf * rz + sinHalf * rw)
+            tangentTarget.put(tb + 3, cosHalf * rw - sinHalf * rz)
         }
-    }
-
-    /** Rota la normal alrededor del eje Z local por `atan(slope)`. `slope`
-     * es adimensional (píxeles/píxeles), así que la rotación no depende de
-     * la conversión de unidades usada para la posición. */
-    private fun tiltNormal(normal: Float3, slope: Float): Float3 {
-        val angle = atan(slope.toDouble()).toFloat()
-        val cosA = cos(angle.toDouble()).toFloat()
-        val sinA = sin(angle.toDouble()).toFloat()
-        val nx = normal.x * cosA - normal.y * sinA
-        val ny = normal.x * sinA + normal.y * cosA
-        val nz = normal.z
-        val lengthSq = nx * nx + ny * ny + nz * nz
-        if (lengthSq <= 0f || !lengthSq.isFinite()) return normal
-        val invLength = 1f / sqrt(lengthSq)
-        return Float3(nx * invLength, ny * invLength, nz * invLength)
+        return true
     }
 
     private val DEFAULT_NORMAL = Float3(0f, 1f, 0f)

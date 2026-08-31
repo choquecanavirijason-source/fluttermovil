@@ -3,115 +3,161 @@ package com.example.test_face.render
 import kotlin.math.abs
 
 /**
- * Curva de ajuste (mínimos cuadrados, cuadrática) al párpado superior real
- * ("Upper Lash Line"), en un sistema de coordenadas local alineado con la
- * tangente promedio del párpado — la misma que ya usa [EyePlaneCalculator]
- * para el residual de rotación. Por eso [LashLineCurve] captura SOLO la
- * curvatura ADICIONAL respecto a esa inclinación promedio, sin duplicar la
- * rotación que el transform rígido ([EyeTransformCalculator]) ya aplica.
+ * Curva del párpado superior real ("Upper Lash Line"), en un sistema de
+ * coordenadas local alineado con la tangente promedio del párpado — la
+ * misma que ya usa [EyePlaneCalculator] para el residual de rotación. Por
+ * eso [LashLineCurve] captura SOLO la curvatura ADICIONAL respecto a esa
+ * inclinación promedio, sin duplicar la rotación que el transform rígido
+ * ([EyeTransformCalculator]) ya aplica.
  *
- * `f(localX) = a·localX² + b·localX + c` da el desvío perpendicular (en
- * píxeles de imagen) de la curva real respecto a la línea recta promedio,
- * en el punto `localX` (distancia proyectada desde el ancla a lo largo de
- * la tangente del párpado).
+ * CAMBIO 2026-08-10 (de parábola aproximada a spline exacto): hasta acá esta
+ * clase ajustaba una PARÁBOLA por mínimos cuadrados — una aproximación que
+ * en general NO pasa exactamente por ninguno de los 8 landmarks reales del
+ * párpado, solo captura la tendencia general. El usuario pidió explícitamente
+ * que el modelo 3D siga "la forma de esta línea tal cual" señalando la
+ * polilínea verde del debug painter ([LidLandmarkDebugPainter], línea que
+ * conecta los 8 puntos reales del párpado superior) — no una aproximación.
+ * Ahora [fit] construye un spline de Hermite cúbico que interpola
+ * EXACTAMENTE los 8 puntos, con continuidad C1 en cada nodo interno (sin
+ * los quiebres que tendría conectar los puntos con segmentos rectos) — es
+ * la curva suave más simple que puede pasar por todos los puntos reales sin
+ * reintroducir el bug de "pico/pliegue" ya corregido (ver sección 5.6 del
+ * doc, sobre discontinuidad de derivada en el borde del ajuste).
+ *
+ * CAMBIO 2026-08-10 (tangentes monótonas, sin overshoot): las tangentes ya
+ * no son Catmull-Rom puro (diferencia centrada) sino el limitador de
+ * Fritsch-Carlson (ver [monotoneTangents]) — garantiza que la curva nunca
+ * "se pasa" por encima/debajo de dos landmarks consecutivos entre ellos,
+ * incluso donde la curvatura del párpado cambia de signo entre segmentos
+ * (el caso donde Catmull-Rom puro sí puede overshootear).
+ *
+ * `deviationAt(localX)` da el desvío perpendicular (en píxeles de imagen) de
+ * la curva real respecto a la línea recta promedio, en el punto `localX`
+ * (distancia proyectada desde el ancla a lo largo de la tangente del
+ * párpado).
  */
 class LashLineCurve private constructor(
-    private val a: Float,
-    private val b: Float,
-    private val c: Float,
-    /** Rango real (en `localX`, píxeles) de los puntos usados para el
-     * ajuste — ver [fit]. Más allá de este rango no hay datos reales del
-     * párpado; [deviationAt]/[slopeAt] hacen decaer la influencia de la
-     * parábola suavemente en vez de evaluarla sin límite (diverge rápido,
-     * por diseño de cualquier polinomio) o cortarla en seco.
-     *
-     * CORRECCIÓN 2026-08-02 (BEND_DIAG_4): la primera versión de este fix
-     * sostenía la desviación PLANA (constante, igual al valor del borde)
-     * más allá de este rango — evitaba que una extrapolación lineal previa
-     * se disparara sin límite (con `anchorOffsetPx` grande, ~68% del ancho
-     * del ojo, y estilos "wing" como Cat Eye, la mayoría de los vértices
-     * caían lejos del rango fitteado y esa extrapolación lineal se disparaba
-     * a decenas de píxeles — la pestaña salía como una raya recta hacia la
-     * ceja/frente, confirmado en dispositivo real). Sostener PLANO evitaba
-     * eso, pero es continuo en VALOR (C0) y discontinuo en DERIVADA (la
-     * pendiente cae de golpe a 0 justo en el borde) — geométricamente, un
-     * shear vertical con esa discontinuidad produce, en la silueta del mesh,
-     * un pico/esquina justo en `minLocalX`/`maxLocalX` en vez de una curva
-     * redonda continua ("se doblan, se deforman" en vez de una pestaña
-     * redondeada).
-     *
-     * CORRECCIÓN 2026-08-07 (BEND_DIAG_5, con fix de signo — ver
-     * [deviationAt]): la PENDIENTE ahora decae suavemente a cero con un
-     * smoothstep (`u²(3−2u)`, la misma función que ya usa
-     * `LashRenderer.opennessDamping`) sobre una distancia derivada del
-     * propio ancho ajustado (mitad de `[minLocalX,maxLocalX]`, ni una
-     * constante inventada ni un valor fijo en píxeles), y la desviación es
-     * la integral CERRADA de esa pendiente decayente. Resultado:
-     * continuidad C1 EXACTA en el borde (mismo valor y misma pendiente que
-     * la parábola ahí mismo — no una aproximación) y la desviación sigue
-     * acotada más allá de la zona de transición (se aplana en una meseta),
-     * preservando la garantía original de que nunca puede explotar.
-     */
-    private val minLocalX: Float,
-    private val maxLocalX: Float,
+    /** Nodos (localX, localY), ordenados por localX estrictamente creciente
+     * — ver [fit]. Los mismos 8 puntos reales del párpado, sin aproximar. */
+    private val nodeX: FloatArray,
+    private val nodeY: FloatArray,
+    /** Tangente (dy/dx) en cada nodo, limitada con Fritsch-Carlson para
+     * garantizar monotonía por tramo (sin overshoot) — ver
+     * [Companion.monotoneTangents]. */
+    private val nodeSlope: FloatArray,
 ) {
-    /** Ver nota de la clase. Dentro de `[minLocalX, maxLocalX]`, la parábola
-     * tal cual. Más allá, el valor del borde más/menos la integral de la
-     * pendiente decayente — continuidad C1 exacta en el borde, acotada
-     * (meseta) más allá de la zona de transición. */
+    private val minLocalX: Float get() = nodeX[0]
+    private val maxLocalX: Float get() = nodeX[nodeX.size - 1]
+
+    /** Dentro de `[minLocalX, maxLocalX]`: el spline de Hermite cúbico,
+     * exacto en los nodos. Más allá: se sostiene con el valor/pendiente del
+     * borde, con la pendiente decayendo suavemente a cero (mismo mecanismo
+     * de falloff C1-continuo que ya tenía la versión de parábola — ver nota
+     * de clase y [slopeAt]), para que nunca explote lejos de datos reales. */
     fun deviationAt(localX: Float): Float {
-        if (localX in minLocalX..maxLocalX) {
-            return a * localX * localX + b * localX + c
+        if (localX <= minLocalX || localX >= maxLocalX) {
+            val edge = localX.coerceIn(minLocalX, maxLocalX)
+            val edgeIdx = if (localX <= minLocalX) 0 else nodeX.size - 1
+            val edgeVal = nodeY[edgeIdx]
+            val edgeSlope = nodeSlope[edgeIdx]
+            val falloffDist = falloffDistancePx()
+            val signedDist = localX - edge
+            val u = (abs(signedDist) / falloffDist).coerceIn(0f, 1f)
+            // Misma integral cerrada de edgeSlope·(1 − smoothstep(u')) que
+            // usaba la versión anterior — ver esa nota para la derivación.
+            val integral = u - u * u * u + 0.5f * u * u * u * u
+            val sign = if (signedDist < 0f) -1f else 1f
+            return edgeVal + sign * edgeSlope * falloffDist * integral
         }
-        val edge = localX.coerceIn(minLocalX, maxLocalX)
-        val edgeVal = a * edge * edge + b * edge + c
-        val edgeSlope = 2f * a * edge + b
-        val falloffDist = falloffDistancePx()
-        val signedDist = localX - edge
-        val u = (abs(signedDist) / falloffDist).coerceIn(0f, 1f)
-        // Integral cerrada de edgeSlope·(1 − smoothstep(u')) du', de 0 a u,
-        // reescalada por falloffDist (smoothstep(u) = u²(3−2u)):
-        //   ∫₀ᵘ (1 − u'²(3−2u')) du' = u − u³ + u⁴/2
-        val integral = u - u * u * u + 0.5f * u * u * u * u
-        // Del lado de maxLocalX, `localX` crece en la MISMA dirección en
-        // que se integra la pendiente (hacia +x) → el término se SUMA. Del
-        // lado de minLocalX, `localX` decrece (se aleja del borde hacia -x)
-        // → recorrer esa dirección acumula la integral con signo CONTRARIO
-        // (equivalente a integrar "hacia atrás"). Sin este signo, F'(minLocalX⁻)
-        // saldría -edgeSlope en vez de +edgeSlope — un salto de signo en la
-        // derivada justo en el borde, exactamente donde se buscaba
-        // continuidad C1 — y se ve como un pliegue/deformación en ese lado
-        // en vez de una curva redondeada continua.
-        val sign = if (signedDist < 0f) -1f else 1f
-        return edgeVal + sign * edgeSlope * falloffDist * integral
+        val seg = segmentIndexFor(localX)
+        return hermiteValue(seg, localX)
     }
 
     /** Pendiente local — usada para inclinar la normal del vértice al
-     * doblar (ver [LashMeshBender]; si no, la iluminación se ve plana/
-     * incorrecta). Dentro del rango, la derivada real de la parábola. Más
-     * allá, decae suavemente a cero con un smoothstep sobre
-     * [falloffDistancePx] — para que [deviationAt] se aplane gradualmente
-     * en vez de con un quiebre de derivada (ver nota de la clase). */
+     * doblar (ver [LashMeshBender]). Dentro del rango, la derivada real del
+     * segmento de Hermite que contiene a `localX`. Más allá, decae
+     * suavemente a cero con un smoothstep sobre [falloffDistancePx]. */
     fun slopeAt(localX: Float): Float {
-        if (localX in minLocalX..maxLocalX) {
-            return 2f * a * localX + b
+        if (localX <= minLocalX || localX >= maxLocalX) {
+            val edge = localX.coerceIn(minLocalX, maxLocalX)
+            val edgeIdx = if (localX <= minLocalX) 0 else nodeX.size - 1
+            val edgeSlope = nodeSlope[edgeIdx]
+            val falloffDist = falloffDistancePx()
+            val u = (abs(localX - edge) / falloffDist).coerceIn(0f, 1f)
+            val smoothstep = u * u * (3f - 2f * u)
+            return edgeSlope * (1f - smoothstep)
         }
+        val seg = segmentIndexFor(localX)
+        return hermiteSlope(seg, localX)
+    }
+
+    /** Progreso de la caída hacia la meseta, en `[0,1]` — `0f` en cualquier
+     * punto DENTRO de `[minLocalX, maxLocalX]` (datos reales, sin caída), y
+     * el mismo `smoothstep(u)` que ya usa [slopeAt] para decaer la pendiente
+     * más allá del borde. Expuesto para que [LashMeshBender] pueda amortiguar
+     * la extrapolación (zona SIN landmarks reales, ej. la punta del ala de
+     * un Cat Eye) de forma distinta a la interpolación (zona CON los 8
+     * puntos reales, donde no hace falta amortiguar nada — ver
+     * [RendererConfiguration.LASH_BEND_WING_STRENGTH]).
+     *
+     * Por qué esto no reintroduce el bug de "pico" (sección 5.6): `u²(3−2u)`
+     * tiene derivada CERO en `u=0` y `u=1` por construcción (la propiedad
+     * que define un smoothstep) — así que blendear una fuerza con esto como
+     * peso no le agrega ninguna pendiente extra exactamente en el borde
+     * (`u=0`, donde arranca la extrapolación), que es el único punto donde
+     * "dentro" y "fuera" del rango se tocan. */
+    fun wingBlend(localX: Float): Float {
+        if (localX in minLocalX..maxLocalX) return 0f
         val edge = localX.coerceIn(minLocalX, maxLocalX)
-        val edgeSlope = 2f * a * edge + b
         val falloffDist = falloffDistancePx()
         val u = (abs(localX - edge) / falloffDist).coerceIn(0f, 1f)
-        val smoothstep = u * u * (3f - 2f * u)
-        return edgeSlope * (1f - smoothstep)
+        return u * u * (3f - 2f * u)
+    }
+
+    /** Índice `i` tal que `localX` cae en `[nodeX[i], nodeX[i+1]]`. Asume
+     * `localX` ya clampeado a `[minLocalX, maxLocalX]` por el llamador. */
+    private fun segmentIndexFor(localX: Float): Int {
+        var i = 0
+        while (i < nodeX.size - 2 && localX > nodeX[i + 1]) i++
+        return i
+    }
+
+    private fun hermiteValue(seg: Int, localX: Float): Float {
+        val x0 = nodeX[seg]; val x1 = nodeX[seg + 1]
+        val p0 = nodeY[seg]; val p1 = nodeY[seg + 1]
+        val m0 = nodeSlope[seg]; val m1 = nodeSlope[seg + 1]
+        val h = x1 - x0
+        val t = (localX - x0) / h
+        val t2 = t * t
+        val t3 = t2 * t
+        val h00 = 2f * t3 - 3f * t2 + 1f
+        val h10 = t3 - 2f * t2 + t
+        val h01 = -2f * t3 + 3f * t2
+        val h11 = t3 - t2
+        return h00 * p0 + h10 * h * m0 + h01 * p1 + h11 * h * m1
+    }
+
+    private fun hermiteSlope(seg: Int, localX: Float): Float {
+        val x0 = nodeX[seg]; val x1 = nodeX[seg + 1]
+        val p0 = nodeY[seg]; val p1 = nodeY[seg + 1]
+        val m0 = nodeSlope[seg]; val m1 = nodeSlope[seg + 1]
+        val h = x1 - x0
+        val t = (localX - x0) / h
+        val t2 = t * t
+        // Derivadas de las funciones base de Hermite respecto a t.
+        val dh00 = 6f * t2 - 6f * t
+        val dh10 = 3f * t2 - 4f * t + 1f
+        val dh01 = -6f * t2 + 6f * t
+        val dh11 = 3f * t2 - 2f * t
+        // dp/dx = (dp/dt) / h.
+        return (dh00 * p0 + dh10 * h * m0 + dh01 * p1 + dh11 * h * m1) / h
     }
 
     /** Distancia (en `localX`, píxeles) sobre la que la pendiente del borde
-     * decae a cero — proporcional al ancho real del rango ajustado (ver
+     * decae a cero — proporcional al ancho real del rango interpolado (ver
      * [RendererConfiguration.LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER]), no una
-     * constante inventada: un ala más ancha (ojo más grande / más
-     * landmarks) obtiene una zona de transición proporcionalmente más
-     * ancha. [MIN_FALLOFF_PX] es solo un piso de seguridad numérica (evitar
-     * división por cero si el rango fitteado fuera degeneradamente angosto),
-     * no un parámetro de ajuste visual. */
+     * constante inventada. [MIN_FALLOFF_PX] es solo un piso de seguridad
+     * numérica, no un parámetro de ajuste visual. */
     private fun falloffDistancePx(): Float =
         ((maxLocalX - minLocalX) * RendererConfiguration.LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER)
             .coerceAtLeast(MIN_FALLOFF_PX)
@@ -121,131 +167,127 @@ class LashLineCurve private constructor(
          * parámetro de ajuste visual, ver esa función. */
         private const val MIN_FALLOFF_PX = 1e-2f
 
+        /** Distancia mínima en `localX` entre dos landmarks consecutivos
+         * para tratarlos como nodos distintos del spline — landmarks casi
+         * coincidentes en X (ruido de tracking) harían `h → 0` y el término
+         * `1/h` de [hermiteSlope] explotaría; se fusionan en un solo nodo
+         * (promediando Y) en vez de eso. No es un parámetro de ajuste
+         * visual, es un piso de estabilidad numérica. */
+        private const val MIN_NODE_SPACING_PX = 0.5f
+
         /**
-         * `null` si no hay suficientes puntos para un ajuste significativo
-         * (menos de 3) o si el sistema resulta degenerado — el llamador
-         * debe tratarlo como "sin curvatura adicional para este frame", no
-         * como error (ver uso en [FaceRenderPipeline.computeEye]).
+         * `null` si no hay al menos 2 puntos distinguibles (menos de eso no
+         * define ninguna curva) — el llamador debe tratarlo como "sin
+         * curvatura adicional para este frame", no como error (ver uso en
+         * [FaceRenderPipeline.computeEye]).
          */
         fun fit(points: List<ImagePoint>, anchor: ImagePoint, tangent: ImagePoint): LashLineCurve? {
-            if (points.size < 3) return null
+            if (points.size < 2) return null
 
-            // Perpendicular a la tangente, en el mismo plano 2D.
+            // Proyecta cada punto a (localX, localY) relativos a `anchor` a
+            // lo largo de la tangente del párpado — mismo sistema de
+            // coordenadas que ya usaba la versión de parábola, y el mismo
+            // que espera [LashMeshBender] (pixelLocalX).
             val perpX = -tangent.y
             val perpY = tangent.x
-
-            // Primera pasada: proyectar a (localX, localY) relativos a
-            // `anchor` y calcular su media en X. `anchor` puede estar MUY
-            // lejos del centro real de la nube de puntos del párpado — no es
-            // un descuido, es a propósito: EyeAnchorCalculator desplaza el
-            // ancla ~68% del ancho del ojo hacia la esquina externa
-            // (NOSE_AVOID_SHIFT), para que el modelo 3D no invada la nariz al
-            // posicionarse. Pero ajustar mínimos cuadrados con datos tan
-            // descentrados mal-condiciona las ecuaciones normales (el
-            // término x⁴ crece muchísimo más rápido que los demás cuando |x|
-            // es grande) y dispara coeficientes a/b/c grandes e inestables
-            // — confirmado en dispositivo real (BEND_DIAG, 2026-07-29):
-            // desviación fuertemente asimétrica entre ambos bordes del ojo,
-            // firma clásica de mal condicionamiento numérico, no de curvatura
-            // anatómica real.
-            val locals = ArrayList<Pair<Double, Double>>(points.size)
-            var sumLocalX = 0.0
+            val locals = ArrayList<Pair<Float, Float>>(points.size)
             for (p in points) {
-                val dx = (p.x - anchor.x).toDouble()
-                val dy = (p.y - anchor.y).toDouble()
+                val dx = p.x - anchor.x
+                val dy = p.y - anchor.y
                 val localX = dx * tangent.x + dy * tangent.y
                 val localY = dx * perpX + dy * perpY
                 locals.add(localX to localY)
-                sumLocalX += localX
             }
-            val meanLocalX = sumLocalX / points.size
+            locals.sortBy { it.first }
 
-            // Segunda pasada: arma las ecuaciones normales con X CENTRADO en
-            // la media real de los puntos (no en `anchor`) — el mismo truco
-            // de estabilidad numérica que cualquier regresión polinómica
-            // (centering). El resultado (aC, bC, cC) describe la curva en
-            // ESE sistema centrado.
-            var s0 = 0.0
-            var s1 = 0.0
-            var s2 = 0.0
-            var s3 = 0.0
-            var s4 = 0.0
-            var t0 = 0.0
-            var t1 = 0.0
-            var t2 = 0.0
-            var minLocalX = Float.POSITIVE_INFINITY
-            var maxLocalX = Float.NEGATIVE_INFINITY
-            for ((localXRaw, localY) in locals) {
-                val localX = localXRaw - meanLocalX
-                val x2 = localX * localX
-                s0 += 1.0
-                s1 += localX
-                s2 += x2
-                s3 += x2 * localX
-                s4 += x2 * x2
-                t0 += localY
-                t1 += localY * localX
-                t2 += localY * x2
-
-                val localXf = localXRaw.toFloat()
-                if (localXf < minLocalX) minLocalX = localXf
-                if (localXf > maxLocalX) maxLocalX = localXf
+            // Fusiona nodos casi coincidentes en X (ver MIN_NODE_SPACING_PX)
+            // promediando su Y, para que el spline quede bien definido.
+            val mergedX = ArrayList<Float>(locals.size)
+            val mergedY = ArrayList<Float>(locals.size)
+            for ((lx, ly) in locals) {
+                if (mergedX.isNotEmpty() && lx - mergedX.last() < MIN_NODE_SPACING_PX) {
+                    val n = mergedY.size - 1
+                    mergedY[n] = (mergedY[n] + ly) / 2f
+                } else {
+                    mergedX.add(lx)
+                    mergedY.add(ly)
+                }
             }
+            val n = mergedX.size
+            if (n < 2) return null
 
-            // Ecuaciones normales de mínimos cuadrados para y = aC·x'² + bC·x' + cC,
-            // con x' = localX - meanLocalX (centrado).
-            val solved = solve3x3(
-                doubleArrayOf(s4, s3, s2, t2),
-                doubleArrayOf(s3, s2, s1, t1),
-                doubleArrayOf(s2, s1, s0, t0),
-            ) ?: return null
-            val aC = solved[0]
-            val bC = solved[1]
-            val cC = solved[2]
+            val nodeX = mergedX.toFloatArray()
+            val nodeY = mergedY.toFloatArray()
 
-            // Expande de vuelta a coordenadas relativas a `anchor` (sin
-            // centrar) — el contrato externo de LashLineCurve (deviationAt/
-            // slopeAt reciben localX relativo a `anchor`, igual que
-            // LashMeshBender ya espera) no cambia, solo el CÁLCULO interno
-            // fue más estable. Álgebra: aC·(x-m)² + bC·(x-m) + cC
-            //   = aC·x² + (bC - 2·aC·m)·x + (aC·m² - bC·m + cC)
-            val m = meanLocalX
-            val a = aC
-            val b = bC - 2.0 * aC * m
-            val c = aC * m * m - bC * m + cC
-
-            return LashLineCurve(
-                a = a.toFloat(),
-                b = b.toFloat(),
-                c = c.toFloat(),
-                minLocalX = minLocalX,
-                maxLocalX = maxLocalX,
-            )
+            return LashLineCurve(nodeX, nodeY, monotoneTangents(nodeX, nodeY))
         }
 
-        /** Resuelve un sistema lineal 3x3 (`m·x = b`, última columna de cada
-         * fila) por eliminación gaussiana con pivoteo parcial. `null` si el
-         * sistema es singular (párpado degenerado — puntos casi colineales
-         * en X, por ejemplo con muy poca varianza horizontal). */
-        private fun solve3x3(row0: DoubleArray, row1: DoubleArray, row2: DoubleArray): DoubleArray? {
-            val m = arrayOf(row0.copyOf(), row1.copyOf(), row2.copyOf())
-            for (col in 0..2) {
-                var pivotRow = col
-                for (r in col + 1..2) {
-                    if (abs(m[r][col]) > abs(m[pivotRow][col])) pivotRow = r
-                }
-                if (abs(m[pivotRow][col]) < 1e-9) return null
-                val tmp = m[col]
-                m[col] = m[pivotRow]
-                m[pivotRow] = tmp
+        /**
+         * Tangentes por nodo con el limitador de Fritsch-Carlson — variante
+         * de Hermite cúbico que GARANTIZA que la curva es monótona en cada
+         * tramo donde los propios landmarks lo son (nunca sube/baja de más
+         * entre dos puntos consecutivos, a diferencia de un Catmull-Rom
+         * puro, que puede "overshootear" — pasarse por encima/debajo de los
+         * puntos vecinos — cuando la curvatura cambia de signo entre
+         * segmentos). Para el párpado esto importa: un overshoot ahí se ve
+         * como la pestaña abombándose más allá de lo que el propio párpado
+         * dibuja, entre dos landmarks reales.
+         *
+         * Algoritmo estándar (Fritsch & Carlson, 1980):
+         * 1. Secante de cada segmento `Δ_k = (y[k+1]-y[k])/(x[k+1]-x[k])`.
+         * 2. Estimación inicial de tangente en cada nodo interno = promedio
+         *    de las dos secantes adyacentes (igual que Catmull-Rom); en los
+         *    extremos, la propia secante del único segmento adyacente.
+         * 3. Por cada segmento, si la secante es 0 (tramo plano), sus dos
+         *    tangentes se fuerzan a 0 (una tangente no nula ahí garantiza
+         *    overshoot en un tramo que debería ser constante). Si no, se
+         *    normalizan `α=m_k/Δ_k`, `β=m_{k+1}/Δ_k`: negativas se recortan a
+         *    0 (tangente apuntando en contra de la secante — inconsistente,
+         *    fuente directa de overshoot), y si `α²+β²>9` se escalan ambas
+         *    por `3/√(α²+β²)` — el límite exacto que asegura monotonía
+         *    dentro del segmento (más allá de ese radio, el cúbico de
+         *    Hermite dejar de ser monótono incluso con secante consistente).
+         */
+        private fun monotoneTangents(nodeX: FloatArray, nodeY: FloatArray): FloatArray {
+            val n = nodeX.size
+            val secants = FloatArray(n - 1)
+            for (k in 0 until n - 1) {
+                secants[k] = (nodeY[k + 1] - nodeY[k]) / (nodeX[k + 1] - nodeX[k])
+            }
 
-                for (r in 0..2) {
-                    if (r == col) continue
-                    val factor = m[r][col] / m[col][col]
-                    for (cc in col..3) m[r][cc] -= factor * m[col][cc]
+            val tangents = FloatArray(n)
+            tangents[0] = secants[0]
+            tangents[n - 1] = secants[n - 2]
+            for (i in 1 until n - 1) {
+                tangents[i] = (secants[i - 1] + secants[i]) / 2f
+            }
+
+            for (k in 0 until n - 1) {
+                val delta = secants[k]
+                if (delta == 0f) {
+                    tangents[k] = 0f
+                    tangents[k + 1] = 0f
+                    continue
+                }
+                var alpha = tangents[k] / delta
+                var beta = tangents[k + 1] / delta
+                if (alpha < 0f) {
+                    tangents[k] = 0f
+                    alpha = 0f
+                }
+                if (beta < 0f) {
+                    tangents[k + 1] = 0f
+                    beta = 0f
+                }
+                val s = alpha * alpha + beta * beta
+                if (s > 9f) {
+                    val tau = 3f / kotlin.math.sqrt(s)
+                    tangents[k] = tau * alpha * delta
+                    tangents[k + 1] = tau * beta * delta
                 }
             }
-            return doubleArrayOf(m[0][3] / m[0][0], m[1][3] / m[1][1], m[2][3] / m[2][2])
+
+            return tangents
         }
     }
 }

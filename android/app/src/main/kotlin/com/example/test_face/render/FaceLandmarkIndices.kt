@@ -16,4 +16,18 @@ object FaceLandmarkIndices {
 
     val LEFT_IRIS = intArrayOf(468, 469, 470, 471, 472)
     val RIGHT_IRIS = intArrayOf(473, 474, 475, 476, 477)
+
+    // ── Fase 2 (MeshEyeTransformCalculator): 3 puntos por ojo para derivar
+    // posición/rotación/escala directo de la malla de 468 puntos, en vez de
+    // pose de cabeza + residuo 2D. Ya están incluidos en LEFT/RIGHT_EYE_RING
+    // de arriba — se nombran acá aparte porque cumplen un ROL distinto (base
+    // ortonormal 3D, no el anillo completo). Son de los landmarks más
+    // estándar/citados de MediaPipe (usados en cualquier cálculo de EAR).
+    const val LEFT_EYE_MEDIAL_CANTHUS = 133
+    const val LEFT_EYE_LATERAL_CANTHUS = 33
+    const val LEFT_EYE_UPPER_APEX = 159
+
+    const val RIGHT_EYE_MEDIAL_CANTHUS = 362
+    const val RIGHT_EYE_LATERAL_CANTHUS = 263
+    const val RIGHT_EYE_UPPER_APEX = 386
 }

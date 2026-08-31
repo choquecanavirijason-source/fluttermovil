@@ -85,6 +85,36 @@ data class RawMesh(
             maxX = -minX,
         )
     }
+
+    /**
+     * Sube el piso de color de cada vértice a [floor] por canal (RGB, no
+     * alpha) — confirmado en dispositivo real: el `COLOR_0` del `.glb` trae
+     * un degradado raíz→punta (raíz ≈0.03 casi negro puro, punta ≈0.14),
+     * intencional del artista. Con la raíz ahora anclada exactamente en el
+     * borde del párpado (ver `rootLocalY` en [LashRenderer.loadIntoSlot]),
+     * la franja casi-negra-sólida del degradado (~65% de los vértices por
+     * debajo de R=0.05) queda justo en la zona más visible y se lee como
+     * una línea dura en vez de una sombra de raíz suave. Subir el piso NO
+     * aplana el degradado a un solo tono: los vértices que ya estaban por
+     * encima de [floor] quedan intactos, solo se recorta el extremo más
+     * oscuro — conserva la forma del degradado, reduce el contraste del
+     * extremo. Costo único al cargar el modelo, no por frame — no toca el
+     * `.glb` en disco ni la geometría.
+     */
+    fun withColorFloor(floor: Float): RawMesh {
+        val adjusted = vertices.map { vertex ->
+            val c = vertex.color ?: return@map vertex
+            vertex.copy(
+                color = Float4(
+                    c.x.coerceAtLeast(floor),
+                    c.y.coerceAtLeast(floor),
+                    c.z.coerceAtLeast(floor),
+                    c.w,
+                ),
+            )
+        }
+        return copy(vertices = adjusted)
+    }
 }
 
 /**

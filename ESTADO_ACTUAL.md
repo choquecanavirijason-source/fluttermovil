@@ -815,3 +815,7 @@ usuario) → `0.16` (seguía insuficiente) → `0.28` (sobre-corrigió, la punta
 hacia la sien/nacimiento del pelo en un ojo) → **`0.20` confirmado**: ambos ojos con el ala
 contenida dentro del contorno real del ojo, simétrico, sin pico ni deformación, logcat limpio.
 Valor final de esta ronda. Ver [COLOCADO_PESTANAS.md](COLOCADO_PESTANAS.md) sección 5.13.
+
+
+flutter run --dart-define=LID_DEBUG=true --dart-define=LID_DEBUG_HQ=true
+

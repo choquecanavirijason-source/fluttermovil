@@ -807,19 +807,52 @@ la pantalla de la cámara.
 **Pendiente**: `0.30` es un paso intermedio razonado a partir de la magnitud del hueco medido
 (no una ronda completa de calibración como 5.13, que probó 4 valores) — si en uso normal
 (fotos distintas, ángulos distintos) el ala empieza a pasarse hacia la sien en algún ojo, bajar
-este valor antes de tocar cualquier otra constante.
+este valor antes de tocar cualquier otra constante.AA
 
-## 6. Curva del párpado y doblado de mesh (ACTIVO desde 2026-08-02, ver 5.1-5.14)
+### 5.15 Con `0.30`/`-0.22` el usuario marcó el problema real con líneas — raíz demasiado alta, hueco lateral persiste en los dos ojos (2026-08-10)
 
-`LashLineCurve.fit()` ajusta una parábola (`f(x) = ax² + bx + c`, mínimos
-cuadrados) a los puntos del párpado superior, en un sistema de coordenadas
-local alineado con la tangente del párpado (ajustada alrededor de
-`EyeAnchor.lidCenter`, ver 5.4) — captura SOLO la curvatura adicional
-respecto a la inclinación promedio (la rotación recta ya la aplica el paso 4).
+**Síntoma reportado**, con una foto real marcada a mano por el usuario (línea verde =
+dónde debe caer la línea de pestañas, justo sobre el borde del párpado cerca del iris;
+flechas rojas = hueco entre la punta del ala y el canto lateral, en los DOS ojos esta
+vez): con el build de 5.14 (`HEIGHT_OFFSET=-0.22`, `LATERAL_LASH_OFFSET=0.30`) instalado y
+verificado en vivo, la raíz de la pestaña seguía renderizando claramente por ENCIMA de la
+línea verde (piel visible de por medio, en los dos ojos), y el hueco lateral —ya reducido
+por 5.14— seguía siendo visible en ambos ojos, no solo en el que tenía el hueco de ~95px.
+El propio usuario aclaró que la posición hacia el lado del iris (medial) ya estaba bien —
+el pedido fue específicamente sobre estos dos puntos.
 
-`LashMeshBender.bend()` usa esa curva para desplazar cada vértice del mesh en
-el eje Y local (glTF es Y-up) y así seguir la forma real del párpado en vez de
-la forma genérica de fábrica del `.glb`.
+**Sin sesión de medición en dispositivo esta vez** (a diferencia de 5.12/5.14): la imagen
+marcada por el usuario ya daba suficiente señal directa (línea/flechas sobre su propia
+foto) para decidir la dirección y una magnitud razonable del ajuste sin necesitar repetir
+el ciclo `adb screencap` + recorte — ver `HEIGHT_OFFSET`/`LATERAL_LASH_OFFSET` en
+`RendererConfiguration.kt` para el razonamiento de signo (mismo que 5.12/5.14, sin cambios
+de convención).
+
+**Fix aplicado**:
+- `HEIGHT_OFFSET`: `-0.22f` → `-0.38f` (más negativo = ancla más abajo, misma convención de
+  signo que 5.12).
+- `LATERAL_LASH_OFFSET`: `0.30f` → `0.38f`.
+
+**Estado**: compila limpio (`flutter build apk --debug`), instalado en el Infinix X669
+conectado (`adb install -r`). **Sin confirmar visualmente todavía en esta sesión** — el
+usuario no había vuelto a probar el build nuevo al momento de escribir esto. Pendiente:
+que el usuario abra la app, seleccione Cat Eye de nuevo, y confirme (idealmente con la
+misma técnica de marcar la foto) si `-0.38`/`0.38` cierran ambos huecos sin overshoot
+(raíz metida bajo el párpado, o ala pasándose hacia la sien) — si alguno de los dos se
+pasa, ese es el primer lugar a mirar antes de introducir cualquier mecanismo nuevo.
+
+## 6. Curva del párpado y doblado de mesh (ACTIVO desde 2026-08-02, ver 5.1-5.15, 6.1)
+
+`LashLineCurve.fit()` interpola un spline de Hermite cúbico (tangentes tipo
+Catmull-Rom, ver 6.1) que pasa EXACTAMENTE por los puntos del párpado
+superior, en un sistema de coordenadas local alineado con la tangente del
+párpado (ajustada alrededor de `EyeAnchor.lidCenter`, ver 5.4) — captura SOLO
+la curvatura adicional respecto a la inclinación promedio (la rotación recta
+ya la aplica el paso 4).
+
+`LashMeshBender.bendInPlace()` usa esa curva para desplazar cada vértice del
+mesh en el eje Y local (glTF es Y-up) y así seguir la forma real del párpado
+en vez de la forma genérica de fábrica del `.glb`.
 
 **Estado actual: ACTIVO y confirmado en dispositivo real** (ver 5.1-5.5 para
 el historial completo de bugs encontrados y arreglados). Resumen de la
@@ -842,6 +875,162 @@ arquitectura vigente en `LashRenderer.applyTransform()`:
   corregidos (5.1-5.5), no una calibración de estilo real — distinto motivo
   del ajuste de 5.11.
 
+### 6.1 De parábola aproximada a spline exacto (2026-08-10)
+
+**Pedido del usuario**: que el modelo 3D del párpado siga "la forma de esta
+línea tal cual", señalando la polilínea verde de
+[LidLandmarkDebugPainter](lib/lid_landmark_debug_painter.dart) — la línea que
+conecta los 8 landmarks reales del párpado superior punto a punto. Se
+preguntó explícitamente si el pedido era (a) una curva suave que pase
+EXACTAMENTE por esos 8 puntos, o (b) segmentos rectos literales entre cada
+punto (igual a la polilínea del debug, con quiebres visibles) — el usuario
+eligió (a).
+
+**Por qué la parábola anterior no cumplía esto**: `LashLineCurve.fit()`
+(sección 6, hasta esta fecha) ajustaba una parábola por MÍNIMOS CUADRADOS —
+una aproximación que en general no pasa por ninguno de los 8 puntos reales,
+solo captura la tendencia general del párpado. Necesaria en su momento para
+evitar el mal condicionamiento numérico de un polinomio de grado alto, pero
+no es lo que se pidió acá.
+
+**Fix aplicado**: `LashLineCurve.fit()` ahora construye un spline de Hermite
+cúbico con tangentes tipo Catmull-Rom (diferencia centrada en cada nodo
+interno, `m_i = (y[i+1]-y[i-1])/(x[i+1]-x[i-1])`; diferencia de un solo lado
+en los extremos) sobre los mismos 8 puntos, en el mismo sistema de
+coordenadas local (`localX`/`localY` relativos a `EyeAnchor.lidCenter` a lo
+largo de la tangente del párpado) que ya usaba la parábola. Resultado:
+- Pasa EXACTAMENTE por cada uno de los 8 landmarks (a diferencia de la
+  aproximación anterior).
+- C1-continuo en cada nodo interno — sin los quiebres que tendría conectar
+  los puntos con segmentos rectos (la opción (b) que el usuario descartó).
+- El mecanismo de falloff más allá de `[minLocalX, maxLocalX]` (sección 5.6:
+  smoothstep que hace decaer la pendiente del borde a cero, para que
+  `deviationAt` no explote lejos de datos reales) se mantuvo sin cambios
+  conceptuales — solo usa la pendiente del nodo de borde del spline en vez
+  de la derivada de la parábola en ese punto. El resto del pipeline
+  (`LashMeshBender`, `EyeAnchorCalculator`, `EyeTransformCalculator`) no
+  cambió: la API pública de `LashLineCurve` (`deviationAt`/`slopeAt`) es
+  idéntica, así que no hizo falta tocar ningún llamador.
+- El truco de "centrado" que la parábola necesitaba para estabilidad
+  numérica (`meanLocalX`, ver historial de esta sección) ya no aplica: al no
+  ser un ajuste por mínimos cuadrados, no hay ecuaciones normales
+  mal-condicionadas que estabilizar — el spline interpola directo sobre los
+  puntos reales sin importar cuán lejos esté `anchor` (el ancla puede estar
+  desplazada ~68%+ del ancho del ojo por `NOSE_AVOID_SHIFT`/
+  `LATERAL_LASH_OFFSET`, ver 5.13) del centroide de la nube de puntos.
+- Landmarks casi coincidentes en `localX` (ruido de tracking) se fusionan en
+  un solo nodo (promediando `localY`) antes de construir el spline — evita
+  una división por un intervalo casi nulo entre nodos.
+
+**Estado**: compila limpio (`gradlew compileDebugKotlin`). **Sin confirmar
+visualmente en dispositivo real todavía** — pendiente probar con al menos un
+estilo Cat Eye (el que más estira vértices fuera del rango `[minLocalX,
+maxLocalX]`, sección 5.8) y confirmar que la curva se ve suave (sin picos en
+cada landmark) y sigue la forma real del párpado con más fidelidad que la
+parábola anterior.
+
+### 6.2 Regresión sin commitear (anclaje por CENTRO, no RAÍZ) + unificación de frame (2026-08-10)
+
+**Síntoma reportado**: con 6.1 ya aplicado, el modelo 3D seguía sin pegarse a
+los 8 puntos del párpado superior — en capturas reales aparecía corrido lejos
+del ojo (a veces claramente hacia la sien/mejilla, en un caso extremo como una
+"espiga" diagonal cruzando toda la cara).
+
+**Causa raíz encontrada (no a ojo — con `git diff`)**: el árbol de trabajo
+tenía cambios **sin commitear** en `EyeTransformCalculator.kt` que revertían
+el fix de la sección 5.1: en vez de anclar la RAÍZ real del mesh
+(`rootLocalY`) al párpado, `rootCorrectedPosition = position` anclaba el
+CENTRO geométrico del bounding box — el comentario del propio código decía
+explícitamente "NO se aplica corrección por rootLocalY". Ese mismo árbol sin
+commitear también había reducido `NOSE_AVOID_SHIFT` (0.68→0.15) y
+`LATERAL_LASH_OFFSET` (0.38→0.10) razonando "para que las pestañas cubran los
+puntos visibles en el debug" — una compensación manual del síntoma del bug de
+centro-vs-raíz, no una recalibración real.
+
+**Fix aplicado**:
+1. `EyeTransformCalculator.compute()`: restaurado
+   `rootCorrectedPosition = position - eyePlane.up * (scaleY * rootLocalY)`
+   (anclaje por raíz, sección 5.1/5.3).
+2. **Unificación de frame** (eliminaba una duplicación real, ver más abajo):
+   con el spline exacto de 6.1 ya no hay mal-condicionamiento numérico al
+   ajustar lejos del centroide de landmarks, así que `LashLineCurve.fit()`
+   ahora se ajusta alrededor de `anchor.point` (el mismo punto donde
+   `EyeTransformCalculator` posiciona el mesh) en vez de `anchor.lidCenter`.
+   Esto elimina `EyeAnchor.lashCurveAnchorOffsetPx` — el parche que existía
+   solo para reconciliar los dos orígenes distintos — y el término
+   `+ anchorOffsetPx` en `LashMeshBender.bendInPlace()`. Transform, curva y
+   doblado de mesh comparten ahora un único frame.
+3. `EyeAnchorCalculator.kt`: `medialCanthus`/`lateralCanthus` expuestos con
+   nombre en `EyeAnchor` (ya se calculaban, antes como `cornerA`/`cornerB`
+   sin significado) — un solo cálculo, reutilizable.
+4. `LashLineCurve.kt`: tangentes Catmull-Rom (diferencia centrada) →
+   limitador de **Fritsch-Carlson** — garantiza que el spline no "overshootea"
+   (no se pasa por encima/debajo de dos landmarks reales consecutivos) en
+   tramos donde la curvatura del párpado cambia de signo.
+5. `RendererConfiguration.kt`: `HEIGHT_OFFSET`/`NOSE_AVOID_SHIFT`/
+   `LATERAL_LASH_OFFSET` restaurados a los últimos valores CONFIRMADOS en
+   dispositivo real antes de este árbol sin commitear (-0.22 / 0.68 / 0.20 —
+   secciones 5.12/5.1/5.13), ya que los valores reducidos compensaban un bug
+   distinto (ya arreglado). Agregado `LASH_DEFORMATION_ENABLED` (bool) para
+   aislar transform de deformación de mesh en diagnósticos futuros — con
+   `false`, `LashMeshBender` copia los vértices crudos sin doblar.
+6. **NO tocado**: `EyePlaneCalculator.kt` — tiene su propio cálculo de
+   esquinas (`ring.minByOrNull/maxByOrNull`), duplicado respecto a
+   `EyeAnchor.medialCanthus/lateralCanthus`, pero unificarlo a ciegas podía
+   invertir 180° la rotación en uno de los dos ojos (el orden medial/lateral
+   NO es intercambiable 1:1 con el orden min-X/max-X que esa clase necesita
+   para su residual angular). Sin evidencia de que esté rota, se dejó como
+   auditoría pendiente en vez de arriesgar una regresión nueva.
+
+**Confirmado en dispositivo real** (Infinix X669, misma sesión): se agregó un
+log de diagnóstico temporal (`EyeTransformDiag`, ya removido) para verificar
+con números reales — no a ojo — que la corrección de raíz aplicaba un
+desplazamiento razonable (~5mm en mundo, no un valor disparado). Con la cara
+quieta y de frente, captura tras captura, la raíz de la pestaña cae
+consistentemente sobre la línea verde del debug painter en los dos ojos, con
+Cat Eye. Los casos donde el modelo aparecía disparado lejos del ojo (incluida
+la "espiga" diagonal) coincidieron con capturas tomadas DURANTE movimiento de
+cabeza (confirmado: el frame siguiente mostraba "Sin rostro" en la UI) — el
+tracking transitorio de MediaPipe en esos frames es poco confiable y
+`lashLineCurve` no pasa por ningún suavizado (`EyeTrackingFilter`/
+`PoseInterpolator` solo suavizan posición/rotación/escala, no la curva — ver
+sección 7), así que un frame malo se renderiza tal cual, sin filtrar. Esto es
+una limitación conocida, no nueva de esta sesión — pendiente (no bloqueante):
+evaluar si vale la pena descartar/mantener el último frame válido cuando la
+curva cambia de forma abrupta entre dos resultados consecutivos de MediaPipe.
+
+### 6.3 Corrección del diagnóstico anterior — `LASH_BEND_STRENGTH=1.0` sí era el problema (2026-08-10)
+
+El usuario reportó que, incluso con 6.2 aplicado, el modelo seguía sin pegarse
+a los 8 puntos — con capturas nuevas (cara quieta, sin movimiento) se veía el
+abanico de fibras apuntando hacia el lado CONTRARIO de donde se curva la línea
+verde, no solo desalineado en altura.
+
+**Diagnóstico por aislamiento** (siguiendo el punto 27 del pedido del
+usuario): se apagó `LASH_DEFORMATION_ENABLED` (mesh SIN doblar, solo
+transform rígido) y se probó en dispositivo real — la pestaña quedó PERFECTA
+en los dos ojos, raíz y dirección correctas. Esto descarta cualquier bug de
+`EyeTransformCalculator`/`EyePlaneCalculator` (posición/rotación) — confirma
+que 6.2 sí arregló eso. Con `LASH_DEFORMATION_ENABLED=true` de vuelta y
+`LASH_BEND_STRENGTH=1.0f` (el valor que esta sesión había subido antes, sin
+verificar en dispositivo, para cumplir el pedido de "silueta exacta"), la
+distorsión volvía. Eso aísla la causa al DOBLADO (`LashMeshBender`/
+`LashLineCurve`), específicamente a la magnitud de `strength`.
+
+**Fix**: `LASH_BEND_STRENGTH` vuelto a `0.5f` (el valor ya confirmado en la
+sección 5.11, antes de esta sesión). Confirmado en dispositivo real: con
+`0.5f`, deformación reactivada, la pestaña queda bien en los dos ojos — raíz
+en la línea real, ala apuntando hacia la sien sin distorsión.
+
+**Conclusión honesta**: el pedido original del usuario ("silueta EXACTA,
+tal cual los 8 puntos") queda solo PARCIALMENTE cumplido — con `strength=0.5`
+el mesh sigue la mitad de la curva calculada, no el 100%. Subir esto de nuevo
+sin cambiar nada más reintroduce la distorsión confirmada arriba. El camino
+correcto para acercarse más a "silueta exacta" sin la distorsión es ajustar
+`LASH_CURVE_FALLOFF_WIDTH_MULTIPLIER` (la zona de transición más allá de los
+8 puntos reales, donde cae la mayoría del ala de un Cat Eye) en dispositivo
+real, un cambio a la vez — no volver a tocar `LASH_BEND_STRENGTH` a ciegas.
+
 ## 7. Suavizado y predicción (independiente del cálculo de posición)
 
 - **`EyeTrackingFilter`**: un One Euro Filter independiente por componente
@@ -859,11 +1048,13 @@ arquitectura vigente en `LashRenderer.applyTransform()`:
 
 | Constante | Valor | Efecto |
 |---|---|---|
-| `HEIGHT_OFFSET` | -0.22 | Cuánto baja la RAÍZ del modelo (no el centro, ver sección 5.1) respecto al centroide del párpado — calibrado con captura recortada/ampliada en 5.12 |
+| `HEIGHT_OFFSET` | -0.22 | Cuánto baja la RAÍZ del modelo (no el centro, ver sección 5.1) respecto al centroide del párpado — restaurado al último valor CONFIRMADO en dispositivo (sección 5.12) tras encontrar y arreglar la regresión de anclaje-por-centro de la sección 6.2 (los valores -0.38/0.15/0.10 de un árbol sin commitear compensaban ese bug, no una recalibración real) |
+| `NOSE_AVOID_SHIFT` | 0.68 | Desplaza el ancla hacia el canto lateral, fracción del ancho del ojo — restaurado al valor confirmado desde 5.1 (sección 6.2) |
 | `WIDTH_MULTIPLIER` | 1.8 | Cuánto más ancho que el ojo real es el modelo (escala X/Z) |
 | `HEIGHT_VOLUME_MULTIPLIER` | 1.55 | Escala EXTRA solo en Y (grosor/volumen vertical), sección 5.3 |
-| `LASH_BEND_STRENGTH` | 0.5 | Amortiguación de la curva del párpado (secciones 6, 5.11) |
-| `LATERAL_LASH_OFFSET` | 0.30 | Corrección aditiva hacia el canto lateral, como fracción de la distancia real entre cantos — calibrado iterativamente en dispositivo real (sección 5.13), subido de 0.20 a 0.30 tras confirmar un hueco real de ~95px en un ojo con una foto distinta (sección 5.14) |
+| `LASH_BEND_STRENGTH` | 0.5 | Amortiguación de la curva del párpado — se probó subir a 1.0 (sección 6.1) pero causó distorsión confirmada en dispositivo real (sección 6.3), revertido a 0.5 |
+| `LASH_DEFORMATION_ENABLED` | true | `false` desactiva el doblado de mesh por completo, para aislar transform de deformación en diagnósticos (sección 6.2) |
+| `LATERAL_LASH_OFFSET` | 0.20 | Corrección aditiva hacia el canto lateral, como fracción de la distancia real entre cantos — restaurado al último valor con una ronda COMPLETA de calibración en dispositivo (sección 5.13); los valores 0.30/0.38 de 5.14/5.15 nunca se confirmaron y compensaban el bug de 6.2 |
 | `LEFT_EYE_X_NUDGE` / `RIGHT_EYE_X_NUDGE` | 0.0 | Corrección fina de X por ojo (fracción de pantalla) |
 | `HEAD_TILT_MULTIPLIER` | 1.0 | Multiplicador extra sobre la corrección de escorzo |
 | `EYE_CLOSED_OPENNESS_THRESHOLD` / `EYE_OPEN_OPENNESS_THRESHOLD` | 0.12 / 0.22 | Umbral de apertura para ocultar/atenuar al parpadear |

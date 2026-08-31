@@ -1,5 +1,6 @@
 package com.example.test_face.render
 
+import android.graphics.Bitmap
 import android.util.Log
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
@@ -35,6 +36,9 @@ object FaceRenderPipeline {
          * asimetría izq/der la resuelve [RawMesh.mirroredAcrossX] por
          * separado, no este parámetro). */
         styleConfig: LashStyleConfig = LashStyleConfig.DEFAULT,
+        /** Bitmap EXACTO analizado por MediaPipe para [result] — ver
+         * [LashEdgeDetector]. `null` degrada a solo landmarks. */
+        cameraBitmap: Bitmap? = null,
     ): Result? {
         if (result.faceLandmarks().isEmpty()) return null
         val landmarks: List<NormalizedLandmark> = result.faceLandmarks()[0]
@@ -60,11 +64,15 @@ object FaceRenderPipeline {
 
         val left = computeEye(
             landmarks, FaceLandmarkIndices.LEFT_EYE_RING, FaceLandmarkIndices.LEFT_IRIS,
-            headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig,
+            FaceLandmarkIndices.LEFT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.LEFT_EYE_LATERAL_CANTHUS,
+            FaceLandmarkIndices.LEFT_EYE_UPPER_APEX,
+            headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig, cameraBitmap,
         )
         val right = computeEye(
             landmarks, FaceLandmarkIndices.RIGHT_EYE_RING, FaceLandmarkIndices.RIGHT_IRIS,
-            headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY, styleConfig,
+            FaceLandmarkIndices.RIGHT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.RIGHT_EYE_LATERAL_CANTHUS,
+            FaceLandmarkIndices.RIGHT_EYE_UPPER_APEX,
+            headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY, styleConfig, cameraBitmap,
         )
         // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
@@ -74,6 +82,12 @@ object FaceRenderPipeline {
         landmarks: List<NormalizedLandmark>,
         ringIndices: IntArray,
         irisIndices: IntArray,
+        /** Fase 2 — ver [MeshEyeTransformCalculator] y
+         * [RendererConfiguration.LASH_ANCHOR_FROM_FACE_MESH]. Sin uso cuando
+         * el flag está en `false` (default). */
+        medialCanthusIndex: Int,
+        lateralCanthusIndex: Int,
+        upperApexIndex: Int,
         headPose: HeadPose,
         imageWidth: Float,
         imageHeight: Float,
@@ -82,30 +96,47 @@ object FaceRenderPipeline {
         xNudgeNormalized: Float,
         rootLocalY: Float,
         styleConfig: LashStyleConfig,
+        cameraBitmap: Bitmap?,
     ): EyeTransform? {
-        val eyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
+        val rawEyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
+        // LashEdgeDetector DESACTIVADO temporalmente: el debug overlay de Flutter
+        // muestra los landmarks CRUDOS de MediaPipe (sin corregir). Para que el
+        // modelo 3D se ancle en el mismo lugar que los puntos verdes, usamos
+        // los mismos landmarks crudos — sin la corrección de píxel del detector.
+        // Reactivar cuando el posicionamiento base sea correcto.
+        val eyeLandmarks = rawEyeLandmarks
+        // El ancla 2D en píxeles sigue haciendo falta en los DOS modos: la
+        // usa LashLineCurve/LashMeshBender más abajo sin cambios (Fase 2 no
+        // toca el doblado de mesh, ver el plan) — solo posición/rotación/
+        // escala cambian de fuente según el flag.
         val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth, styleConfig) ?: return null
-        val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
-        val transform = EyeTransformCalculator.compute(
-            headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
-        )
+        val transform = if (RendererConfiguration.LASH_ANCHOR_FROM_FACE_MESH) {
+            MeshEyeTransformCalculator.compute(
+                landmarks, medialCanthusIndex, lateralCanthusIndex, upperApexIndex,
+                camera, headPose, naturalSpan, rootLocalY, styleConfig,
+            ) ?: return null
+        } else {
+            val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
+            EyeTransformCalculator.compute(
+                headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
+            )
+        }
         // Curva del párpado superior para el doblado del mesh (ver
         // LashMeshBender) — se ajusta acá porque eyeLandmarks/anchor ya
         // están calculados en este punto, sin duplicar ese trabajo.
-        // Origen = anchor.lidCenter (centroide SIN el shift de
-        // NOSE_AVOID_SHIFT), NO anchor.point — ver la nota de
-        // EyeAnchorCalculator (2026-08-02): ajustar la curva alrededor del
-        // ancla de render (desplazada) dejaba casi todos los vértices del
-        // mesh fuera del rango que la curva realmente ajustó, cayendo en la
-        // extrapolación lineal de LashLineCurve en vez de la parábola real
-        // — eso se veía como pestaña recta/sin doblar.
-        val curve = LashLineCurve.fit(eyeLandmarks.upperLid, anchor.lidCenter, anchor.upperLidTangent)
+        // Origen = anchor.point (el MISMO punto donde EyeTransformCalculator
+        // posiciona el mesh) — unificado 2026-08-10 (ver nota de
+        // EyeAnchorCalculator): con el spline de Hermite/Catmull-Rom que
+        // reemplazó a la parábola por mínimos cuadrados, ajustar lejos del
+        // centroide real de los landmarks ya no mal-condiciona el ajuste, así
+        // que transform/curva/doblado de mesh comparten un único frame sin
+        // offset de reconciliación (`lashCurveAnchorOffsetPx`, eliminado).
+        val curve = LashLineCurve.fit(eyeLandmarks.upperLid, anchor.point, anchor.upperLidTangent)
         return transform.copy(
             opennessRatio = eyeLandmarks.opennessRatio,
             lashLineCurve = curve,
             eyeWidthPx = anchor.widthPx,
-            lashCurveAnchorOffsetPx = anchor.lashCurveAnchorOffsetPx,
         )
     }
 

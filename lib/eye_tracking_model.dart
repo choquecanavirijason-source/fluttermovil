@@ -29,6 +29,20 @@ class TrackingFrame {
   final double? leftOpenRatio;
   final double? rightOpenRatio;
 
+  // DEBUG: puntos del anillo completo (16 puntos), separados en
+  // párpado superior (8) e inferior (8) para visualización.
+  final List<EyePoint> leftUpperLid;
+  final List<EyePoint> leftLowerLid;
+  final List<EyePoint> rightUpperLid;
+  final List<EyePoint> rightLowerLid;
+
+  // Posición REAL de la pestaña detectada por LashEdgeDetector:
+  // el píxel más oscuro cerca de cada landmark del párpado superior.
+  // Misma cantidad de puntos que upperLid (8). Puede coincidir con
+  // upperLid cuando no hay suficiente contraste en la imagen.
+  final List<EyePoint> leftLashLine;
+  final List<EyePoint> rightLashLine;
+
   const TrackingFrame({
     required this.faceDetected,
     this.imageWidth = 0,
@@ -40,6 +54,12 @@ class TrackingFrame {
     required this.rightIris,
     required this.leftOpenRatio,
     required this.rightOpenRatio,
+    this.leftUpperLid = const [],
+    this.leftLowerLid = const [],
+    this.rightUpperLid = const [],
+    this.rightLowerLid = const [],
+    this.leftLashLine = const [],
+    this.rightLashLine = const [],
   });
 
   factory TrackingFrame.fromMap(Map<dynamic, dynamic> map) {
@@ -66,6 +86,12 @@ class TrackingFrame {
       rightIris: parsePoint(map['rightIris']),
       leftOpenRatio: (map['leftOpenRatio'] as num?)?.toDouble(),
       rightOpenRatio: (map['rightOpenRatio'] as num?)?.toDouble(),
+      leftUpperLid: parseList(map['leftUpperLid']),
+      leftLowerLid: parseList(map['leftLowerLid']),
+      rightUpperLid: parseList(map['rightUpperLid']),
+      rightLowerLid: parseList(map['rightLowerLid']),
+      leftLashLine: parseList(map['leftLashLine']),
+      rightLashLine: parseList(map['rightLashLine']),
     );
   }
 }

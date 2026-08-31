@@ -16,6 +16,8 @@ import io.github.sceneview.node.ModelNode
 import kotlinx.coroutines.launch
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
 
 /**
  * Dueño de todo lo que ocurre dentro del [SceneView]: entorno/iluminación de
@@ -197,7 +199,18 @@ class LashRenderer(
      * MediaPipe); solo la escritura final de la transformación en el nodo se
      * despacha al hilo principal, igual que antes, por rendimiento.
      */
-    fun onFaceResult(result: FaceLandmarkerResult, imageWidth: Int, imageHeight: Int, pipelineLatencyMs: Float = 35f) {
+    fun onFaceResult(
+        result: FaceLandmarkerResult,
+        imageWidth: Int,
+        imageHeight: Int,
+        pipelineLatencyMs: Float = 35f,
+        /** Bitmap EXACTO analizado por MediaPipe para [result] (ver
+         * [FaceLandmarkerHelper]) — [LashEdgeDetector] lo usa para anclar
+         * sobre la pestaña real visible, no solo sobre el landmark
+         * estimado. `null` degrada a solo landmarks (comportamiento
+         * anterior). */
+        cameraBitmap: android.graphics.Bitmap? = null,
+    ) {
         if (leftSlot.node == null && rightSlot.node == null) return
 
         // Actualizar la latencia medida para que writeInterpolatedPose la use
@@ -222,6 +235,7 @@ class LashRenderer(
                 leftRootLocalY = leftSlot.rootLocalY,
                 rightRootLocalY = rightSlot.rootLocalY,
                 styleConfig = currentStyleConfig,
+                cameraBitmap = cameraBitmap,
             )
         } catch (e: Exception) {
             Log.e(TAG, "onFaceResult: fallo calculando la transformación", e)
@@ -302,68 +316,51 @@ class LashRenderer(
         val damped = smoothed.copy(scale = smoothed.scale * damping)
         val nowNanos = System.nanoTime()
 
-        // REACTIVADO (ver historial arriba: se había apagado dos veces por
-        // lag real en dispositivo). La causa diagnosticada era reconstruir
-        // Y subir la malla al mismo tiempo dentro de mainHandler.post,
-        // bloqueando el hilo principal con AMBAS cosas. Acá se separan:
-        // LashMeshBender.bendInPlace() (la deformación de miles de
-        // vértices) corre en ESTE hilo — el de MediaPipe, ya fuera del
-        // principal, igual que el resto de applyTransform — y solo la
-        // subida a GPU (geometry.setVertices(), que necesita correr en el
-        // hilo del Engine de Filament) se despacha a mainHandler. Throttle
-        // (LASH_BEND_MIN_INTERVAL_NANOS) y backpressure (bendPending) sin
-        // cambios — ya estaban bien calibrados.
+        // REESCRITO a buffer directo con setBufferAt in-place (ver
+        // LashMeshBender/EyeModelSlot) — cero Geometry.Vertex/Float3 nuevos
+        // por vértice, así que ya no hace falta el throttle de
+        // LASH_BEND_MIN_INTERVAL_NANOS (existía para acotar la TASA de esas
+        // asignaciones, no la tasa de recálculo en sí): se recalcula en
+        // CADA resultado de MediaPipe, igual que la malla facial de 468
+        // puntos. bendPending sigue como única red de seguridad si el hilo
+        // principal se atrasa.
         val curve = transform.lashLineCurve
         val rawMesh = slot.rawMesh
         val geometry = slot.geometry
-        // Double-buffer pre-asignado en loadIntoSlot (ver EyeModelSlot) —
-        // bendInPlace escribe en `target` sin alocar una List nueva; `prior`
-        // es el resultado del frame anterior, usado por el suavizado EMA
-        // fundido en el mismo pase (ver LashMeshBender.bendInPlace).
-        val target = if (slot.useBufferAAsTarget) slot.bufferA else slot.bufferB
-        val prior = if (slot.useBufferAAsTarget) slot.bufferB else slot.bufferA
-        val dueForBend = (nowNanos - slot.lastBendNanos) >= RendererConfiguration.LASH_BEND_MIN_INTERVAL_NANOS
-        // DIAGNÓSTICO TEMPORAL (BEND_DIAG_2, quitar tras confirmar en
-        // dispositivo): antes no había forma de ver POR QUÉ el doblado no se
-        // aplicaba (curve/rawMesh/geometry nulos, bendPending atascado, o
-        // simplemente el throttle). Loguea a la misma cadencia del throttle
-        // — no en cada frame — para no inundar logcat.
-        if (dueForBend && !slot.bendPending) {
-            Log.d(
-                TAG,
-                "bendCheck curve=${curve != null} rawMesh=${rawMesh != null} " +
-                    "geometry=${geometry != null} target=${target != null} eyeWidthPx=${transform.eyeWidthPx}",
-            )
-        }
-        if (curve != null &&
-            rawMesh != null &&
-            geometry != null &&
-            target != null &&
-            !slot.bendPending &&
-            dueForBend
+        val target = if (slot.useBufferAAsTarget) slot.positionBufferA else slot.positionBufferB
+        val prior = if (slot.useBufferAAsTarget) slot.positionBufferB else slot.positionBufferA
+        val restTangents = slot.restTangents
+        val tangentTarget = slot.tangentBuffer
+        if (curve != null && rawMesh != null && geometry != null && target != null &&
+            restTangents != null && tangentTarget != null && !slot.bendPending
         ) {
-            slot.lastBendNanos = nowNanos
-            slot.bendPending = true
-            LashMeshBender.bendInPlace(
+            val bent = LashMeshBender.bendInPlace(
                 raw = rawMesh,
                 target = target,
                 previous = if (slot.hasBentBefore) prior else null,
+                restTangents = restTangents,
+                tangentTarget = tangentTarget,
                 smoothing = RendererConfiguration.LASH_BEND_SMOOTHING,
                 curve = curve,
                 styleConfig = currentStyleConfig,
                 eyeWidthPx = transform.eyeWidthPx,
-                anchorOffsetPx = transform.lashCurveAnchorOffsetPx,
             )
-            slot.hasBentBefore = true
-            slot.useBufferAAsTarget = !slot.useBufferAAsTarget
-            Log.d(TAG, "bendApply vertices=${target.size} deviationSample=${curve.deviationAt(0f)}")
-            mainHandler.post {
-                try {
-                    geometry.setVertices(engine, target)
-                } catch (e: Exception) {
-                    Log.e(TAG, "applyTransform: fallo subiendo malla doblada a GPU", e)
-                } finally {
-                    slot.bendPending = false
+            if (bent) {
+                target.rewind()
+                tangentTarget.rewind()
+                slot.hasBentBefore = true
+                slot.useBufferAAsTarget = !slot.useBufferAAsTarget
+                slot.bendPending = true
+                val vertexCount = rawMesh.vertices.size
+                mainHandler.post {
+                    try {
+                        geometry.vertexBuffer.setBufferAt(engine, 0, target, 0, vertexCount * 3)
+                        geometry.vertexBuffer.setBufferAt(engine, 1, tangentTarget, 0, vertexCount * 4)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "applyTransform: fallo subiendo malla doblada a GPU", e)
+                    } finally {
+                        slot.bendPending = false
+                    }
                 }
             }
         }
@@ -464,10 +461,15 @@ class LashRenderer(
                 // mostrando rígido (sin doblado) — no bloquea la carga.
                 try {
                     val parsedMesh = GlbMeshReader.read(path)
-                    val rawMesh = if (mirror) parsedMesh.mirroredAcrossX() else parsedMesh
+                    val mirroredMesh = if (mirror) parsedMesh.mirroredAcrossX() else parsedMesh
                     if (mirror) {
                         Log.i(TAG, "loadIntoSlot[$eye] mirroredAcrossX aplicado (mismo .glb en los dos ojos)")
                     }
+                    // Ver RawMesh.withColorFloor / RendererConfiguration.LASH_COLOR_FLOOR
+                    // — recorta el extremo casi-negro-puro del degradado de
+                    // color raíz→punta del .glb, confirmado en dispositivo
+                    // real como la causa de la línea dura en la base.
+                    val rawMesh = mirroredMesh.withColorFloor(RendererConfiguration.LASH_COLOR_FLOOR)
                     val geometry = Geometry.Builder(RenderableManager.PrimitiveType.TRIANGLES)
                         .vertices(rawMesh.vertices)
                         .indices(rawMesh.indices)
@@ -477,25 +479,42 @@ class LashRenderer(
                         renderableNode.setGeometry(geometry)
                         slot.rawMesh = rawMesh
                         slot.geometry = geometry
-                        // Double-buffer de LashMeshBender.bendInPlace — se
-                        // asigna UNA vez acá, con el tamaño exacto de este
-                        // mesh, y se reutiliza en cada resultado de
-                        // MediaPipe sin volver a alocar (ver EyeModelSlot).
-                        // Contenido inicial = la malla cruda (rígida, sin
-                        // doblar) tal cual — no importa: el nodo sigue
+                        // Double-buffer de LashMeshBender.bendInPlace —
+                        // FloatBuffer DIRECTO, se asigna UNA vez acá con el
+                        // tamaño exacto de este mesh (vertexCount×3 floats) y
+                        // se reutiliza en cada resultado de MediaPipe sin
+                        // volver a alocar (ver EyeModelSlot). No hace falta
+                        // pre-llenarlo con la malla cruda: el nodo sigue
                         // oculto (`node.isVisible = false`, más abajo) hasta
                         // el primer resultado con rostro detectado, que ya
-                        // dispara un doblado real antes de mostrarse.
-                        slot.bufferA = ArrayList(rawMesh.vertices)
-                        slot.bufferB = ArrayList(rawMesh.vertices)
+                        // dispara un doblado real (o, si el doblado está
+                        // desactivado, la Geometry ya subió la forma de
+                        // reposo una vez arriba, en `Geometry.Builder`).
+                        slot.positionBufferA = allocateDirectFloatBuffer(rawMesh.vertices.size * 3)
+                        slot.positionBufferB = allocateDirectFloatBuffer(rawMesh.vertices.size * 3)
+                        // Tangente de reposo — costo único acá (como parsear
+                        // el .glb), NO por frame. Ver LashMeshBender.
+                        // computeRestTangents / KDoc de la clase (dejar la
+                        // normal estática se veía como una línea negra dura
+                        // con el material brilloso de LashPBR).
+                        slot.restTangents = LashMeshBender.computeRestTangents(rawMesh.vertices)
+                        slot.tangentBuffer = allocateDirectFloatBuffer(rawMesh.vertices.size * 4)
                     } else {
                         Log.w(TAG, "loadIntoSlot[$eye]: sin RenderableNode — sin doblado de párpado")
                     }
-                    // Raíz real de la pestaña (ver GlbMeshReader/EyeModelSlot):
-                    // el bounding box del .glb está centrado en Y, pero la
-                    // masa del mesh (banda densa de donde nacen las fibras)
-                    // está cerca de minY, no del origen — anclar el origen
-                    // (como se hacía antes) empuja la pestaña hacia arriba.
+                    // REACTIVADO (diagnóstico Problema 1, validación en dispositivo):
+                    // con rootLocalY=0 el CENTRO geométrico del abanico (bounding box
+                    // simétrica, minY=-maxY, confirmado parseando los .glb reales)
+                    // quedaba anclado en la línea de pestañas — la mitad superior del
+                    // abanico (las puntas) sobresalía ~28% del ancho del ojo por
+                    // encima de la línea real (síntoma: pestaña a la altura de la
+                    // ceja/cuenca). rawMesh.minY es la RAÍZ real del mesh (constante,
+                    // calculada una sola vez al cargar — sin ruido por frame), así que
+                    // usarla acá ancla la raíz, no el centro, en la línea de pestañas.
+                    // El ruido que causó la desactivación anterior venía de multiplicar
+                    // esto por eyePlane.up (por frame) en EyeTransformCalculator — eso
+                    // no cambió, así que si reaparece temblor visible, es la misma causa
+                    // de siempre y hay que atacarla ahí, no revertir esto a 0f.
                     slot.rootLocalY = rawMesh.minY
                 } catch (e: Exception) {
                     Log.e(TAG, "loadIntoSlot[$eye]: fallo parseando geometría para doblado, sigue rígido", e)
@@ -541,12 +560,15 @@ class LashRenderer(
      * fibra de las pestañas sin dejar negro puro el lado no iluminado.
      */
     private fun configureEnvironment(sv: SceneView) {
+        // Armónicos esféricos para iluminación de estudio cálida y suave.
+        // Simula luz de ring light frontal — ideal para pestañas de belleza:
+        // ilumina de frente con calidez sin crear sombras duras.
         val sphericalHarmonics = floatArrayOf(
-            0.9f, 0.9f, 0.92f, // L0 — término constante (color base)
-            0.05f, 0.08f, 0.05f, // L1(y) — algo más de luz desde arriba
-            0.02f, 0.02f, 0.02f, // L1(x)
-            0f, 0f, 0f, // L1(z)
-            0f, 0f, 0f, // L2 (5 bandas restantes, neutras)
+            1.0f, 0.95f, 0.90f,   // L0 — base cálida (como luz de día interior)
+            0.10f, 0.08f, 0.06f,  // L1(y) — luz extra desde arriba
+            0.05f, 0.05f, 0.05f,  // L1(x) — leve relleno lateral
+            0.08f, 0.07f, 0.06f,  // L1(z) — luz frontal extra (ring light)
+            0f, 0f, 0f,           // L2 (neutros)
             0f, 0f, 0f,
             0f, 0f, 0f,
             0f, 0f, 0f,
@@ -613,6 +635,15 @@ class LashRenderer(
             Log.e(TAG, "No se pudo configurar la luz clave", e)
         }
     }
+
+    /** Buffer directo (memoria nativa) preasignado para el double-buffer de
+     * [LashMeshBender.bendInPlace] — ver [EyeModelSlot.positionBufferA]/
+     * [positionBufferB]. Se llama solo en `loadIntoSlot` (una vez por
+     * modelo cargado), no por frame. */
+    private fun allocateDirectFloatBuffer(floatCount: Int): FloatBuffer =
+        ByteBuffer.allocateDirect(floatCount * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
 
     private companion object {
         private const val TAG = "LashRenderer"

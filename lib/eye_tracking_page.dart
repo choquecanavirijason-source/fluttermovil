@@ -17,6 +17,7 @@ import 'features/tracking/data/tracking_repository_impl.dart';
 import 'eye_tracking_alignment.dart';
 import 'eye_tracking_customization_options.dart';
 import 'eye_tracking_mapping_painter.dart';
+import 'lid_landmark_debug_painter.dart';
 import 'eye_tracking_model.dart';
 import 'eye_tracking_photo_pipeline.dart';
 import 'native_eye_tracking_service.dart';
@@ -900,6 +901,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                           painter: LashMappingPainter(frame: _frame),
                         ),
                       ),
+                    // DEBUG: Puntos de landmarks del párpado superior/inferior
+                    // ── DESACTIVADO TEMPORALMENTE ─────────────────────────
+                    // Para reactivar: descomentar este bloque.
+                    // Positioned.fill(
+                    //   child: CustomPaint(
+                    //     isComplex: true,
+                    //     painter: LidLandmarkDebugPainter(frame: _frame),
+                    //   ),
+                    // ),
                   ],
                 ),
               ),

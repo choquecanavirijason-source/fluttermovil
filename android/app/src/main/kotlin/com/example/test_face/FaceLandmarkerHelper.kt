@@ -1,7 +1,9 @@
 package com.example.test_face
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
+import com.google.mediapipe.framework.image.BitmapExtractor
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
@@ -10,13 +12,24 @@ import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 
 class FaceLandmarkerHelper(
     private val context: Context,
-    /** [Map] con el contrato 2D que ya consume Flutter, y el [FaceLandmarkerResult]
+    /** [Map] con el contrato 2D que ya consume Flutter, el [FaceLandmarkerResult]
      * crudo (landmarks + matriz de transformación facial) para el motor de
-     * render 3D nativo (ver paquete `render`). */
-    private val onResult: (Map<String, Any?>, FaceLandmarkerResult) -> Unit,
+     * render 3D nativo (ver paquete `render`), y el [Bitmap] EXACTO que
+     * MediaPipe analizó para este resultado (vía [BitmapExtractor], no un
+     * bitmap guardado aparte que podría no corresponder al mismo frame) —
+     * lo usa [com.example.test_face.render.LashEdgeDetector] para anclar el
+     * modelo 3D sobre la pestaña real visible, no solo sobre el landmark
+     * estimado. `null` si el image no envuelve un Bitmap (no debería pasar
+     * con [com.google.mediapipe.framework.image.BitmapImageBuilder], que es
+     * como se construye en [com.example.test_face.CameraXManager]). */
+    private val onResult: (Map<String, Any?>, FaceLandmarkerResult, Bitmap?) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private var faceLandmarker: FaceLandmarker? = null
+
+    // Instancia propia del mapper para que pueda mantener estado EMA
+    // entre llamadas (ver EyeTrackingResultMapper — ahora es class, no object).
+    private val mapper = EyeTrackingResultMapper()
 
     /**
      * Intenta GPU primero: la inferencia de FaceLandmarker con
@@ -73,12 +86,27 @@ class FaceLandmarkerHelper(
             .setOutputFacialTransformationMatrixes(true)
             .setResultListener { result, image ->
                 try {
-                    val mapped = EyeTrackingResultMapper.map(
+                    // BitmapExtractor.extract() sobre el MISMO `image` que
+                    // MediaPipe acaba de analizar para `result` — garantiza
+                    // que el bitmap corresponde EXACTO a este resultado, sin
+                    // depender de un bitmap guardado aparte que podría
+                    // pertenecer a un frame distinto (ver CameraXManager).
+                    // Extraído ANTES de EyeTrackingResultMapper.map() porque
+                    // ese mapper también lo usa (para exponer a Flutter
+                    // dónde detecta LashEdgeDetector la pestaña real).
+                    val bitmap = try {
+                        BitmapExtractor.extract(image)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "BitmapExtractor.extract falló — detección de pestaña real desactivada para este frame", e)
+                        null
+                    }
+                    val mapped = mapper.map(
                         result,
                         image.width,
-                        image.height
+                        image.height,
+                        bitmap,
                     )
-                    onResult(mapped, result)
+                    onResult(mapped, result, bitmap)
                 } catch (e: Exception) {
                     Log.e(TAG, "Exception in result listener", e)
                     onError(e.message ?: "Error processing FaceLandmarker result")
