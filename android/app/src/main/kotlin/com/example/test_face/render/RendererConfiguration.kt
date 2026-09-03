@@ -97,7 +97,7 @@ object RendererConfiguration {
      * subir si desde abajo todavía se ve plana; bajar si de frente empieza a
      * verse despegada del párpado o demasiado hacia la cámara.
      */
-    const val LASH_FORWARD_TILT_DEGREES = 30f
+    const val LASH_FORWARD_TILT_DEGREES = 0f
     // Multiplicador SOLO sobre el eje Y local del modelo (además del
     // scaleFactor isotrópico que ya iguala el ancho al ojo real) — le da
     // más volumen/grosor vertical a la pestaña sin estirarla más allá de
@@ -129,6 +129,38 @@ object RendererConfiguration {
     // ── Parpadeo ────────────────────────────────────────────────────────
     const val EYE_CLOSED_OPENNESS_THRESHOLD = 0.12f
     const val EYE_OPEN_OPENNESS_THRESHOLD = 0.22f
+
+    /**
+     * Umbral de parpadeo RELATIVO al ojo de cada persona — ver
+     * [OpennessTracker]. Reemplaza a los dos umbrales absolutos de arriba,
+     * que quedan solo como referencia histórica.
+     *
+     * Los absolutos (0.12 / 0.22) asumían una forma de ojo. Medido en
+     * dispositivo sobre un ojo rasgado, la apertura oscilaba entre 0.108 y
+     * 0.198: cruzando el de "cerrado" todo el tiempo y sin llegar nunca al de
+     * "abierto", o sea pestaña permanentemente atenuada y parpadeando entre
+     * visible y oculta.
+     *
+     * Como fracciones de la propia base de la persona: por debajo del 30% de
+     * su apertura normal se considera cerrado, por encima del 60% totalmente
+     * abierto. Un parpadeo real lleva la relación casi a cero, así que sigue
+     * detectándose; lo que ya no pasa es confundir "ojo rasgado" con "ojo
+     * cerrado".
+     */
+    const val OPENNESS_CLOSED_FRACTION = 0.30f
+    const val OPENNESS_OPEN_FRACTION = 0.60f
+
+    /** Sube rápido (un valor más alto = el ojo está más abierto de lo que
+     * creíamos) y baja muy lento: si bajara rápido, tras un par de parpadeos
+     * la base sería la del ojo CERRADO y no se ocultaría nunca. Ver
+     * [OpennessTracker]. */
+    const val OPENNESS_BASELINE_RISE = 0.15f
+    const val OPENNESS_BASELINE_DECAY = 0.9995f
+
+    /** Muestras antes de confiar en la base. Mientras tanto no se atenúa: sin
+     * base confiable es preferible mostrar la pestaña de más que ocultarla
+     * justo al aparecer el rostro. */
+    const val OPENNESS_WARMUP_SAMPLES = 15
 
     // ── Iluminación mejorada para pestañas estéticas ────────────────────
     // Luz ambiente más intensa y cálida para que las pestañas se vean
@@ -366,6 +398,27 @@ object RendererConfiguration {
     // sigue viéndose como línea; bajar (más cerca de 0.03) si la pestaña
     // queda demasiado clara/plana.
     const val LASH_COLOR_FLOOR = 0.08f
+
+    // ── Suavizado de los puntos del párpado (ver UpperLidFilter) ───────
+    /**
+     * One Euro sobre los 7 puntos del arco del párpado superior, en PÍXELES
+     * de la imagen de análisis — NO reusar los de posición/rotación, que
+     * operan en unidades de mundo (~0.01-0.6): el término `beta*|velocidad|`
+     * depende de la escala de la señal.
+     *
+     * En reposo un landmark oscila ~1-2 px; al mover la cabeza rápido se
+     * desplaza del orden de cientos de px/s. Con `minCutoff = 1.5 Hz` el
+     * filtro corta fuerte quieto, y con `beta = 0.03` a ~300 px/s el corte
+     * sube a ~10 Hz (1.5 + 0.03*300), o sea casi sin suavizar cuando de
+     * verdad te movés.
+     *
+     * SIN CALIBRAR EN DISPOSITIVO — son un punto de partida derivado de esas
+     * magnitudes, no valores medidos. Si la pestaña "arrastra" la forma al
+     * parpadear, SUBIR `LID_POINT_BETA`; si sigue vibrando quieta, BAJAR
+     * `LID_POINT_MIN_CUTOFF`.
+     */
+    const val LID_POINT_MIN_CUTOFF = 1.5f
+    const val LID_POINT_BETA = 0.03f
 
     /**
      * Luminancia de la PUNTA tras pasar la pestaña a negro neutro (ver

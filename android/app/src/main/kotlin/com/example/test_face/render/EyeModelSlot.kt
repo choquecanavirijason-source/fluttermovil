@@ -31,6 +31,14 @@ class EyeModelSlot {
     @Volatile var rootLocalY = 0f
 
     val filter = EyeTrackingFilter()
+
+    /** Suavizado temporal de los puntos del arco del párpado, previo a
+     * [LashLineCurve] — ver [UpperLidFilter]. Por ojo, porque el estado del
+     * filtro es por punto. */
+    val lidFilter = UpperLidFilter()
+
+    /** Umbral de parpadeo adaptado a la persona — ver [OpennessTracker]. */
+    val openness = OpennessTracker()
     val interpolator = PoseInterpolator()
 
     /** Malla original sin doblar, parseada del .glb (ver [GlbMeshReader]) —
@@ -107,6 +115,8 @@ class EyeModelSlot {
         path = null
         naturalSpan = 1f
         rootLocalY = 0f
+        lidFilter.reset()
+        openness.reset()
         filter.reset()
         interpolator.reset()
         rawMesh = null

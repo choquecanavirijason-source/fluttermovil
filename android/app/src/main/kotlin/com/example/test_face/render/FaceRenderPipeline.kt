@@ -40,6 +40,11 @@ object FaceRenderPipeline {
         /** Bitmap EXACTO analizado por MediaPipe para [result] — ver
          * [LashEdgeDetector]. `null` degrada a solo landmarks. */
         cameraBitmap: Bitmap? = null,
+        /** [EyeModelSlot.lidFilter] de cada ojo — suaviza los puntos del
+         * arco del párpado antes de ajustar [LashLineCurve]. `null` deja los
+         * puntos crudos (comportamiento anterior). */
+        leftLidFilter: UpperLidFilter? = null,
+        rightLidFilter: UpperLidFilter? = null,
     ): Result? {
         if (result.faceLandmarks().isEmpty()) return null
         val landmarks: List<NormalizedLandmark> = result.faceLandmarks()[0]
@@ -69,6 +74,7 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.LEFT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.LEFT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.LEFT_EYE_UPPER_APEX,
             headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig, cameraBitmap,
+            leftLidFilter,
         )
         val right = computeEye(
             "RIGHT",
@@ -76,6 +82,7 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.RIGHT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.RIGHT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.RIGHT_EYE_UPPER_APEX,
             headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY, styleConfig, cameraBitmap,
+            rightLidFilter,
         )
         // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
@@ -101,6 +108,7 @@ object FaceRenderPipeline {
         rootLocalY: Float,
         styleConfig: LashStyleConfig,
         cameraBitmap: Bitmap?,
+        lidFilter: UpperLidFilter?,
     ): EyeTransform? {
         val rawEyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
@@ -136,10 +144,16 @@ object FaceRenderPipeline {
                 headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
             )
         }
-        if (RendererConfiguration.MESH_CALIBRATION_LOGGING) {
+        if (RendererConfiguration.MESH_CALIBRATION_LOGGING && shouldLogCalibrationFrame()) {
             logMeshCalibration(
                 eyeLabel, landmarks, medialCanthusIndex, lateralCanthusIndex, upperApexIndex,
-                ringIndices.copyOfRange(8, 16),
+                // 9..16, igual que la llamada REAL de MeshEyeTransformCalculator
+                // de arriba. Acá decía 8..16, o sea que el log comparaba contra
+                // un sistema nuevo que incluía el CANTO en el arco del párpado
+                // — distinto del que se activaría con el flag. Comparar contra
+                // algo que no es lo que se va a encender hace inservible la
+                // medición, que es justamente para lo que existe este log.
+                ringIndices.copyOfRange(9, 16),
                 camera, headPose, plane, naturalSpan, rootLocalY, styleConfig,
                 anchor, imageWidth, imageHeight, xNudgeNormalized,
             )
@@ -154,7 +168,14 @@ object FaceRenderPipeline {
         // centroide real de los landmarks ya no mal-condiciona el ajuste, así
         // que transform/curva/doblado de mesh comparten un único frame sin
         // offset de reconciliación (`lashCurveAnchorOffsetPx`, eliminado).
-        val curve = LashLineCurve.fit(eyeLandmarks.upperLid, anchor.point, anchor.upperLidTangent)
+        // Puntos SUAVIZADOS para la curva (ver [UpperLidFilter]): el resto
+        // del cálculo — ancla, plano, escala — sigue con los crudos, porque
+        // esa rama ya pasa por [EyeTrackingFilter] aguas abajo y filtrar dos
+        // veces agregaría lag sin quitar más jitter. Lo que NO estaba
+        // filtrado en ningún lado era justamente la forma de la curva.
+        val smoothedLid = lidFilter?.apply(eyeLandmarks.upperLid, System.nanoTime())
+            ?: eyeLandmarks.upperLid
+        val curve = LashLineCurve.fit(smoothedLid, anchor.point, anchor.upperLidTangent)
         return transform.copy(
             opennessRatio = foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose),
             lashLineCurve = curve,
@@ -224,6 +245,26 @@ object FaceRenderPipeline {
      * diagnóstico, sacar cuando termine esta ronda de calibración de
      * [RendererConfiguration.LASH_ANCHOR_FROM_FACE_MESH].
      */
+    /**
+     * Throttle del log de calibración: [logMeshCalibration] emite 5 líneas
+     * por ojo, o sea 10 por frame — a 30 fps son 300 líneas por segundo. Eso
+     * inunda logcat Y agrega I/O en el camino crítico del render, con lo que
+     * la medición terminaría distorsionando justo la fluidez que queremos
+     * medir. Una tanda por segundo alcanza de sobra para comparar los dos
+     * sistemas en cada ángulo.
+     *
+     * Contador de DIAGNÓSTICO únicamente — es el único estado de este objeto
+     * (ver el KDoc de la clase, "Stateless") y solo se toca con
+     * [RendererConfiguration.MESH_CALIBRATION_LOGGING] en `true`.
+     */
+    private var calibrationFrameCounter = 0
+
+    private fun shouldLogCalibrationFrame(): Boolean {
+        calibrationFrameCounter++
+        // 60 = 2 ojos x 30 resultados de MediaPipe ≈ una tanda por segundo.
+        return calibrationFrameCounter % 60 < 2
+    }
+
     private fun logMeshCalibration(
         eyeLabel: String,
         landmarks: List<NormalizedLandmark>,

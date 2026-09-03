@@ -299,6 +299,8 @@ class LashRenderer(
                 rightRootLocalY = rightSlot.rootLocalY,
                 styleConfig = currentStyleConfig,
                 cameraBitmap = cameraBitmap,
+                leftLidFilter = leftSlot.lidFilter,
+                rightLidFilter = rightSlot.lidFilter,
             )
         } catch (e: Exception) {
             Log.e(TAG, "onFaceResult: fallo calculando la transformación", e)
@@ -335,6 +337,11 @@ class LashRenderer(
                 // que no queden muestras viejas esperando a extrapolarse
                 // cuando el rostro reaparezca.
                 slot.interpolator.reset()
+                // Mismo motivo que el interpolador: sin esto, al redetectar
+                // el rostro la curva del párpado arrancaría mezclada con la
+                // forma de hace varios segundos (ver UpperLidFilter).
+                slot.lidFilter.reset()
+                slot.openness.reset()
                 if (node.isVisible) {
                     Log.i(TAG, "hideSlot node=${System.identityHashCode(node)} -> OCULTO (onFaceLost)")
                 }
@@ -365,7 +372,10 @@ class LashRenderer(
         // Filter de posición/rotación/escala (ver auditoría, oclusión de
         // parpadeo). damping<=0 -> ojo cerrado, oculta sin escribir escala 0
         // (evita un frame con la malla aplastada a tamaño cero visible).
-        val damping = opennessDamping(transform.opennessRatio)
+        // Umbral relativo al ojo de ESTA persona (ver OpennessTracker) en vez
+        // de las constantes absolutas, que confundían un ojo rasgado abierto
+        // con un ojo cerrado.
+        val damping = slot.openness.damping(transform.opennessRatio)
         if (damping <= 0f) {
             hideSlot(slot)
             return

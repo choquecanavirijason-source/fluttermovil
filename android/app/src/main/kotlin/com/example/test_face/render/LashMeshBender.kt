@@ -155,6 +155,37 @@ object LashMeshBender {
         // el resto del pipeline, no una constante inventada.
         val meshUnitsPerPixel = span / eyeWidthPx
 
+        // ── Corrección de amplificación vertical ─────────────────────
+        // `meshUnitsPerPixel` asume que el span del mesh acaba midiendo
+        // `eyeWidthPx` en pantalla, pero NO es así: el transform rígido lo
+        // escala a `eyeWidthWorld * WIDTH_MULTIPLIER * tilt`, y además estira
+        // el eje Y local por `HEIGHT_VOLUME_MULTIPLIER` aparte. Componiendo:
+        //
+        //   desviacionEnMundo = deviationPx * (eyeWidthWorld/eyeWidthPx)
+        //                       * WIDTH_MULTIPLIER * tilt * HEIGHT_VOLUME_MULTIPLIER
+        //
+        // cuando lo correcto es solo `deviationPx * (eyeWidthWorld/eyeWidthPx)`
+        // — la misma escala mundo-por-píxel que se usa en horizontal. O sea
+        // que el arco del párpado se dibujaba 1.15 * 1.55 = 1.78x más
+        // pronunciado de lo que realmente es (reportado en dispositivo: "la
+        // parte central sube demasiado, no se acomoda al párpado").
+        //
+        // `HEIGHT_VOLUME_MULTIPLIER` existe para dar VOLUMEN a la fibra — un
+        // estiramiento artístico del modelo. Que estire también el término
+        // GEOMÉTRICO que sigue al párpado es el bug: la raíz tiene que caer
+        // sobre el párpado real sin importar qué tan gruesa sea la pestaña.
+        //
+        // El factor `tilt` no se corrige acá porque el bender no lo recibe.
+        // Vale 1 de frente Y al cabecear (desde el fix del eje `right` en
+        // EyeTransformCalculator), o sea en todos los ángulos salvo GIRO de
+        // cabeza, donde queda un residuo de hasta 2.2x. Para eliminarlo hay
+        // que propagar el mundo-por-píxel real desde EyeTransform.
+        val verticalUnitsPerPixel = meshUnitsPerPixel /
+            (RendererConfiguration.WIDTH_MULTIPLIER * RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER)
+        // El eje Z se escala con `scaleFactor` (uniforme), sin
+        // HEIGHT_VOLUME_MULTIPLIER — así que su exceso es solo WIDTH_MULTIPLIER.
+        val depthUnitsPerPixel = meshUnitsPerPixel / RendererConfiguration.WIDTH_MULTIPLIER
+
         // Radio de la esfera del globo ocular, como fracción de eyeWidthPx
         // (ver LashStyleConfig.zDepthDropRadiusFraction) — coerceAtLeast
         // solo por seguridad numérica.
@@ -218,10 +249,10 @@ object LashMeshBender {
             // — la profundidad física máxima de esa esfera es su propio
             // radio, así que es la meseta correcta.
             val depthDropPx = ((pixelLocalX * pixelLocalX) / (2f * radiusPx)).coerceAtMost(radiusPx)
-            val depthDropLocal = depthDropPx * meshUnitsPerPixel * styleConfig.foxyLiftMultiplier * strength
+            val depthDropLocal = depthDropPx * depthUnitsPerPixel * styleConfig.foxyLiftMultiplier * strength
 
             val bentX = pos.x
-            val bentY = pos.y + deviationPx * meshUnitsPerPixel
+            val bentY = pos.y + deviationPx * verticalUnitsPerPixel
             val bentZ = pos.z - depthDropLocal
 
             val base = i * POSITION_COMPONENTS
