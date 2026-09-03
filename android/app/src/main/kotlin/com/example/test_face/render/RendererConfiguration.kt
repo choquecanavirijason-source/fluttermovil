@@ -60,12 +60,44 @@ object RendererConfiguration {
     // desde el centroide. Como rootLocalY=0 (centro del modelo en el ancla),
     // esto sitúa el centro del modelo en la línea real de pestañas (borde inferior
     // del párpado superior, donde nacen las pestañas reales).
-    // RESTAURADO 2026-09-02 al valor de la configuración que el usuario
-    // confirmó como "la que funcionaba bien" (versión previa a toda la
-    // migración a face-mesh). Estaba en +0.12f (signo opuesto), que subía el
-    // ancla hacia la ceja en vez de bajarla al borde del párpado.
-    const val HEIGHT_OFFSET = -0.15f
+    // 2026-09-03: pasa de -0.15f a 0f. Con la fórmula
+    // `anchorY = meanY - height * HEIGHT_OFFSET` y la Y de imagen creciendo
+    // hacia abajo, un valor NEGATIVO BAJA el ancla — -0.15f la hundía un 15%
+    // del alto del ojo por debajo del arco del párpado superior. Junto con el
+    // canto que se coló en `EyeLandmarks.upperLid` (ver el fix 9..15 ahí),
+    // eran los dos términos que metían la pestaña en la parte de abajo del
+    // ojo, reportado en dispositivo con una marca de dónde debía ir.
+    //
+    // 0f = el ancla cae EXACTAMENTE en el centroide de los 7 puntos del arco
+    // del párpado superior (173,157,158,159,160,161,246), que es la línea de
+    // pestañas real — donde se pega una extensión. No es un valor elegido a
+    // ojo: es la ausencia de desplazamiento artificial.
+    //
+    // Para mover desde acá: POSITIVO sube (hacia la ceja), NEGATIVO baja
+    // (hacia el centro del ojo). La magnitud es fracción del alto del ojo, o
+    // sea escala sola con la distancia a la cámara.
+    //
+    // (El valor anterior se había restaurado el 2026-09-02 como "la
+    // configuración que funcionaba bien", pero eso fue medido cuando
+    // `upperLid` todavía incluía el canto y arrastraba `meanY` hacia abajo:
+    // compensaba un bug que ahora ya no existe.)
+    const val HEIGHT_OFFSET = 0.0f
     const val HEAD_TILT_MULTIPLIER = 1.0f
+
+    /**
+     * Grados que la pestaña se levanta hacia ADELANTE (fuera de la cara)
+     * desde el plano del párpado — ver [EyePlaneCalculator].
+     *
+     * 0f = el abanico queda plano contra el párpado, que es como estaba: de
+     * frente se ve bien, pero desde abajo queda de canto y se proyecta como
+     * una rayita. Una pestaña real nace en la línea y se levanta, por eso
+     * desde abajo se ve MÁS.
+     *
+     * 30f es un punto de partida, NO un valor calibrado en dispositivo:
+     * subir si desde abajo todavía se ve plana; bajar si de frente empieza a
+     * verse despegada del párpado o demasiado hacia la cámara.
+     */
+    const val LASH_FORWARD_TILT_DEGREES = 30f
     // Multiplicador SOLO sobre el eje Y local del modelo (además del
     // scaleFactor isotrópico que ya iguala el ancho al ojo real) — le da
     // más volumen/grosor vertical a la pestaña sin estirarla más allá de
@@ -334,6 +366,44 @@ object RendererConfiguration {
     // sigue viéndose como línea; bajar (más cerca de 0.03) si la pestaña
     // queda demasiado clara/plana.
     const val LASH_COLOR_FLOOR = 0.08f
+
+    /**
+     * Luminancia de la PUNTA tras pasar la pestaña a negro neutro (ver
+     * [RawMesh.toNeutralBlack]). La raíz queda proporcionalmente más oscura,
+     * conservando el degradado.
+     *
+     * El `COLOR_0` original es cálido (punta R=0.151 G=0.096 B=0.066 en
+     * `cateyeleft.glb`), o sea marrón oscuro — por eso la pestaña no se
+     * leía negra. Esto neutraliza el tinte y baja el nivel.
+     *
+     * 0.04f ≈ negro con una variación de fibra apenas perceptible. Bajar
+     * hacia 0f = negro absoluto (pero se pierde el relieve de fibra y
+     * vuelve el riesgo de "mancha plana"); subir = más gris/visible.
+     * La luminancia máxima del asset original era ≈ 0.106 para referencia.
+     */
+    const val LASH_BLACK_TIP_LUMINANCE = 0.04f
+
+    /**
+     * Gira el modelo de pestañas 180° sobre su eje `right`. Ver
+     * [EyePlaneCalculator] para por qué se niegan `up` y `normal` juntos y
+     * nunca uno solo.
+     *
+     * CRITERIO (no es preferencia estética, es cómo funciona el producto
+     * real): una pestaña postiza nace pegada en la línea de pestañas y las
+     * fibras SUBEN desde ahí. Cualquier cambio a este flag tiene que
+     * respetar eso — si el modelo se ve "arriba pero mirando hacia abajo",
+     * el valor correcto es `false`.
+     *
+     * `false` = las fibras MIRAN HACIA ARRIBA desde la línea de pestañas
+     *           (orientación pedida, y la que sale directa de la matriz de
+     *           MediaPipe).
+     * `true`  = volcadas: las fibras caen hacia abajo desde esa misma raíz.
+     *
+     * No mueve el nacimiento de la pestaña: el ancla sigue en el arco del
+     * párpado superior (ver [HEIGHT_OFFSET], hoy 0f). Solo cambia hacia
+     * dónde salen las fibras desde ahí.
+     */
+    const val FLIP_EYE_UP_AXIS = false
 
     // ── Malla facial de 468 puntos (Fase 1, ver FaceMeshRenderer) ─────────
     // Interruptor maestro: `false` no crea ni actualiza la malla — rollback

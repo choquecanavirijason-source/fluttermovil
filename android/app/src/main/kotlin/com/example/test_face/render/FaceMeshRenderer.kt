@@ -237,6 +237,15 @@ class FaceMeshRenderer(private val mainHandler: Handler) {
         // SIN CONFIRMAR EN DISPOSITIVO — ver RendererConfiguration.FACE_MESH_DEPTH_Z_SIGN.
         val zSign = RendererConfiguration.FACE_MESH_DEPTH_Z_SIGN
 
+        // PENDIENTE si se reactiva FACE_MESH_ENABLED (hoy `false`, ver
+        // RendererConfiguration): este bucle inlinea la des-proyección en vez
+        // de llamar a camera.unproject, así que NO recibe la corrección de
+        // encuadre FILL_CENTER que se agrego en CameraProjection.coverScaleX
+        // — la malla quedaría con el mismo error de ~62% en X que tenían las
+        // pestañas. Al reactivarla hay que pasarle imageWidth/imageHeight a
+        // onFaceResult, construir la proyección con CameraProjection.fillCenter
+        // y multiplicar ndcX/ndcY por coverScaleX/coverScaleY acá. No se hace
+        // ahora para no cambiar la API de una ruta desactivada.
         for (i in 0 until FaceMeshTopology.VERTEX_COUNT) {
             val lm = landmarks[i]
             val ndcX = 2f * lm.x() - 1f

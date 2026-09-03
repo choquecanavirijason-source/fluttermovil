@@ -185,8 +185,29 @@ object LashMeshBender {
             // amortiguando suave y continuamente hacia `wingStrength` en la
             // extrapolación — ver [LashLineCurve.wingBlend].
             val effectiveStrength = strength - (strength - wingStrength) * curve!!.wingBlend(pixelLocalX)
-            val deviationPx = curve.deviationAt(pixelLocalX) * effectiveStrength
-            val slope = curve.slopeAt(pixelLocalX) * effectiveStrength
+
+            // SIGNO (fix 2026-09-03): [LashLineCurve.fit] proyecta los puntos
+            // del párpado en ESPACIO DE IMAGEN, donde Y crece hacia ABAJO.
+            // `pos.y` de acá abajo es Y LOCAL DEL MODELO, que crece hacia
+            // ARRIBA (la raíz está en `raw.minY` y la punta en el máximo).
+            // Son convenciones OPUESTAS, así que hay que negar al cruzar de
+            // una a la otra.
+            //
+            // Sin esta negación el arco quedaba invertido: el centro del
+            // párpado superior está MÁS ALTO en el rostro, o sea con Y de
+            // imagen MENOR, o sea desviación NEGATIVA respecto al ancla — y
+            // al sumarla a un Y que crece hacia arriba, el centro BAJABA y las
+            // esquinas SUBÍAN. Resultado: la pestaña se curvaba en "U" (como
+            // un párpado inferior) en vez de en "n" (el arco real del
+            // párpado superior), reportado en dispositivo.
+            //
+            // Se niega también `slope`, que es d(localY)/d(localX) en las
+            // mismas coordenadas de imagen: alimenta la rotación de la
+            // tangente más abajo (`atan(slope)`), y tiene que seguir al shear
+            // de posición o la normal queda peleada con la superficie
+            // doblada.
+            val deviationPx = -curve.deviationAt(pixelLocalX) * effectiveStrength
+            val slope = -curve.slopeAt(pixelLocalX) * effectiveStrength
             if (deviationPx < minDeviationPx) minDeviationPx = deviationPx
             if (deviationPx > maxDeviationPx) maxDeviationPx = deviationPx
             if (pixelLocalX < minPixelLocalX) minPixelLocalX = pixelLocalX

@@ -8,7 +8,8 @@ data class ImagePoint(val x: Float, val y: Float)
 /**
  * Landmarks de un ojo ya resueltos a espacio de píxeles. El párpado superior
  * se identifica por el orden anatómico FIJO de `FaceLandmarkIndices.LEFT/
- * RIGHT_EYE_RING` (los últimos 8 de los 16 índices, ver [from]) — no por un
+ * RIGHT_EYE_RING` (los últimos 7 de los 16 índices — el 8 es el canto, no
+ * el arco; ver [from]) — no por un
  * umbral dinámico de Y de imagen: ese umbral se usó antes y resultó frágil
  * ante roll de cabeza (Y de imagen deja de alinear con "arriba" anatómico
  * cuando la cabeza se inclina de costado), causando que el ancla se
@@ -78,8 +79,28 @@ data class EyeLandmarks(
             // inclinada la cabeza). Fallback al umbral de Y solo si el anillo no
             // tiene los 16 puntos esperados (algún índice fuera de rango del
             // resultado de MediaPipe — no debería pasar en operación normal).
+            // 9..15, NO 8..15: el índice 8 del anillo es el CANTO (133 en el
+            // ojo izquierdo, 263 en el derecho) — la esquina donde se juntan
+            // párpado superior e inferior, que está POR DEBAJO del arco del
+            // párpado. Incluirlo arrastraba el promedio (`meanY` en
+            // [EyeAnchorCalculator]) hacia abajo, hacia el centro del ojo, y
+            // con él el ancla, la tangente ajustada y la curva de
+            // [LashLineCurve] — reportado en dispositivo como que la pestaña
+            // se colocaba usando la parte de ABAJO del ojo en vez del arco
+            // superior.
+            //
+            // Los 7 restantes (173,157,158,159,160,161,246 en el ojo
+            // izquierdo; 466,388,387,386,385,384,398 en el derecho) son
+            // exactamente el arco del párpado superior.
+            //
+            // Este mismo fix ya existía desde 2026-09-02 en
+            // [MeshEyeTransformCalculator] (vía `ringIndices.copyOfRange(9, 16)`
+            // en `FaceRenderPipeline`), pero esa ruta está detrás de
+            // `LASH_ANCHOR_FROM_FACE_MESH`, hoy en `false` — así que la ruta
+            // que realmente corre seguía con el canto adentro. Ahora las dos
+            // parten del mismo conjunto de puntos.
             val upperLid = if (ring.size == ringIndices.size && ring.size == 16) {
-                ring.subList(8, 16).sortedBy { it.x }
+                ring.subList(9, 16).sortedBy { it.x }
             } else {
                 val meanY = ring.sumOf { it.y.toDouble() }.toFloat() / ring.size
                 ring.filter { it.y <= meanY }.ifEmpty { ring }.sortedBy { it.x }

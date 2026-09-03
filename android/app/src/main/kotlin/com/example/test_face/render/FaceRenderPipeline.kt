@@ -2,6 +2,7 @@ package com.example.test_face.render
 
 import android.graphics.Bitmap
 import android.util.Log
+import kotlin.math.hypot
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 
@@ -155,11 +156,64 @@ object FaceRenderPipeline {
         // offset de reconciliación (`lashCurveAnchorOffsetPx`, eliminado).
         val curve = LashLineCurve.fit(eyeLandmarks.upperLid, anchor.point, anchor.upperLidTangent)
         return transform.copy(
-            opennessRatio = eyeLandmarks.opennessRatio,
+            opennessRatio = foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose),
             lashLineCurve = curve,
             eyeWidthPx = anchor.widthPx,
         )
     }
+
+    /**
+     * Corrige [EyeLandmarks.opennessRatio] por ESCORZO antes de que
+     * [LashRenderer.opennessDamping] decida si el ojo está cerrado.
+     *
+     * ## Por qué
+     *
+     * `opennessRatio` es `alto/ancho` del anillo del ojo MEDIDO EN LA IMAGEN,
+     * y se compara contra umbrales fijos
+     * ([RendererConfiguration.EYE_CLOSED_OPENNESS_THRESHOLD] = 0.12,
+     * `EYE_OPEN_...` = 0.22). Pero esa medida no depende solo de cuánto
+     * abriste el ojo: también del ÁNGULO de la cabeza.
+     *
+     * Al mirar la cámara desde ABAJO o desde ARRIBA (que es como la gente
+     * se prueba un filtro: se mira de abajo, de frente y de arriba), el ojo
+     * se escorza verticalmente y el alto proyectado se encoge con el coseno
+     * del cabeceo. Un ojo bien abierto ronda 0.35 de frente, pero a ~60°
+     * cae a ~0.18: el motor lo interpretaba como parpadeo, encogía el modelo
+     * y al cruzar 0.12 lo OCULTABA — la pestaña desaparecía justo en los
+     * ángulos en los que la usuaria la quiere ver.
+     *
+     * ## Cómo
+     *
+     * [HeadPose.up] y [HeadPose.right] están en el mundo de Filament, con la
+     * cámara mirando por -Z, así que el plano de imagen es XY. La longitud
+     * de la proyección de cada eje sobre ese plano (`hypot(x, y)`) es
+     * exactamente cuánto sobrevive de ese eje en la imagen:
+     *
+     *   - `upInPlane`    = 1 de frente, cos(cabeceo) al inclinar → factor por
+     *                      el que se encogió el ALTO.
+     *   - `rightInPlane` = 1 de frente, cos(giro) al girar → factor por el
+     *                      que se encogió el ANCHO.
+     *
+     * Deshacer ambos escorzos sobre `alto/ancho` es multiplicar por
+     * `rightInPlane / upInPlane`. El clamp acota cuánto puede amplificar en
+     * ángulos extremos: con 0.45 el factor máximo es ~2.2, suficiente para
+     * no perder un ojo abierto y escorzado, pero sin llegar a que un ojo
+     * REALMENTE cerrado (ratio ≈ 0.03-0.08) cruce el umbral de 0.12 y deje la
+     * pestaña puesta durante un parpadeo.
+     *
+     * Con la pose de respaldo ([EyePoseEstimator.fallback], sin matriz de
+     * MediaPipe) los dos factores valen 1 y esto es un no-op.
+     */
+    private fun foreshorteningCorrectedOpenness(ratio: Float, headPose: HeadPose): Float {
+        val upInPlane = hypot(headPose.up.x, headPose.up.y)
+            .coerceIn(FORESHORTENING_CLAMP, 1f)
+        val rightInPlane = hypot(headPose.right.x, headPose.right.y)
+            .coerceIn(FORESHORTENING_CLAMP, 1f)
+        return ratio * (rightInPlane / upInPlane)
+    }
+
+    /** Ver [foreshorteningCorrectedOpenness]. */
+    private const val FORESHORTENING_CLAMP = 0.45f
 
     /**
      * Instrumentación temporal de calibración (ver

@@ -3,6 +3,7 @@ package com.example.test_face.render
 import dev.romainguy.kotlin.math.Float3
 import dev.romainguy.kotlin.math.Quaternion
 import kotlin.math.abs
+import kotlin.math.hypot
 
 /** Transformación final (posición, rotación, escala) lista para aplicar a un `ModelNode`. */
 data class EyeTransform(
@@ -79,12 +80,27 @@ object EyeTransformCalculator {
         val position = camera.unproject(ndcX, ndcY, worldZ)
 
         // Corrección de escorzo (foreshortening): cuánto de frente mira el
-        // plano del ojo a la cámara (que observa a lo largo de +Z). normal.z
-        // ≈ 1 → de frente, sin corrección; se acerca a 0 → el ojo se ve de
-        // perfil y su ancho proyectado se reduce, así que se compensa
-        // dividiendo por ese factor (clamped para no explotar en ángulos
-        // extremos de tracking ruidoso).
-        val facingFactor = abs(eyePlane.normal.z).coerceAtLeast(0.35f)
+        // Se mide sobre el eje RIGHT del ojo, no sobre la normal.
+        //
+        // ANTES usaba `abs(eyePlane.normal.z)`. La normal cambia con el giro
+        // (yaw) Y con el cabeceo (pitch) por igual, pero esta corrección
+        // escala el ANCHO — y el ancho del ojo solo se escorza al GIRAR la
+        // cabeza, no al subirla o bajarla. El cabeceo es una rotación
+        // ALREDEDOR del propio eje `right`, así que no acorta nada en esa
+        // dirección.
+        //
+        // Con la normal, mirar la cámara desde abajo o desde arriba metía
+        // hasta un 2.2x de ensanchado que no correspondía: la pestaña salía
+        // estirada y fina, más ancha que el ojo (reportado en dispositivo
+        // justo en esos ángulos, mientras de frente se veía bien).
+        //
+        // La longitud de la proyección de `right` sobre el plano de imagen
+        // (XY, con la cámara mirando por -Z) es exactamente cuánto del ancho
+        // sobrevive en la imagen: 1 de frente, cos(yaw) al girar, y sin
+        // cambio al cabecear. Mismo criterio geométrico que usa
+        // `FaceRenderPipeline.foreshorteningCorrectedOpenness` para el alto.
+        val facingFactor = hypot(eyePlane.right.x, eyePlane.right.y)
+            .coerceAtLeast(0.35f)
         val tiltCorrection = (1f / facingFactor).coerceAtMost(2.2f) *
             RendererConfiguration.HEAD_TILT_MULTIPLIER
 

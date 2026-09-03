@@ -110,6 +110,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   StreamSubscription<TrackingFrame>? _sub;
   TrackingFrame? _frame;
+
+  /// Canal de repintado de los overlays de landmarks (puntos del párpado y
+  /// mapping). Se actualiza en CADA frame de tracking y los painters lo
+  /// reciben como `repaint:`, así que se redibujan a la cadencia real de
+  /// MediaPipe sin pasar por el `setState` de más abajo — que sigue
+  /// limitado a 150 ms porque sí reconstruye la pantalla entera.
+  final ValueNotifier<TrackingFrame?> _frameNotifier =
+      ValueNotifier<TrackingFrame?>(null);
+
   String _status = 'Inicializando...';
   DateTime? _lastFrameUiUpdate;
 
@@ -117,6 +126,14 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   bool _openingRecommendation = false;
 
   bool _showMapping = false;
+
+  /// Overlay de diagnóstico de landmarks del párpado. `false` = la pantalla
+  /// muestra solo la cámara y las pestañas 3D, sin nada dibujado encima
+  /// — el estado en que hay que evaluar el render. Ponerlo en `true` para
+  /// volver a ver dónde cree el motor que está la línea de pestañas (es lo
+  /// único que hace falta cambiar; el painter sigue enchufado al
+  /// `_frameNotifier` y se repinta a la cadencia real del tracking).
+  static const bool _showLidLandmarkDebug = false;
 
   /// true mientras alguna de las hojas del flujo "Guardar diseño" (opciones,
   /// selector de cliente) está abierta. Solo se usa para que
@@ -361,6 +378,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final newStatus = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
     final statusChanged = newStatus != _status;
     _frame = frame;
+    // Repintado de los overlays: independiente del throttle de `setState`
+    // (ver [_frameNotifier]) — aquí no hay límite, cada frame que llega se
+    // dibuja, que es lo que hace que los puntos sigan la cabeza sin saltos.
+    _frameNotifier.value = frame;
     if (_alignmentGuideActive) _evaluateAlignment(frame);
     _detectEyeTypeFromFrame(frame);
 
@@ -431,6 +452,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     _service.stopTracking();
+    _frameNotifier.dispose();
     ref.read(sessionClientProvider.notifier).state = null;
     super.dispose();
   }
@@ -898,20 +920,23 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       Positioned.fill(
                         child: CustomPaint(
                           isComplex: true,
-                          painter: LashMappingPainter(frame: _frame),
+                          painter: LashMappingPainter(frames: _frameNotifier),
                         ),
                       ),
-                    // DEBUG: Puntos de landmarks del párpado superior/inferior
-                    // ── REACTIVADO 2026-09-02 para calibrar el anclaje ────
-                    // Verde = párpado superior (los puntos que usa el motor
-                    // como línea de pestañas), cruz amarilla = ancla.
-                    // Comentar de nuevo cuando la calibración esté cerrada.
-                    Positioned.fill(
-                      child: CustomPaint(
-                        isComplex: true,
-                        painter: LidLandmarkDebugPainter(frame: _frame),
+                    // DEBUG: puntos de landmarks del párpado (verde =
+                    // superior, la línea que el motor usa como pestaña; cruz
+                    // amarilla = ancla; naranja = pestaña real detectada).
+                    // Apagado con [_showLidLandmarkDebug] para poder juzgar
+                    // el render de las pestañas sin nada encima.
+                    if (_showLidLandmarkDebug)
+                      Positioned.fill(
+                        child: CustomPaint(
+                          isComplex: true,
+                          painter: LidLandmarkDebugPainter(
+                            frames: _frameNotifier,
+                          ),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),

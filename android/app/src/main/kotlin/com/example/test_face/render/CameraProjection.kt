@@ -24,7 +24,78 @@ data class CameraProjection(
     val projection: Mat4,
     /** `camera.modelTransform` — transforma de espacio de cámara a espacio de mundo. */
     val cameraToWorld: Mat4,
+    /**
+     * Factor de cobertura `FILL_CENTER` en X (ver [fillCenter]). Convierte
+     * un NDC derivado de coordenadas NORMALIZADAS DE IMAGEN (`2*nx-1`) al
+     * NDC real del viewport.
+     *
+     * ## Por qué existe
+     *
+     * Todos los que des-proyectan en este motor parten de landmarks de
+     * MediaPipe, que vienen normalizados contra la IMAGEN DE ANÁLISIS
+     * (480x640 en dispositivo, aspecto 0.75). Pero el `SceneView` sobre el
+     * que se renderiza cubre la pantalla completa (1440x3088, aspecto
+     * 0.466), y el `PreviewView` de abajo muestra la cámara con
+     * `ScaleType.FILL_CENTER`, o sea RECORTADA (cover), no estirada.
+     *
+     * Hacer `ndcX = 2*nx - 1` estira la imagen para llenar el viewport, que
+     * es justo lo que el preview NO hace: con esos números el modelo 3D se
+     * coloca a solo `viewportAspect/imageAspect` = 62% de la distancia
+     * horizontal correcta respecto al centro (y el ancho del ojo medido en
+     * mundo sale igual de angosto, ver
+     * [EyeTransformCalculator]/`worldDistanceAtDepth`). El error crece con
+     * la distancia del ojo al centro de la pantalla, así que se nota como
+     * "las pestañas quedan lejos de donde deberían" — y no lo compensa
+     * ninguna constante de calibración, porque depende de dónde esté la
+     * cara en el cuadro.
+     *
+     * El overlay de debug en Flutter (`LidLandmarkDebugPainter`) siempre
+     * hizo bien este mapeo (`scale = max(sx, sy)` + centrado), de ahí que
+     * los puntos verdes sí cayeran sobre la línea de pestañas mientras el
+     * `.glb` caía lejos.
+     */
+    val coverScaleX: Float = 1f,
+    /** Ver [coverScaleX] — en cover uno de los dos factores es exactamente
+     * 1 (el eje que llena el viewport) y el otro es > 1 (el recortado). */
+    val coverScaleY: Float = 1f,
 ) {
+    companion object {
+        /**
+         * Construye la proyección aplicando el mismo encuadre que usa el
+         * `PreviewView` (`ScaleType.FILL_CENTER`): la imagen se escala por
+         * `max(viewportW/imgW, viewportH/imgH)` y se centra, recortando el
+         * excedente. Ver [coverScaleX] para por qué hace falta.
+         *
+         * Si alguna dimensión viene en 0 (el `SceneView` todavía no midió,
+         * puede pasar en los primeros frames tras adjuntarlo) cae a factores
+         * 1/1 — el comportamiento anterior, en vez de dividir por cero.
+         */
+        fun fillCenter(
+            projection: Mat4,
+            cameraToWorld: Mat4,
+            imageWidth: Int,
+            imageHeight: Int,
+            viewportWidth: Int,
+            viewportHeight: Int,
+        ): CameraProjection {
+            if (imageWidth <= 0 || imageHeight <= 0 || viewportWidth <= 0 || viewportHeight <= 0) {
+                return CameraProjection(projection, cameraToWorld)
+            }
+            val iw = imageWidth.toFloat()
+            val ih = imageHeight.toFloat()
+            val vw = viewportWidth.toFloat()
+            val vh = viewportHeight.toFloat()
+            val scale = maxOf(vw / iw, vh / ih)
+            // Fracción del viewport que abarca la imagen escalada: 1 en el
+            // eje que llena, > 1 en el que se recorta.
+            return CameraProjection(
+                projection = projection,
+                cameraToWorld = cameraToWorld,
+                coverScaleX = iw * scale / vw,
+                coverScaleY = ih * scale / vh,
+            )
+        }
+    }
     /**
      * Des-proyecta un punto en coordenadas NDC (`[-1,1]`, convención OpenGL:
      * +Y hacia arriba) a la posición 3D real en espacio de mundo, a la
@@ -40,9 +111,15 @@ data class CameraProjection(
     fun unproject(ndcX: Float, ndcY: Float, viewDepthZ: Float): Float3 {
         val px = projection.x.x
         val py = projection.y.y
+        // [ndcX]/[ndcY] llegan derivados de coordenadas normalizadas de
+        // IMAGEN; pasarlos por el factor de cover los lleva al NDC real del
+        // viewport, que es lo que la matriz de proyección espera. Ver
+        // [coverScaleX].
+        val viewportNdcX = ndcX * coverScaleX
+        val viewportNdcY = ndcY * coverScaleY
         // clipW = -viewZ: convención de cámara mirando hacia -Z (OpenGL/Filament).
-        val viewX = ndcX * (-viewDepthZ) / px
-        val viewY = ndcY * (-viewDepthZ) / py
+        val viewX = viewportNdcX * (-viewDepthZ) / px
+        val viewY = viewportNdcY * (-viewDepthZ) / py
         val viewPoint = Float4(viewX, viewY, viewDepthZ, 1f)
         val worldPoint = cameraToWorld * viewPoint
         return Float3(worldPoint.x, worldPoint.y, worldPoint.z)

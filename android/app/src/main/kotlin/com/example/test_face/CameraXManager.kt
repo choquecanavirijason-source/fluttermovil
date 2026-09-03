@@ -2,7 +2,12 @@ package com.example.test_face
 
 import android.app.Activity
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.RectF
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -43,6 +48,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.roundToInt
 
 /**
  * Coordinador delgado: solo maneja el ciclo de vida de CameraX (bind/unbind,
@@ -103,33 +109,26 @@ class CameraXManager(
             }
             debugLastResultMs = nowMs
 
-            // Calcular posición REAL de las pestañas con LashEdgeDetector
-            // (busca el píxel más oscuro cerca de cada landmark del párpado superior)
-            // y añadirla al mapa antes de enviarlo a Flutter.
-            val augmentedData: Map<String, Any?> = if (resultBitmap != null && data["faceDetected"] == true) {
-                fun toImagePoints(key: String): List<com.example.test_face.render.ImagePoint> =
-                    (data[key] as? List<*>)?.mapNotNull { pt ->
-                        val m = pt as? Map<*, *> ?: return@mapNotNull null
-                        val x = (m["x"] as? Double)?.toFloat() ?: return@mapNotNull null
-                        val y = (m["y"] as? Double)?.toFloat() ?: return@mapNotNull null
-                        com.example.test_face.render.ImagePoint(x, y)
-                    } ?: emptyList()
-
-                fun toMapList(pts: List<com.example.test_face.render.ImagePoint>) =
-                    pts.map { mapOf("x" to it.x.toDouble(), "y" to it.y.toDouble()) }
-
-                val leftLash = com.example.test_face.render.LashEdgeDetector
-                    .detectRealLashLine(resultBitmap, toImagePoints("leftUpperLid"))
-                val rightLash = com.example.test_face.render.LashEdgeDetector
-                    .detectRealLashLine(resultBitmap, toImagePoints("rightUpperLid"))
-
-                data + mapOf(
-                    "leftLashLine" to toMapList(leftLash),
-                    "rightLashLine" to toMapList(rightLash),
-                )
-            } else {
-                data
-            }
+            // `data` ya trae "leftLashLine"/"rightLashLine" calculadas por
+            // EyeTrackingResultMapper.map() con LashEdgeDetector Y suavizadas
+            // con EMA entre frames.
+            //
+            // ELIMINADO: acá había un segundo pase de
+            // `LashEdgeDetector.detectRealLashLine` sobre los MISMOS puntos
+            // que sobreescribía esas dos claves con el resultado CRUDO. Tenía
+            // dos efectos, los dos malos:
+            //
+            //   1. Pagaba la deteccion dos veces por frame (2 ojos x 2 pases),
+            //      y `detectOne` recorre píxeles del bitmap por cada uno de
+            //      los 8 landmarks de cada párpado.
+            //   2. Descartaba por completo el suavizado EMA del mapper (ver
+            //      su KDoc, que documenta en detalle por qué hace falta): los
+            //      puntos llegaban a Flutter con todo el jitter de MediaPipe,
+            //      que es justo lo que ese EMA existe para absorber.
+            //
+            // El mapper es el único dueño de esas claves ahora.
+            val augmentedData: Map<String, Any?> = data
+            dumpAnnotatedAnalysisFrame(resultBitmap, data)
             onTrackingResult(augmentedData)
             val imageWidth = (augmentedData["imageWidth"] as? Int) ?: 0
             val imageHeight = (augmentedData["imageHeight"] as? Int) ?: 0
@@ -176,6 +175,27 @@ class CameraXManager(
      * expone vía [latestFrameBitmap] y por eso debe seguir siendo una
      * instantánea nueva cada vez, ver [processFrame]). */
     private var rawFrameBitmap: Bitmap? = null
+
+    /** Ancho de buffer (con padding de fila) ya reportado en logcat, para
+     * loguear el rowStride una sola vez por configuración en vez de en cada
+     * frame. Ver el bloque de padding en [processFrame]. */
+    /** Ver el bloque del POOL en [processFrame]. Round-robin de bitmaps de
+     * salida, para no alojar ~1,2 MB por frame. */
+    private val orientedPool = arrayOfNulls<Bitmap>(ORIENTED_POOL_SIZE)
+    private var orientedPoolIndex = 0
+    private val orientedPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    private var loggedBufferWidth = -1
+
+    /** DIAGNÓSTICO temporal (ronda de alineación del overlay): loguear una
+     * sola vez la rotación aplicada y las dimensiones del bitmap orientado
+     * que MediaPipe analiza — son las que Flutter recibe como
+     * `imageWidth`/`imageHeight` y usa para el mapeo imagen→pantalla. */
+    private var loggedOrientedDims = false
+
+    /** Ver [dumpAnnotatedAnalysisFrame] — diagnóstico temporal. */
+    private var analysisDumpsWritten = 0
+    private var analysisDumpFrameCounter = 0
 
     /** Timestamp (uptimeMillis) del último frame enviado a `detectAsync`,
      * para medir en logcat cuánto tarda MediaPipe en devolver el resultado
@@ -505,6 +525,17 @@ class CameraXManager(
                     imageAnalysis,
                     vc,
                 )
+                // DIAGNÓSTICO alineación overlay: el overlay de Flutter asume
+                // que preview y análisis comparten encuadre (mismo aspect +
+                // mismo cropRect). Si CameraX resolvió resoluciones de aspect
+                // distinto, o recorta distinto cada surface, el FOV difiere y
+                // los landmarks caen desplazados por más que el mapeo de
+                // Flutter esté bien.
+                Log.i(
+                    TAG,
+                    "RESINFO preview=${preview.resolutionInfo} analysis=${imageAnalysis.resolutionInfo} " +
+                        "targetRotation=$rotation previewViewSize=${pv.width}x${pv.height}",
+                )
             } else {
                 provider.bindToLifecycle(
                     lifecycleOwner,
@@ -530,43 +561,227 @@ class CameraXManager(
             val width = imageProxy.width
             val height = imageProxy.height
 
+            // ── Padding de fila (rowStride) ───────────────────────────────
+            // `copyPixelsFromBuffer` copia el buffer LINEALMENTE, asumiendo
+            // que cada fila ocupa exactamente `bitmap.width * 4` bytes. Pero
+            // CameraX entrega el plano RGBA_8888 con `rowStride` alineado por
+            // el HAL, que en muchos dispositivos es MAYOR que `width * 4`.
+            // Con un bitmap de ancho `width`, esos bytes de relleno se leen
+            // como píxeles reales y cada fila queda corrida unos píxeles
+            // respecto a la anterior: la imagen que analiza MediaPipe sale
+            // CIZALLADA en diagonal frente a lo que muestra el PreviewView, y
+            // por eso los landmarks (y el overlay de debug que los dibuja)
+            // caen desplazados sobre la frente en vez de sobre el párpado.
+            //
+            // Se copia con el ancho REAL del buffer (`rowStride/pixelStride`)
+            // y se recorta a `width` al construir el bitmap orientado — el
+            // `Bitmap.createBitmap(src, 0, 0, width, height, matrix, ...)` de
+            // más abajo ya toma solo esa subregión, así que el recorte del
+            // relleno y la rotación/espejo ocurren en un único paso.
+            val plane = imageProxy.planes[0]
+            val pixelStride = if (plane.pixelStride > 0) plane.pixelStride else 4
+            val bufferWidth = plane.rowStride / pixelStride
+            // `coerceAtLeast(width)`: si el HAL reportara un rowStride menor
+            // que width*pixelStride (no debería), copiar con un ancho menor
+            // desbordaría el recorte de abajo — mejor caer al comportamiento
+            // sin padding que producir un bitmap inválido.
+            val rawWidth = bufferWidth.coerceAtLeast(width)
+            if (rawWidth != loggedBufferWidth) {
+                loggedBufferWidth = rawWidth
+                Log.i(
+                    TAG,
+                    "análisis ${width}x$height rowStride=${plane.rowStride} " +
+                        "pixelStride=$pixelStride → anchoBuffer=$rawWidth " +
+                        "(padding=${rawWidth - width}px)",
+                )
+            }
+
             var raw = rawFrameBitmap
-            if (raw == null || raw.isRecycled || raw.width != width || raw.height != height) {
+            if (raw == null || raw.isRecycled || raw.width != rawWidth || raw.height != height) {
                 raw?.recycle()
-                raw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                raw = Bitmap.createBitmap(rawWidth, height, Bitmap.Config.ARGB_8888)
                 rawFrameBitmap = raw
             }
-            imageProxy.planes[0].buffer.rewind()
-            raw.copyPixelsFromBuffer(imageProxy.planes[0].buffer)
+            plane.buffer.rewind()
+            raw.copyPixelsFromBuffer(plane.buffer)
 
             val matrix =
                 Matrix().apply {
                     postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
                     if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-                        postScale(-1f, 1f, width.toFloat(), height.toFloat())
+                        // Reflexión en x tras la rotación. El pivote es
+                        // irrelevante: `Bitmap.createBitmap` mapea el rect de
+                        // origen y luego traslada por -left/-top, así que
+                        // cualquier eje vertical produce el mismo bitmap. Se
+                        // usa 0 para no sugerir un pivote "correcto" que en
+                        // realidad no se respeta (antes usaba width/height,
+                        // que además eran las dimensiones PRE-rotación).
+                        postScale(-1f, 1f, 0f, 0f)
                     }
                 }
 
-            // Crear el oriented bitmap. Intentamos reusar cuando es posible,
-            // pero Bitmap.createBitmap con matrix puede cambiar las dimensiones
-            // (rotación de 90°), así que usamos la API estándar y confiamos en
-            // que el GC maneje los bitmaps pequeños eficientemente.
-            val oriented = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
-            val finalOriented = if (oriented === raw) {
-                raw.copy(Bitmap.Config.ARGB_8888, false)
-            } else {
-                oriented
+            // POOL de bitmaps de salida, en vez de `Bitmap.createBitmap(...)`
+            // por frame.
+            //
+            // `Bitmap.createBitmap` SIEMPRE aloja: eran ~1,2 MB (480x640
+            // ARGB_8888) por frame de análisis a ~30 fps ≈ 37 MB/s de basura.
+            // El código anterior lo asumía ("se confia en que el GC maneje
+            // estos bitmaps pequeños"), pero a ese ritmo el GC se vuelve
+            // constante y, si llega a fallar la reserva, el
+            // `OutOfMemoryError` resultante NO es una `Exception`: se escapaba
+            // del catch de abajo y mataba el hilo de `analysisExecutor` (que
+            // es uno solo), con lo que el análisis se detenía en silencio
+            // para siempre — el preview seguía, pero el modelo quedaba
+            // congelado en su última pose.
+            //
+            // No se puede reusar UN solo bitmap: `detectAsync` es asíncrono y
+            // MediaPipe puede seguir leyendo el bitmap después de que esta
+            // función retorne, así que sobrescribirlo en el frame siguiente
+            // produciría desgarro. Con [ORIENTED_POOL_SIZE] buffers en
+            // round-robin, cada uno se reutiliza recién varios frames
+            // después — muy por encima de la latencia real de MediaPipe
+            // (~20-30 ms medidos), y el uso de memoria queda ACOTADO.
+            val srcRect = RectF(0f, 0f, width.toFloat(), height.toFloat())
+            val dstRect = RectF()
+            matrix.mapRect(dstRect, srcRect)
+            val outWidth = dstRect.width().roundToInt().coerceAtLeast(1)
+            val outHeight = dstRect.height().roundToInt().coerceAtLeast(1)
+
+            val slot = orientedPoolIndex
+            orientedPoolIndex = (orientedPoolIndex + 1) % ORIENTED_POOL_SIZE
+            var out = orientedPool[slot]
+            if (out == null || out.isRecycled || out.width != outWidth || out.height != outHeight) {
+                out?.recycle()
+                out = Bitmap.createBitmap(outWidth, outHeight, Bitmap.Config.ARGB_8888)
+                orientedPool[slot] = out
             }
+
+            // `Bitmap.createBitmap(src, ..., matrix, ...)` normalizaba la
+            // traslación internamente (mapea el rect y desplaza por
+            // -left/-top); acá hay que hacerlo a mano para dibujar dentro del
+            // buffer reusado.
+            val drawMatrix = Matrix(matrix)
+            drawMatrix.postTranslate(-dstRect.left, -dstRect.top)
+
+            val canvas = Canvas(out)
+            canvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC)
+            canvas.save()
+            canvas.concat(drawMatrix)
+            // Recorta el padding de fila: `raw` puede ser más ancho que
+            // `width` (ver el bloque de rowStride arriba) y `drawBitmap`
+            // dibujaría también esas columnas de relleno. El clip se aplica
+            // en el espacio de coordenadas de `raw`, ya con la matriz puesta.
+            canvas.clipRect(srcRect)
+            canvas.drawBitmap(raw, 0f, 0f, orientedPaint)
+            canvas.restore()
+
+            val finalOriented = out
             latestFrameBitmap = finalOriented
+            if (!loggedOrientedDims) {
+                loggedOrientedDims = true
+                Log.i(
+                    TAG,
+                    "ORIENTED rotationDegrees=${imageProxy.imageInfo.rotationDegrees} " +
+                        "raw=${width}x$height → oriented=${finalOriented.width}x${finalOriented.height} " +
+                        "cropRect=${imageProxy.cropRect} lensFacing=$lensFacing",
+                )
+            }
 
             val mpImage = BitmapImageBuilder(finalOriented).build()
             val frameTimeMs = SystemClock.uptimeMillis()
             lastFrameSubmitMs = frameTimeMs
             landmarker.detectAsync(mpImage, frameTimeMs)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Throwable, NO Exception: un OutOfMemoryError es un Error, se
+            // escapaba de acá y mataba el hilo de `analysisExecutor` — y como
+            // ese executor es de UN solo hilo, el análisis se detenía para
+            // siempre sin ningún mensaje. Se loguea explícitamente para que,
+            // si vuelve a pasar, quede la causa en logcat en vez de un
+            // congelamiento mudo.
+            Log.e(TAG, "processFrame: fallo procesando el frame de análisis", e)
             onError(e.message ?: "Error procesando frame")
         } finally {
             imageProxy.close()
+        }
+    }
+
+    /**
+     * DIAGNÓSTICO TEMPORAL (ronda de alineación del overlay). Guarda el
+     * bitmap EXACTO que analizó MediaPipe con los landmarks del párpado
+     * superior dibujados encima, en las coordenadas de píxel que el mapper
+     * envió a Flutter.
+     *
+     * Sirve para separar dos causas que desde un screenshot de la pantalla se
+     * confunden:
+     *   - Si los puntos caen SOBRE el párpado en esta imagen, los landmarks
+     *     y la conversión a píxeles son correctos, y el desplazamiento que se
+     *     ve en pantalla viene del mapeo imagen->pantalla (encuadre o lag).
+     *   - Si NO caen sobre el párpado acá, el problema es anterior
+     *     (rotación/espejo del bitmap, o la conversión normalizado->píxel).
+     *
+     * Solo escribe [ANALYSIS_DUMP_COUNT] archivos, espaciados
+     * [ANALYSIS_DUMP_EVERY] frames, y después no hace nada más — así no
+     * agrega costo sostenido al pipeline mientras se mide.
+     *
+     * Se recuperan con:
+     *   adb pull /sdcard/Android/data/com.example.test_face/files/analysis_NN.png
+     */
+    private fun dumpAnnotatedAnalysisFrame(bitmap: Bitmap?, data: Map<String, Any?>) {
+        if (analysisDumpsWritten >= ANALYSIS_DUMP_COUNT) return
+        if (bitmap == null || data["faceDetected"] != true) return
+        analysisDumpFrameCounter++
+        if (analysisDumpFrameCounter % ANALYSIS_DUMP_EVERY != 0) return
+
+        try {
+            @Suppress("UNCHECKED_CAST")
+            fun points(key: String): List<Pair<Float, Float>> =
+                (data[key] as? List<*>)?.mapNotNull { pt ->
+                    val m = pt as? Map<*, *> ?: return@mapNotNull null
+                    val x = (m["x"] as? Double)?.toFloat() ?: return@mapNotNull null
+                    val y = (m["y"] as? Double)?.toFloat() ?: return@mapNotNull null
+                    x to y
+                } ?: emptyList()
+
+            val annotated = bitmap.copy(Bitmap.Config.ARGB_8888, true) ?: return
+            val canvas = android.graphics.Canvas(annotated)
+            val fill = android.graphics.Paint().apply { isAntiAlias = true }
+            val stroke = android.graphics.Paint().apply {
+                isAntiAlias = true
+                style = android.graphics.Paint.Style.STROKE
+                strokeWidth = 1f
+                color = android.graphics.Color.BLACK
+            }
+
+            // Verde = párpado superior (lo que el motor usa como línea de
+            // pestañas); naranja = pestaña real detectada por LashEdgeDetector.
+            for ((key, color) in listOf(
+                "leftUpperLid" to android.graphics.Color.GREEN,
+                "rightUpperLid" to android.graphics.Color.GREEN,
+                "leftLashLine" to android.graphics.Color.rgb(255, 153, 0),
+                "rightLashLine" to android.graphics.Color.rgb(255, 153, 0),
+            )) {
+                fill.color = color
+                for ((x, y) in points(key)) {
+                    canvas.drawCircle(x, y, 3f, fill)
+                    canvas.drawCircle(x, y, 3f, stroke)
+                }
+            }
+
+            val dir = activity.getExternalFilesDir(null) ?: return
+            val file = File(dir, "analysis_%02d.png".format(analysisDumpsWritten))
+            file.outputStream().use { out ->
+                annotated.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            annotated.recycle()
+            analysisDumpsWritten++
+            Log.i(
+                TAG,
+                "DUMP escrito ${file.absolutePath} (${bitmap.width}x${bitmap.height}) " +
+                    "— quedan ${ANALYSIS_DUMP_COUNT - analysisDumpsWritten}",
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "DUMP fallo al guardar el frame de análisis anotado", e)
+            analysisDumpsWritten = ANALYSIS_DUMP_COUNT // no reintentar en loop
         }
     }
 
@@ -580,6 +795,18 @@ class CameraXManager(
 
     private companion object {
         private const val TAG = "CameraXManager"
+
+        /** Buffers de salida en round-robin (ver [processFrame]). 3 alcanza
+         * de sobra: MediaPipe devuelve el resultado en ~20-30 ms medidos, o
+         * sea menos de un frame, y acá un buffer se reutiliza recién 3
+         * frames (~100 ms) después. */
+        private const val ORIENTED_POOL_SIZE = 3
+
+        /** Ver [dumpAnnotatedAnalysisFrame] — cuántos frames anotados
+         * guardar y cada cuántos frames con rostro. Diagnóstico temporal:
+         * poner ANALYSIS_DUMP_COUNT en 0 lo desactiva por completo. */
+        private const val ANALYSIS_DUMP_COUNT = 0
+        private const val ANALYSIS_DUMP_EVERY = 30
         private const val REBIND_DELAY_MS = 280L
         private const val STOP_UNBIND_DELAY_MS = 220L
 

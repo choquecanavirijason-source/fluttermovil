@@ -101,6 +101,44 @@ data class RawMesh(
      * extremo. Costo único al cargar el modelo, no por frame — no toca el
      * `.glb` en disco ni la geometría.
      */
+    /**
+     * Lleva el color por vértice a NEGRO NEUTRO conservando la variación
+     * raíz→punta del degradado original.
+     *
+     * El `COLOR_0` del cat eye es un degradado CÁLIDO, no gris: medido en
+     * `cateyeleft.glb`, la punta está en R=0.151 G=0.096 B=0.066 — con el
+     * rojo más del doble que el azul, o sea marrón oscuro. Por eso la
+     * pestaña se lee castaña y no negra.
+     *
+     * Acá cada vértice se reduce a su LUMINANCIA (coeficientes Rec.709),
+     * se normaliza contra la luminancia máxima del mesh y se reescala a
+     * [tipLuminance] en los tres canales por igual. Resultado: se elimina el
+     * tinte cálido y se baja el nivel, pero la forma del degradado
+     * (raíz oscura → punta más clara) queda intacta — que es justo lo que
+     * hace que la malla se lea como fibras y no como una mancha plana (ver
+     * el análisis de por qué los modelos sin `COLOR_0` se veían mal).
+     *
+     * Costo único al cargar el modelo, no por frame.
+     */
+    fun toNeutralBlack(tipLuminance: Float): RawMesh {
+        var maxLum = 0f
+        for (vertex in vertices) {
+            val c = vertex.color ?: continue
+            val lum = 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z
+            if (lum > maxLum) maxLum = lum
+        }
+        // Sin color por vértice, o todo negro ya: nada que reescalar.
+        if (maxLum <= 1e-6f) return this
+        val gain = tipLuminance / maxLum
+        val adjusted = vertices.map { vertex ->
+            val c = vertex.color ?: return@map vertex
+            val lum = 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z
+            val g = lum * gain
+            vertex.copy(color = Float4(g, g, g, c.w))
+        }
+        return copy(vertices = adjusted)
+    }
+
     fun withColorFloor(floor: Float): RawMesh {
         val adjusted = vertices.map { vertex ->
             val c = vertex.color ?: return@map vertex

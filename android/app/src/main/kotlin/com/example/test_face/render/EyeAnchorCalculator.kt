@@ -1,10 +1,7 @@
 package com.example.test_face.render
 
 import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.sin
 
 /** Resultado geométrico 2D de un ojo, listo para proyectar a espacio de mundo. */
 data class EyeAnchor(
@@ -173,27 +170,67 @@ object EyeAnchorCalculator {
         )
     }
 
+    /**
+     * Tangente del párpado superior por mínimos cuadrados de y sobre x
+     * (`slope = sxy / sxx`).
+     *
+     * ANTES usaba el EJE PRINCIPAL de la nube de puntos:
+     *
+     *     theta = 0.5 * atan2(2*sxy, sxx - syy)
+     *
+     * Eso tiene una discontinuidad de 90°: en cuanto `sxx - syy` cambia de
+     * signo — o sea cuando los puntos del párpado quedan MÁS ALTOS QUE
+     * ANCHOS — `atan2` salta a ±π y `theta` a ±π/2, así que la tangente rota
+     * un cuarto de vuelta entre un frame y el siguiente y el modelo se
+     * VOLTEA. La corrección de sentido de más abajo no lo puede tapar: solo
+     * arregla inversiones de 180°.
+     *
+     * Esa condición se cumple con el ojo entrecerrado, al parpadear, o con
+     * la cabeza girada (el ojo se escorza y pierde ancho) — justo los casos
+     * reportados en dispositivo como "a veces voltea las pestañas". Se
+     * volvió más frecuente al sacar el canto de `upperLid` (fix 9..15 en
+     * [EyeLandmarks]): ese punto era uno de los de mayor extensión en X, y
+     * sin él `sxx` baja y cruza a `syy` más seguido.
+     *
+     * Mínimos cuadrados de y sobre x no tiene esa discontinuidad: el
+     * párpado superior ES una función de x (`upperLid` ya viene ordenado por
+     * x, ver [EyeLandmarks.from]), la pendiente varía de forma continua y la
+     * tangente nunca puede rotar 90° de golpe. Solo degenera si TODOS los
+     * puntos comparten la misma x (`sxx ≈ 0`), caso imposible en un párpado
+     * real y cubierto igual por el fallback.
+     */
     private fun fittedUpperLidTangent(
         points: List<ImagePoint>,
         meanX: Float,
         meanY: Float,
     ): ImagePoint {
         var sxx = 0.0
-        var syy = 0.0
         var sxy = 0.0
         for (p in points) {
             val dx = (p.x - meanX).toDouble()
             val dy = (p.y - meanY).toDouble()
             sxx += dx * dx
-            syy += dy * dy
             sxy += dx * dy
         }
-        val theta = 0.5 * atan2(2.0 * sxy, sxx - syy)
-        var tx = cos(theta).toFloat()
-        var ty = sin(theta).toFloat()
 
         val first = points.first()
         val last = points.last()
+
+        // Degenerado (todos los puntos en la misma columna): cae a la
+        // dirección primero→último, que sigue siendo continua entre frames.
+        if (sxx < 1e-6) {
+            val dx = last.x - first.x
+            val dy = last.y - first.y
+            val len = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+            return if (len < 1e-4f) ImagePoint(1f, 0f) else ImagePoint(dx / len, dy / len)
+        }
+
+        var tx = 1f
+        var ty = (sxy / sxx).toFloat()
+
+        // `points` viene ordenado por x, así que `refDx >= 0` y `tx = 1` ya
+        // apunta en ese sentido; la comprobación queda por si el orden
+        // cambiara en el futuro.
         val refDx = last.x - first.x
         val refDy = last.y - first.y
         if (tx * refDx + ty * refDy < 0f) {

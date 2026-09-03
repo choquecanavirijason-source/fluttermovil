@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'eye_tracking_model.dart';
 
@@ -10,13 +11,21 @@ import 'eye_tracking_model.dart';
 /// 🟡 Amarillo = centroide del párpado superior (ancla del motor 3D)
 /// 🟠 Naranja tiny = posición REAL de la pestaña (LashEdgeDetector)
 class LidLandmarkDebugPainter extends CustomPainter {
-  final TrackingFrame? frame;
+  /// Fuente de frames como [ValueListenable] en vez de un `TrackingFrame`
+  /// suelto: se pasa a `super(repaint:)`, así que cada frame de MediaPipe
+  /// repinta SOLO este `CustomPaint` sin reconstruir el árbol de widgets de
+  /// la pantalla. Antes el painter dependía del `setState` de la page, que
+  /// está limitado a un rebuild cada 150 ms para no rehacer el carrusel y
+  /// las barras en cada frame — eso dejaba los puntos refrescándose a ~6
+  /// fps (se veían "a saltos" y retrasados respecto a la cabeza) aunque el
+  /// tracking entregara 25-30 fps. Con `repaint` el límite ya no aplica: el
+  /// repintado es una operación de capa, no un rebuild.
+  final ValueListenable<TrackingFrame?> frames;
 
-  const LidLandmarkDebugPainter({required this.frame});
+  const LidLandmarkDebugPainter({required this.frames})
+      : super(repaint: frames);
 
-  Matrix4? _imageToCanvas(Size canvasSize) {
-    final f = frame;
-    if (f == null) return null;
+  Matrix4? _imageToCanvas(TrackingFrame f, Size canvasSize) {
     final iw = f.imageWidth.toDouble();
     final ih = f.imageHeight.toDouble();
     if (iw <= 0 || ih <= 0) return null;
@@ -32,10 +41,10 @@ class LidLandmarkDebugPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final f = frame;
+    final f = frames.value;
     if (f == null || !f.faceDetected) return;
 
-    final m = _imageToCanvas(size);
+    final m = _imageToCanvas(f, size);
     canvas.save();
     if (m != null) canvas.transform(m.storage);
 
@@ -190,5 +199,5 @@ class LidLandmarkDebugPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant LidLandmarkDebugPainter oldDelegate) =>
-      oldDelegate.frame != frame;
+      oldDelegate.frames != frames;
 }

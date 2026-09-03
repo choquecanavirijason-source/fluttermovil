@@ -123,9 +123,14 @@ class LinerRenderer(private val mainHandler: Handler) {
         if (!RendererConfiguration.ENABLE_EYELINER) return
         if (leftSlot.node == null && rightSlot.node == null) return
         val sv = sceneView ?: return
-        val camera = CameraProjection(
+        // Ver CameraProjection.coverScaleX / LashRenderer.onFaceResult.
+        val camera = CameraProjection.fillCenter(
             projection = sv.cameraNode.projectionTransform,
             cameraToWorld = sv.cameraNode.modelTransform,
+            imageWidth = imageWidth,
+            imageHeight = imageHeight,
+            viewportWidth = sv.width,
+            viewportHeight = sv.height,
         )
         val pipelineResult = try {
             LinerRenderPipeline.compute(

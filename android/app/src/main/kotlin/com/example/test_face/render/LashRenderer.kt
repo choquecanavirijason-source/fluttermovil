@@ -64,16 +64,42 @@ class LashRenderer(
      * por [onFaceResult] en cada resultado. [writeInterpolatedPose] la lee
      * desde el hilo principal (Choreographer) para que [PoseInterpolator]
      * sepa cuánto predecir hacia adelante. */
+    /** Ultimo coverScaleX logueado, para reportar el encuadre una sola vez
+     * por configuracion en vez de en cada frame. Ver CameraProjection. */
+    private var loggedCoverScaleX = Float.NaN
+
     @Volatile private var measuredLatencyNanos = 35_000_000L  // seed: 35ms
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!frameLoopRunning) return
-            writeInterpolatedPose(leftSlot, frameTimeNanos)
-            writeInterpolatedPose(rightSlot, frameTimeNanos)
-            Choreographer.getInstance().postFrameCallback(this)
+            // El re-agendado va en `finally`, NO como última sentencia del
+            // cuerpo: si `writeInterpolatedPose` lanzaba cualquier cosa, el
+            // `postFrameCallback` nunca se ejecutaba y este bucle moría PARA
+            // SIEMPRE — el preview de cámara seguía corriendo (es otra
+            // superficie) pero el modelo quedaba congelado en su última pose.
+            // Se captura Throwable, no Exception: un Error (OOM, link) también
+            // mataba el bucle.
+            try {
+                writeInterpolatedPose(leftSlot, frameTimeNanos)
+                writeInterpolatedPose(rightSlot, frameTimeNanos)
+            } catch (e: Throwable) {
+                if (!loggedFrameLoopFailure) {
+                    loggedFrameLoopFailure = true
+                    Log.e(TAG, "doFrame: excepción escribiendo la pose (solo se loguea la primera)", e)
+                }
+            } finally {
+                if (frameLoopRunning) Choreographer.getInstance().postFrameCallback(this)
+            }
         }
     }
+
+    /** Ver [frameCallback] — evita inundar logcat si el fallo se repite en
+     * cada vsync. */
+    private var loggedFrameLoopFailure = false
+
+    /** Ver [writeInterpolatedPose]. */
+    private var loggedNonFinitePose = false
 
     fun attachSceneView(view: SceneView) {
         sceneView = view
@@ -106,9 +132,29 @@ class LashRenderer(
         val node = slot.node ?: return
         if (!node.isVisible) return
         val transform = slot.interpolator.sample(nowNanos, measuredLatencyNanos) ?: return
-        node.position = transform.position
-        node.quaternion = transform.rotation
-        node.scale = transform.scale
+        // Una pose NO FINITA (NaN/Inf) escrita en el nodo se queda ahí: el
+        // modelo desaparece o se congela y ningún frame posterior lo
+        // recupera, porque el valor malo ya está en la TransformManager de
+        // Filament. Puede originarse aguas arriba (p.ej. `unproject` divide
+        // por `projection.x.x`, que es 0 si la cámara todavía no está
+        // configurada). Saltear el frame conserva la última pose buena y deja
+        // que el siguiente la corrija.
+        val p = transform.position
+        val q = transform.rotation
+        val sc = transform.scale
+        if (!p.x.isFinite() || !p.y.isFinite() || !p.z.isFinite() ||
+            !q.x.isFinite() || !q.y.isFinite() || !q.z.isFinite() || !q.w.isFinite() ||
+            !sc.x.isFinite() || !sc.y.isFinite() || !sc.z.isFinite()
+        ) {
+            if (!loggedNonFinitePose) {
+                loggedNonFinitePose = true
+                Log.w(TAG, "writeInterpolatedPose: pose no finita descartada pos=$p quat=$q scale=$sc")
+            }
+            return
+        }
+        node.position = p
+        node.quaternion = q
+        node.scale = sc
     }
 
     /**
@@ -219,10 +265,27 @@ class LashRenderer(
         measuredLatencyNanos = ((pipelineLatencyMs + 16f) * 1_000_000f).toLong()
 
         val sv = sceneView ?: return
-        val camera = CameraProjection(
+        // fillCenter (no el constructor directo): los landmarks vienen
+        // normalizados contra la imagen de análisis, pero el SceneView cubre
+        // la pantalla y el preview de abajo recorta con FILL_CENTER. Ver
+        // CameraProjection.coverScaleX — sin esto el modelo se coloca a ~62%
+        // de la distancia horizontal correcta respecto al centro.
+        val camera = CameraProjection.fillCenter(
             projection = sv.cameraNode.projectionTransform,
             cameraToWorld = sv.cameraNode.modelTransform,
+            imageWidth = imageWidth,
+            imageHeight = imageHeight,
+            viewportWidth = sv.width,
+            viewportHeight = sv.height,
         )
+        if (loggedCoverScaleX != camera.coverScaleX) {
+            loggedCoverScaleX = camera.coverScaleX
+            Log.i(
+                TAG,
+                "COVER imagen=${imageWidth}x$imageHeight viewport=${sv.width}x${sv.height} " +
+                    "coverScaleX=${camera.coverScaleX} coverScaleY=${camera.coverScaleY}",
+            )
+        }
 
         val pipelineResult = try {
             FaceRenderPipeline.compute(
@@ -469,7 +532,14 @@ class LashRenderer(
                     // — recorta el extremo casi-negro-puro del degradado de
                     // color raíz→punta del .glb, confirmado en dispositivo
                     // real como la causa de la línea dura en la base.
-                    val rawMesh = mirroredMesh.withColorFloor(RendererConfiguration.LASH_COLOR_FLOOR)
+                    // El floor primero (recorta el extremo casi-negro-puro
+                    // del degradado del artista, ver su KDoc) y recién después
+                    // el pase a negro neutro, que normaliza contra el máximo
+                    // resultante — así el negro sale del degradado YA
+                    // corregido y no se reintroduce la línea dura en la raíz.
+                    val rawMesh = mirroredMesh
+                        .withColorFloor(RendererConfiguration.LASH_COLOR_FLOOR)
+                        .toNeutralBlack(RendererConfiguration.LASH_BLACK_TIP_LUMINANCE)
                     val geometry = Geometry.Builder(RenderableManager.PrimitiveType.TRIANGLES)
                         .vertices(rawMesh.vertices)
                         .indices(rawMesh.indices)

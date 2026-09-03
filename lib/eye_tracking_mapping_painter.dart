@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'eye_tracking_model.dart';
 
@@ -6,14 +7,15 @@ import 'eye_tracking_model.dart';
 /// Se muestra como un abanico de líneas radiando desde un pivote debajo del ojo,
 /// con números en los extremos y un arco suave conectando las puntas.
 class LashMappingPainter extends CustomPainter {
-  final TrackingFrame? frame;
+  /// Igual que `LidLandmarkDebugPainter`: la fuente es un [ValueListenable]
+  /// enchufado a `super(repaint:)` para repintar a la cadencia real del
+  /// tracking sin pasar por el `setState` throttled de la pantalla.
+  final ValueListenable<TrackingFrame?> frames;
 
-  const LashMappingPainter({required this.frame});
+  const LashMappingPainter({required this.frames}) : super(repaint: frames);
 
   /// Misma lógica de transformación usada en el resto del tracking (BoxFit.cover / FILL_CENTER).
-  Matrix4? _imageToCanvas(Size canvasSize) {
-    final f = frame;
-    if (f == null) return null;
+  Matrix4? _imageToCanvas(TrackingFrame f, Size canvasSize) {
     final iw = f.imageWidth.toDouble();
     final ih = f.imageHeight.toDouble();
     if (iw <= 0 || ih <= 0) return null;
@@ -29,10 +31,10 @@ class LashMappingPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final f = frame;
+    final f = frames.value;
     if (f == null || !f.faceDetected) return;
 
-    final m = _imageToCanvas(size);
+    final m = _imageToCanvas(f, size);
     canvas.save();
     if (m != null) canvas.transform(m.storage);
 
@@ -191,5 +193,5 @@ class LashMappingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant LashMappingPainter oldDelegate) =>
-      oldDelegate.frame != frame;
+      oldDelegate.frames != frames;
 }

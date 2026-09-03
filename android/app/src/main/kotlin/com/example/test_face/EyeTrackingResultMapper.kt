@@ -47,6 +47,24 @@ class EyeTrackingResultMapper {
          * pero absorbe el jitter de MediaPipe entre frames. */
         private const val EMA_ALPHA = 0.35f
 
+        /**
+         * Corre [LashEdgeDetector] para calcular dónde nace la pestaña REAL
+         * en los píxeles. Hoy `false`: NADIE consume ese resultado.
+         *
+         *  - La ruta de RENDER lo tiene desactivado a propósito y usa los
+         *    landmarks crudos (ver `FaceRenderPipeline`: "LashEdgeDetector
+         *    DESACTIVADO temporalmente... Reactivar cuando el posicionamiento
+         *    base sea correcto").
+         *  - El único otro consumidor era el overlay de debug de Flutter (los
+         *    puntos naranja), apagado con `_showLidLandmarkDebug`.
+         *
+         * O sea que era costo por frame — recorrer píxeles del bitmap por
+         * cada landmark de cada párpado, en los dos ojos — para alimentar
+         * algo que no se dibuja ni se usa. Reactivar junto con el overlay o
+         * con la ruta de render, no por separado.
+         */
+        private const val LASH_EDGE_DETECTION_ENABLED = false
+
         private val leftEyeIdx = listOf(33, 133, 160, 159, 158, 144, 145, 153)
         private val rightEyeIdx = listOf(362, 263, 387, 386, 385, 373, 374, 380)
         private val leftIrisIdx = listOf(468, 469, 470, 471, 472)
@@ -130,17 +148,28 @@ class EyeTrackingResultMapper {
             pts.map { mapOf("x" to it.x.toDouble(), "y" to it.y.toDouble()) }
 
         // ── Detectar + suavizar con EMA ──────────────────────────────────
-        // 1. Detectar posición raw de la pestaña en la imagen actual
-        val leftRaw  = LashEdgeDetector.detectRealLashLine(bitmap, toImagePoints(leftUpper))
-        val rightRaw = LashEdgeDetector.detectRealLashLine(bitmap, toImagePoints(rightUpper))
+        // Solo si hay alguien que consuma el resultado (ver
+        // [LASH_EDGE_DETECTION_ENABLED]).
+        val leftSmoothed: List<ImagePoint>
+        val rightSmoothed: List<ImagePoint>
+        if (LASH_EDGE_DETECTION_ENABLED) {
+            // 1. Detectar posición raw de la pestaña en la imagen actual
+            val leftRaw = LashEdgeDetector.detectRealLashLine(bitmap, toImagePoints(leftUpper))
+            val rightRaw = LashEdgeDetector.detectRealLashLine(bitmap, toImagePoints(rightUpper))
 
-        // 2. Mezclar con el promedio histórico (EMA)
-        val leftSmoothed  = emaSmooth(leftLashSmoothed,  leftRaw,  EMA_ALPHA)
-        val rightSmoothed = emaSmooth(rightLashSmoothed, rightRaw, EMA_ALPHA)
+            // 2. Mezclar con el promedio histórico (EMA)
+            leftSmoothed = emaSmooth(leftLashSmoothed, leftRaw, EMA_ALPHA)
+            rightSmoothed = emaSmooth(rightLashSmoothed, rightRaw, EMA_ALPHA)
 
-        // 3. Guardar para el siguiente frame
-        leftLashSmoothed  = leftSmoothed
-        rightLashSmoothed = rightSmoothed
+            // 3. Guardar para el siguiente frame
+            leftLashSmoothed = leftSmoothed
+            rightLashSmoothed = rightSmoothed
+        } else {
+            // Degradación ya documentada en el KDoc de [map]: lashLine =
+            // upperLid sin corregir.
+            leftSmoothed = toImagePoints(leftUpper)
+            rightSmoothed = toImagePoints(rightUpper)
+        }
 
         return mapOf(
             "faceDetected" to true,
