@@ -138,7 +138,16 @@ object LashMeshBender {
         // — ver RendererConfiguration.
         val canBend = RendererConfiguration.LASH_DEFORMATION_ENABLED &&
             curve != null && eyeWidthPx > 0f && strength > 0f && span > 1e-4f
-        if (!canBend) return false
+        if (!canBend) {
+            if (RendererConfiguration.MESH_CALIBRATION_LOGGING) {
+                android.util.Log.w(
+                    "MESH_CALIB",
+                    "BEND_SKIP deformationEnabled=${RendererConfiguration.LASH_DEFORMATION_ENABLED} " +
+                        "curveNull=${curve == null} eyeWidthPx=$eyeWidthPx strength=$strength span=$span",
+                )
+            }
+            return false
+        }
 
         // El span local del mesh (unidades propias del .glb) corresponde al
         // ancho real del ojo en píxeles (eyeWidthPx) — de ahí la conversión
@@ -155,6 +164,15 @@ object LashMeshBender {
         val vertices = raw.vertices
         val n = vertices.size
 
+        // Diagnóstico temporal (ver RendererConfiguration.MESH_CALIBRATION_LOGGING)
+        // — rango real de deviationPx/pixelLocalX en este doblado, para
+        // confirmar con números si el doblado se está aplicando y con qué
+        // magnitud, en vez de solo mirar el resultado final en pantalla.
+        var minDeviationPx = Float.MAX_VALUE
+        var maxDeviationPx = -Float.MAX_VALUE
+        var minPixelLocalX = Float.MAX_VALUE
+        var maxPixelLocalX = -Float.MAX_VALUE
+
         for (i in 0 until n) {
             // vertex.position es un Float3 EXISTENTE (parseado una única vez
             // al cargar el modelo, no por frame) — leer sus componentes acá
@@ -169,6 +187,10 @@ object LashMeshBender {
             val effectiveStrength = strength - (strength - wingStrength) * curve!!.wingBlend(pixelLocalX)
             val deviationPx = curve.deviationAt(pixelLocalX) * effectiveStrength
             val slope = curve.slopeAt(pixelLocalX) * effectiveStrength
+            if (deviationPx < minDeviationPx) minDeviationPx = deviationPx
+            if (deviationPx > maxDeviationPx) maxDeviationPx = deviationPx
+            if (pixelLocalX < minPixelLocalX) minPixelLocalX = pixelLocalX
+            if (pixelLocalX > maxPixelLocalX) maxPixelLocalX = pixelLocalX
 
             // Envolvente esférica en Z: z = R − √(R²−x²) ≈ x²/(2R) para
             // |x| ≪ R (primer término no nulo de Taylor). Clamp a `radiusPx`
@@ -217,6 +239,14 @@ object LashMeshBender {
             tangentTarget.put(tb + 1, cosHalf * ry + sinHalf * rx)
             tangentTarget.put(tb + 2, cosHalf * rz + sinHalf * rw)
             tangentTarget.put(tb + 3, cosHalf * rw - sinHalf * rz)
+        }
+        if (RendererConfiguration.MESH_CALIBRATION_LOGGING) {
+            android.util.Log.i(
+                "MESH_CALIB",
+                "BEND_APPLIED n=$n eyeWidthPx=%.2f meshUnitsPerPixel=%.6f pixelLocalX=[%.2f,%.2f] deviationPx=[%.2f,%.2f]".format(
+                    eyeWidthPx, meshUnitsPerPixel, minPixelLocalX, maxPixelLocalX, minDeviationPx, maxDeviationPx,
+                ),
+            )
         }
         return true
     }

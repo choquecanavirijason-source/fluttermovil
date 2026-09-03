@@ -48,12 +48,23 @@ object RendererConfiguration {
     const val FACE_DISTANCE_MULTIPLIER = 1.0f
 
     // ── Escala del modelo ───────────────────────────────────────────────
-    const val WIDTH_MULTIPLIER = 1.6f
+    // 1.15f (2026-09-02): medido con el overlay de landmarks en dispositivo,
+    // el ojo real da W=44px y con 1.8f el modelo se renderizaba a 79px — un
+    // 80% más ancho que el ojo, desbordando por ambas esquinas. Ese desborde
+    // hacia el lagrimal es lo que se leía como "corrida a la nariz", y es lo
+    // que NOSE_AVOID_SHIFT intentaba tapar empujando todo hacia la sien en
+    // vez de corregir la causa. 1.15 = apenas más ancho que el ojo, que es
+    // como se ve una extensión real (sobresale un poco en la esquina externa).
+    const val WIDTH_MULTIPLIER = 1.15f
     // HEIGHT_OFFSET = 0.12: mueve el ancla 12% de la altura del ojo hacia arriba
     // desde el centroide. Como rootLocalY=0 (centro del modelo en el ancla),
     // esto sitúa el centro del modelo en la línea real de pestañas (borde inferior
     // del párpado superior, donde nacen las pestañas reales).
-    const val HEIGHT_OFFSET = 0.12f
+    // RESTAURADO 2026-09-02 al valor de la configuración que el usuario
+    // confirmó como "la que funcionaba bien" (versión previa a toda la
+    // migración a face-mesh). Estaba en +0.12f (signo opuesto), que subía el
+    // ancla hacia la ceja en vez de bajarla al borde del párpado.
+    const val HEIGHT_OFFSET = -0.15f
     const val HEAD_TILT_MULTIPLIER = 1.0f
     // Multiplicador SOLO sobre el eje Y local del modelo (además del
     // scaleFactor isotrópico que ya iguala el ancho al ojo real) — le da
@@ -72,6 +83,12 @@ object RendererConfiguration {
 
     // NOSE_AVOID_SHIFT = 0: sin desplazamiento horizontal del ancla.
     // El centro del modelo va exactamente sobre el centroide de los puntos verdes.
+    // A 0f (2026-09-02): con el overlay de debug de landmarks activado se vio
+    // que la pestaña quedaba desplazada hacia la sien respecto al arco verde
+    // del párpado. 0.68 desplaza el ancla un 68% del ancho del ojo — con un
+    // ojo de 45px medidos en el overlay, son ~30px de corrimiento. Se calibra
+    // desde 0f hacia arriba SOLO si vuelve a invadir la nariz, verificando
+    // contra los puntos verdes.
     const val NOSE_AVOID_SHIFT = 0.0f
 
     // LATERAL_LASH_OFFSET = 0: sin corrección lateral adicional.
@@ -304,7 +321,7 @@ object RendererConfiguration {
     // con el doblado ya apagado, junto con el fix de rootLocalY) — si es así,
     // confirma que el doblado/tangentes NO la causaron. Revertir a `true`
     // después de esta prueba puntual.
-    const val LASH_DEFORMATION_ENABLED = false
+    const val LASH_DEFORMATION_ENABLED = true
 
     // Piso de color por vértice (ver RawMesh.withColorFloor) — el COLOR_0
     // del .glb trae un degradado raíz→punta intencional del artista
@@ -351,7 +368,47 @@ object RendererConfiguration {
     // residuo 2D. Rollback de una línea, mismo espíritu que
     // LASH_DEFORMATION_ENABLED/FACE_MESH_ENABLED — comparar A/B en
     // dispositivo cambiando solo esto.
+    // REACTIVADO 2026-09-02 con MeshEyeTransformCalculator ya simplificado:
+    // el ancla es directamente el promedio de los 8 puntos reales del párpado
+    // superior (sin heightOffset ni nudges manuales encima), que era el
+    // objetivo original de este sistema. Rollback de una línea a `false` si
+    // hace falta volver al camino 2D+headPose.
     const val LASH_ANCHOR_FROM_FACE_MESH = false
+
+    // ── Calibración temporal: malla vs. sistema viejo (tag "MESH_CALIB") ──
+    // Ver FaceRenderPipeline.logMeshCalibration / MeshEyeTransformCalculator.
+    // computeWithDebug. `true`: además del sistema activo (el que decide
+    // LASH_ANCHOR_FROM_FACE_MESH), calcula y loguea EL OTRO sistema para el
+    // mismo frame/ojo — compara posición/escala lado a lado en vez de
+    // calibrar a ciegas por foto. Puramente diagnóstico: no participa en qué
+    // transform se usa para renderizar. Apagar (rollback de una línea)
+    // cuando termine esta ronda de calibración de LASH_ANCHOR_FROM_FACE_MESH.
+    // Apagado 2026-09-02 junto con LASH_ANCHOR_FROM_FACE_MESH — sin el
+    // sistema nuevo activo, esto solo agregaba trabajo por frame y ruido en
+    // logcat. Volver a `true` solo si se retoma la calibración de la malla.
+    const val MESH_CALIBRATION_LOGGING = false
+
+    // Ajuste directo de altura del ancla del sistema nuevo (ver
+    // MeshEyeTransformCalculator) — fracción de eyeWidthWorld que se resta
+    // adicionalmente a lo largo de `up`, para bajar el ancla hacia la línea
+    // real de pestañas. Confirmado en dispositivo (2026-09-01): con
+    // heightOffset=0.12 (el término existente, indirecto, chico) el ancla
+    // seguía quedando arriba de la línea real después de arreglar orientación
+    // y altura por arco de 8 puntos — la corrección de raíz por sí sola no
+    // alcanza a compensarlo. Valor inicial estimado a partir de las capturas
+    // reales (el hueco visible es del orden de una fracción sustancial del
+    // ancho del ojo) — MISMO patrón de calibración iterativa que
+    // LATERAL_LASH_OFFSET (COLOCADO_PESTANAS sección 5.13): probar, ajustar
+    // según lo que se vea, no una constante final.
+    // REVERTIDO a 0f (2026-09-02): el 0.4f anterior fue un valor puesto a ojo,
+    // sin captura que lo respaldara, y desplazaba el ancla ~40% del ancho del
+    // ojo hacia abajo — aproximadamente una altura de ojo entera, lo que
+    // hacía caer el abanico sobre el globo ocular en vez de nacer en la línea
+    // del párpado. Confirmado contra una captura anotada por el usuario
+    // (líneas rojas marcando dónde debe ir la raíz). Si hace falta un ajuste
+    // fino de altura, calibrar desde 0f en pasos chicos (0.05f) confirmando
+    // en dispositivo cada paso, como se hizo con LATERAL_LASH_OFFSET.
+    const val MESH_ANCHOR_HEIGHT_NUDGE = 0.0f
 
     // ── Delineado (Fase 4) ──────────────────────────────────────────────
     // Interruptor maestro de LinerRenderer — mismo patrón que

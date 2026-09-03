@@ -902,14 +902,16 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         ),
                       ),
                     // DEBUG: Puntos de landmarks del párpado superior/inferior
-                    // ── DESACTIVADO TEMPORALMENTE ─────────────────────────
-                    // Para reactivar: descomentar este bloque.
-                    // Positioned.fill(
-                    //   child: CustomPaint(
-                    //     isComplex: true,
-                    //     painter: LidLandmarkDebugPainter(frame: _frame),
-                    //   ),
-                    // ),
+                    // ── REACTIVADO 2026-09-02 para calibrar el anclaje ────
+                    // Verde = párpado superior (los puntos que usa el motor
+                    // como línea de pestañas), cruz amarilla = ancla.
+                    // Comentar de nuevo cuando la calibración esté cerrada.
+                    Positioned.fill(
+                      child: CustomPaint(
+                        isComplex: true,
+                        painter: LidLandmarkDebugPainter(frame: _frame),
+                      ),
+                    ),
                   ],
                 ),
               ),

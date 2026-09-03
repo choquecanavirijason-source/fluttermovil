@@ -78,13 +78,17 @@ object LinerRenderPipeline {
         val eyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, IntArray(0), imageWidth, imageHeight)
             ?: return null
         val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth, styleConfig) ?: return null
+        // Ver MeshEyeTransformCalculator (fix 2026-09-01) — el plano se
+        // calcula una vez y lo consumen los dos caminos.
+        val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
         val transform = if (RendererConfiguration.EYELINER_ANCHOR_FROM_FACE_MESH) {
             MeshEyeTransformCalculator.compute(
                 landmarks, medialCanthusIndex, lateralCanthusIndex, upperApexIndex,
-                camera, headPose, naturalSpan, rootLocalY, styleConfig,
+                // Ver nota en FaceRenderPipeline: 9..15 excluye el canto.
+                ringIndices.copyOfRange(9, 16),
+                camera, headPose, plane, naturalSpan, rootLocalY, styleConfig,
             ) ?: return null
         } else {
-            val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
             // xNudgeNormalized=0f: el delineado no tiene su propio nudge de
             // calibración por dispositivo todavía (los de pestañas,
             // RendererConfiguration.LEFT/RIGHT_EYE_X_NUDGE, hoy también

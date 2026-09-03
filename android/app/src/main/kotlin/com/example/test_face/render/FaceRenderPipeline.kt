@@ -63,12 +63,14 @@ object FaceRenderPipeline {
         val ih = imageHeight.toFloat()
 
         val left = computeEye(
+            "LEFT",
             landmarks, FaceLandmarkIndices.LEFT_EYE_RING, FaceLandmarkIndices.LEFT_IRIS,
             FaceLandmarkIndices.LEFT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.LEFT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.LEFT_EYE_UPPER_APEX,
             headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig, cameraBitmap,
         )
         val right = computeEye(
+            "RIGHT",
             landmarks, FaceLandmarkIndices.RIGHT_EYE_RING, FaceLandmarkIndices.RIGHT_IRIS,
             FaceLandmarkIndices.RIGHT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.RIGHT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.RIGHT_EYE_UPPER_APEX,
@@ -79,6 +81,7 @@ object FaceRenderPipeline {
     }
 
     private fun computeEye(
+        eyeLabel: String,
         landmarks: List<NormalizedLandmark>,
         ringIndices: IntArray,
         irisIndices: IntArray,
@@ -111,15 +114,33 @@ object FaceRenderPipeline {
         // toca el doblado de mesh, ver el plan) — solo posición/rotación/
         // escala cambian de fuente según el flag.
         val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth, styleConfig) ?: return null
+        // Ver MeshEyeTransformCalculator (fix 2026-09-01): el plano/orientación
+        // se calcula UNA vez acá y lo consumen los DOS caminos — el nuevo ya
+        // no deriva right/up/normal de landmarks sueltos, toma esto tal cual.
+        val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
         val transform = if (RendererConfiguration.LASH_ANCHOR_FROM_FACE_MESH) {
             MeshEyeTransformCalculator.compute(
                 landmarks, medialCanthusIndex, lateralCanthusIndex, upperApexIndex,
-                camera, headPose, naturalSpan, rootLocalY, styleConfig,
+                // 9..15, NO 8..15 (fix 2026-09-02, skill "filtro"): el índice 8
+                // del anillo es el CANTO (133 izq / 263 der) — la esquina donde
+                // se juntan párpado superior e inferior, que está por debajo
+                // del arco. Incluirlo arrastraba el promedio hacia el centro
+                // del ojo. Estos 7 son exactamente los que el skill lista como
+                // arco del párpado superior: 173,157,158,159,160,161,246.
+                ringIndices.copyOfRange(9, 16),
+                camera, headPose, plane, naturalSpan, rootLocalY, styleConfig,
             ) ?: return null
         } else {
-            val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
             EyeTransformCalculator.compute(
                 headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
+            )
+        }
+        if (RendererConfiguration.MESH_CALIBRATION_LOGGING) {
+            logMeshCalibration(
+                eyeLabel, landmarks, medialCanthusIndex, lateralCanthusIndex, upperApexIndex,
+                ringIndices.copyOfRange(8, 16),
+                camera, headPose, plane, naturalSpan, rootLocalY, styleConfig,
+                anchor, imageWidth, imageHeight, xNudgeNormalized,
             )
         }
         // Curva del párpado superior para el doblado del mesh (ver
@@ -140,5 +161,89 @@ object FaceRenderPipeline {
         )
     }
 
+    /**
+     * Instrumentación temporal de calibración (ver
+     * [RendererConfiguration.MESH_CALIBRATION_LOGGING]) — recalcula el
+     * sistema que NO está activo ahora mismo (mesh nuevo vs. plano/headPose
+     * viejo) solo para loguearlo lado a lado con el activo, tag
+     * [CALIB_TAG]. No participa en `transform` ni en el render — puramente
+     * diagnóstico, sacar cuando termine esta ronda de calibración de
+     * [RendererConfiguration.LASH_ANCHOR_FROM_FACE_MESH].
+     */
+    private fun logMeshCalibration(
+        eyeLabel: String,
+        landmarks: List<NormalizedLandmark>,
+        medialCanthusIndex: Int,
+        lateralCanthusIndex: Int,
+        upperApexIndex: Int,
+        upperLidIndices: IntArray,
+        camera: CameraProjection,
+        headPose: HeadPose,
+        plane: EyePlane,
+        naturalSpan: Float,
+        rootLocalY: Float,
+        styleConfig: LashStyleConfig,
+        anchor: EyeAnchor,
+        imageWidth: Float,
+        imageHeight: Float,
+        xNudgeNormalized: Float,
+    ) {
+        val meshDebug = MeshEyeTransformCalculator.computeWithDebug(
+            landmarks, medialCanthusIndex, lateralCanthusIndex, upperApexIndex, upperLidIndices,
+            camera, headPose, plane, naturalSpan, rootLocalY, styleConfig,
+        )
+        val oldTransform = EyeTransformCalculator.compute(
+            headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
+        )
+
+        val nt = meshDebug.transform
+        if (nt != null) {
+            Log.i(
+                CALIB_TAG,
+                "$eyeLabel NEW pos=(%.4f,%.4f,%.4f) scaleFactor=%.4f scaleY=%.4f normal=(%.4f,%.4f,%.4f) eyeWidthWorld=%.4f eyeHeightWorld=%.4f baseZ=%.4f".format(
+                    nt.position.x, nt.position.y, nt.position.z, nt.scale.x, nt.scale.y,
+                    meshDebug.normal.x, meshDebug.normal.y, meshDebug.normal.z,
+                    meshDebug.eyeWidthWorld, meshDebug.eyeHeightWorld, meshDebug.baseZ,
+                ),
+            )
+            Log.i(
+                CALIB_TAG,
+                "$eyeLabel NEW_Y_BREAKDOWN centroidY=%.4f anchorBaseY=%.4f heightOffsetTermY=%.4f rootCorrectionTermY=%.4f rootLocalY=%.4f scaleY=%.4f -> posY=%.4f".format(
+                    meshDebug.centroidY, meshDebug.anchorBaseY, meshDebug.heightOffsetTermY, meshDebug.rootCorrectionTermY,
+                    meshDebug.rootLocalYIn, meshDebug.scaleYOut, nt.position.y,
+                ),
+            )
+            Log.i(
+                CALIB_TAG,
+                "$eyeLabel BASIS_NEW right=(%.4f,%.4f,%.4f) up=(%.4f,%.4f,%.4f)".format(
+                    meshDebug.right.x, meshDebug.right.y, meshDebug.right.z,
+                    meshDebug.up.x, meshDebug.up.y, meshDebug.up.z,
+                ),
+            )
+            Log.i(
+                CALIB_TAG,
+                "$eyeLabel BASIS_OLD right=(%.4f,%.4f,%.4f) up=(%.4f,%.4f,%.4f)".format(
+                    plane.right.x, plane.right.y, plane.right.z,
+                    plane.up.x, plane.up.y, plane.up.z,
+                ),
+            )
+        } else {
+            Log.w(
+                CALIB_TAG,
+                "$eyeLabel NEW transform=null eyeWidthWorld=%.4f eyeHeightWorld=%.4f baseZ=%.4f".format(
+                    meshDebug.eyeWidthWorld, meshDebug.eyeHeightWorld, meshDebug.baseZ,
+                ),
+            )
+        }
+        Log.i(
+            CALIB_TAG,
+            "$eyeLabel OLD pos=(%.4f,%.4f,%.4f) scaleFactor=%.4f scaleY=%.4f".format(
+                oldTransform.position.x, oldTransform.position.y, oldTransform.position.z,
+                oldTransform.scale.x, oldTransform.scale.y,
+            ),
+        )
+    }
+
     private const val TAG = "FaceRenderPipeline"
+    private const val CALIB_TAG = "MESH_CALIB"
 }
