@@ -45,6 +45,19 @@ object FaceRenderPipeline {
          * puntos crudos (comportamiento anterior). */
         leftLidFilter: UpperLidFilter? = null,
         rightLidFilter: UpperLidFilter? = null,
+        /** [EyeModelSlot.openness] de cada ojo — decide, con histéresis y un
+         * umbral relativo a la persona, si el ojo está lo bastante abierto
+         * como para confiar en la geometría del párpado de este frame (ver
+         * [OpennessTracker.update]). Se consulta acá, y no en
+         * [LashRenderer], porque su respuesta cambia CÓMO se calcula el
+         * ancla más abajo. `null` = tratar el ojo siempre como abierto. */
+        leftBlinkTracker: OpennessTracker? = null,
+        rightBlinkTracker: OpennessTracker? = null,
+        /** [EyeModelSlot.lidShape] de cada ojo — la última forma de párpado
+         * y la última curva medidas con el ojo abierto, que se reusan
+         * mientras dure el parpadeo. Ver [LidShapeHold]. */
+        leftLidShape: LidShapeHold? = null,
+        rightLidShape: LidShapeHold? = null,
     ): Result? {
         if (result.faceLandmarks().isEmpty()) return null
         val landmarks: List<NormalizedLandmark> = result.faceLandmarks()[0]
@@ -65,6 +78,13 @@ object FaceRenderPipeline {
             EyePoseEstimator.fallback()
         }
 
+        // Apertura por ojo según los blendshapes de MediaPipe: señal de
+        // parpadeo INVARIANTE AL ÁNGULO DE CÁMARA, a diferencia de la
+        // geométrica que queda de respaldo. Se lee una sola vez por frame
+        // (recorre las ~52 categorías) y se reparte a los dos ojos. Ver
+        // EyeBlinkBlendshapes para por qué esto importa desde abajo.
+        val blendshapeOpenness = EyeBlinkBlendshapes.openness(result)
+
         val iw = imageWidth.toFloat()
         val ih = imageHeight.toFloat()
 
@@ -74,7 +94,7 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.LEFT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.LEFT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.LEFT_EYE_UPPER_APEX,
             headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig, cameraBitmap,
-            leftLidFilter,
+            leftLidFilter, leftBlinkTracker, leftLidShape, blendshapeOpenness?.left,
         )
         val right = computeEye(
             "RIGHT",
@@ -82,7 +102,7 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.RIGHT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.RIGHT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.RIGHT_EYE_UPPER_APEX,
             headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY, styleConfig, cameraBitmap,
-            rightLidFilter,
+            rightLidFilter, rightBlinkTracker, rightLidShape, blendshapeOpenness?.right,
         )
         // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
@@ -109,6 +129,11 @@ object FaceRenderPipeline {
         styleConfig: LashStyleConfig,
         cameraBitmap: Bitmap?,
         lidFilter: UpperLidFilter?,
+        opennessTracker: OpennessTracker?,
+        lidShape: LidShapeHold?,
+        /** Apertura de ESTE ojo según blendshapes, o `null` si el resultado
+         * no los trae — ver [EyeBlinkBlendshapes]. */
+        blendshapeOpenness: Float?,
     ): EyeTransform? {
         val rawEyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
@@ -118,11 +143,33 @@ object FaceRenderPipeline {
         // los mismos landmarks crudos — sin la corrección de píxel del detector.
         // Reactivar cuando el posicionamiento base sea correcto.
         val eyeLandmarks = rawEyeLandmarks
+
+        // ── Parpadeo, ANTES que cualquier geometría ──────────────────────
+        // Se decide acá arriba porque su respuesta cambia CÓMO se calcula el
+        // ancla: con el ojo cerrándose, la altura del ojo y la inclinación
+        // ajustada del párpado dejan de describir un párpado abierto, así
+        // que se reusan congeladas en vez de re-medirse (ver LidShape). Este
+        // es el fix del "al parpadear se desconfigura": antes la altura, la
+        // tangente y la curva se re-deducían en cada frame de unos puntos
+        // que durante el parpadeo colapsan sobre el párpado inferior.
+        //
+        // No decide si la pestaña se VE: con el ojo cerrado se sigue
+        // dibujando, que es cuando más se luce una extensión real.
+        // Blendshapes primero (invariantes al ángulo de cámara); el
+        // alto/ancho medido en la imagen queda sólo de respaldo — ver
+        // [EyeBlinkBlendshapes] y [foreshorteningCorrectedOpenness].
+        val openness = blendshapeOpenness
+            ?: foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose)
+        val lidShapeTrusted = opennessTracker?.update(openness) ?: true
+
         // El ancla 2D en píxeles sigue haciendo falta en los DOS modos: la
         // usa LashLineCurve/LashMeshBender más abajo sin cambios (Fase 2 no
         // toca el doblado de mesh, ver el plan) — solo posición/rotación/
         // escala cambian de fuente según el flag.
-        val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth, styleConfig) ?: return null
+        val heldShape = if (lidShapeTrusted) null else lidShape?.shape
+        val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth, styleConfig, heldShape)
+            ?: return null
+        if (lidShapeTrusted) lidShape?.latchShape(anchor.measuredShape)
         // Ver MeshEyeTransformCalculator (fix 2026-09-01): el plano/orientación
         // se calcula UNA vez acá y lo consumen los DOS caminos — el nuevo ya
         // no deriva right/up/normal de landmarks sueltos, toma esto tal cual.
@@ -173,17 +220,45 @@ object FaceRenderPipeline {
         // esa rama ya pasa por [EyeTrackingFilter] aguas abajo y filtrar dos
         // veces agregaría lag sin quitar más jitter. Lo que NO estaba
         // filtrado en ningún lado era justamente la forma de la curva.
-        val smoothedLid = lidFilter?.apply(eyeLandmarks.upperLid, System.nanoTime())
-            ?: eyeLandmarks.upperLid
-        val curve = LashLineCurve.fit(smoothedLid, anchor.point, anchor.upperLidTangent)
+        //
+        // Con el ojo cerrándose NO se reajusta ni se alimenta el filtro: se
+        // reusa la última curva buena. Dos motivos distintos, los dos
+        // reportados en dispositivo al parpadear:
+        //  - reajustar sobre un párpado a medio cerrar aplana la curva y
+        //    llega a INVERTIR su curvatura cuando el párpado se pliega, con
+        //    lo que [LashMeshBender] deforma el abanico hacia el otro lado;
+        //  - y meter esos puntos en [UpperLidFilter] contamina su historial,
+        //    así que al reabrir el ojo la forma vuelve arrastrando la del
+        //    párpado cerrado (One Euro abre su corte con la velocidad, y un
+        //    parpadeo es justamente el movimiento más rápido del párpado —
+        //    o sea que es cuando MENOS suaviza).
+        val curve = if (lidShapeTrusted) {
+            val smoothedLid = lidFilter?.apply(eyeLandmarks.upperLid, System.nanoTime())
+                ?: eyeLandmarks.upperLid
+            LashLineCurve.fit(smoothedLid, anchor.point, anchor.upperLidTangent)
+                ?.also { lidShape?.latchCurve(it) }
+                ?: lidShape?.curve
+        } else {
+            lidShape?.curve
+        }
         return transform.copy(
-            opennessRatio = foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose),
+            opennessRatio = openness,
             lashLineCurve = curve,
             eyeWidthPx = anchor.widthPx,
+            lidShapeTrusted = lidShapeTrusted,
         )
     }
 
     /**
+     * CAMINO DE RESPALDO desde 2026-09-04 — la señal de parpadeo preferida
+     * son ahora los blendshapes de MediaPipe ([EyeBlinkBlendshapes]), que no
+     * necesitan esta corrección porque no se miden sobre la imagen. Esto se
+     * usa sólo si el resultado no trae blendshapes. Se conserva porque es la
+     * mejor aproximación disponible en ese caso, pero tiene un tope
+     * ([FORESHORTENING_CLAMP]) que en ángulos marcados se queda corta — y esa
+     * insuficiencia es justamente lo que hacía que, con la cámara desde
+     * abajo, un ojo abierto y escorzado se leyera como un ojo cerrándose.
+     *
      * Corrige [EyeLandmarks.opennessRatio] por ESCORZO antes de que
      * [LashRenderer.opennessDamping] decida si el ojo está cerrado.
      *

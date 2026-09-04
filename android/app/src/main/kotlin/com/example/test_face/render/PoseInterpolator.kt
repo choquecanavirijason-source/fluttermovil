@@ -59,7 +59,15 @@ class PoseInterpolator {
         // no donde estaba hace [latencyNanos] ms.
         val targetNanos = nowNanos + latencyNanos
         val elapsed = (targetNanos - latest.tNanos).toFloat()
-        val t = (elapsed / dt1).coerceIn(0f, MAX_EXTRAPOLATION_FACTOR)
+        // Tope en TIEMPO, no en cantidad de intervalos. `t` es "cuántos
+        // intervalos entre muestras predecir", así que un tope expresado en
+        // intervalos significa cosas distintas en cada dispositivo: 1.5×
+        // son 50 ms con MediaPipe a 30 Hz y 90 ms a 17 Hz. Lo que realmente
+        // limita cuánto se puede predecir es el TIEMPO — a partir de cierto
+        // horizonte la suposición de velocidad constante deja de valer, y eso
+        // no depende de a qué ritmo entregue resultados el dispositivo.
+        val maxT = MAX_EXTRAPOLATION_NANOS / dt1
+        val t = (elapsed / dt1).coerceIn(0f, maxT)
 
         val prev = s0
         return if (prev != null) {
@@ -87,12 +95,51 @@ class PoseInterpolator {
         val dtAvg = (dt0 + dt1) * 0.5f
         val accel = (v1 - v0) * (1f / dtAvg)
         val tScaled = t * dt1
-        // Clamp la aceleración para evitar overshoot en movimiento brusco
-        val accelMag = length(accel)
-        val clampedAccel = if (accelMag > MAX_ACCEL) accel * (MAX_ACCEL / accelMag) else accel
-        val predictedPos = c.position + v1 * tScaled + clampedAccel * (0.5f * tScaled * tScaled)
 
-        // Escala: lineal (cuadrática en escala produce overshoots visuales)
+        // ── Freno del término cuadrático ────────────────────────────────
+        // ANTES: `MAX_ACCEL = 5e-14`, un tope ABSOLUTO sobre la aceleración.
+        // El problema son sus unidades — "unidades de mundo de Filament por
+        // nanosegundo al cuadrado": para un movimiento normal de cabeza salen
+        // del orden de 1e-17, o sea que ese tope estaba unas mil veces por
+        // encima de cualquier valor real y NUNCA frenaba nada. Y el término
+        // cuadrático crece con Δt², así que sin freno efectivo puede superar
+        // al lineal y mandar el modelo lejos — el "pestañas saltando" que en
+        // su momento obligó a recortar el horizonte de extrapolación (ver
+        // [MAX_EXTRAPOLATION_NANOS]), o sea tapando el síntoma en vez de la
+        // causa.
+        //
+        // Ahora el límite es RELATIVO: la corrección cuadrática no puede
+        // aportar más de [ACCEL_TERM_MAX_RATIO] veces lo que ya aporta el
+        // término lineal. Al ser adimensional no depende de la escala del
+        // mundo, ni de la distancia de la cara, ni de la resolución — no hay
+        // ninguna constante que calibrar en dispositivo. La predicción queda
+        // acotada para cualquier Δt, que es justamente lo que permite
+        // extrapolar más lejos sin volver a los saltos.
+        val velocityTerm = v1 * tScaled
+        val accelTerm = accel * (0.5f * tScaled * tScaled)
+        val accelLen = length(accelTerm)
+        val maxAccelLen = length(velocityTerm) * ACCEL_TERM_MAX_RATIO
+        val limitedAccelTerm = if (accelLen > maxAccelLen && accelLen > 1e-30f) {
+            accelTerm * (maxAccelLen / accelLen)
+        } else {
+            accelTerm
+        }
+        val predictedPos = c.position + velocityTerm + limitedAccelTerm
+
+        // Posición, rotación y escala se extrapolan con EL MISMO `t`.
+        //
+        // Se probó darle a la posición un horizonte mayor que a rotación y
+        // escala, con el argumento de que el retraso de posición es el que se
+        // nota. Fue un error: los tres describen LA MISMA pose. Con
+        // horizontes distintos, en cuanto la persona se mueve rápido —
+        // acercarse a la cámara, bajar la cabeza — la posición se adelanta
+        // más que la escala, y el modelo termina donde va a estar la cara
+        // pero con el tamaño que la cara tenía antes. Se desacoplan justo
+        // durante el movimiento, que es exactamente cuando tienen que estar
+        // de acuerdo; reportado en dispositivo como que la pestaña "se
+        // desconfigura" al acercarse y al mirar hacia abajo.
+        //
+        // Escala: lineal (cuadrática en escala produce overshoots visuales).
         val scale = c.scale + (c.scale - b.scale) * t
 
         val rotation = lerpQuaternion(b.rotation, c.rotation, 1f + t)
@@ -104,9 +151,12 @@ class PoseInterpolator {
             opennessRatio = c.opennessRatio,
             lashLineCurve = c.lashLineCurve,
             eyeWidthPx = c.eyeWidthPx,
+            lidShapeTrusted = c.lidShapeTrusted,
         )
     }
 
+    /** [factor] es `1 + t`, el mismo para los tres componentes — ver la nota
+     * sobre desacople en [quadraticPredict]. */
     private fun lerpTransform(a: EyeTransform, b: EyeTransform, factor: Float): EyeTransform {
         return EyeTransform(
             position = a.position + (b.position - a.position) * factor,
@@ -115,6 +165,7 @@ class PoseInterpolator {
             opennessRatio = b.opennessRatio,
             lashLineCurve = b.lashLineCurve,
             eyeWidthPx = b.eyeWidthPx,
+            lidShapeTrusted = b.lidShapeTrusted,
         )
     }
 
@@ -134,15 +185,38 @@ class PoseInterpolator {
     private fun length(v: Float3): Float = sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
 
     private companion object {
-        /** Máxima extrapolación: 1.5× el intervalo entre muestras.
-         * Reducido de 3.0×: con MediaPipe a ~20Hz (50ms/frame) y 3.0×,
-         * se predecía 150ms hacia el futuro, causando overshoot visible
-         * (pestañas "saltando"). Con 1.5× = ~75ms, justo lo suficiente para
-         * compensar la latencia sin causar inestabilidad. */
-        const val MAX_EXTRAPOLATION_FACTOR = 1.5f
+        /**
+         * Horizonte máximo de predicción, en NANOSEGUNDOS hacia el futuro.
+         * Uno solo para posición, rotación y escala — ver la nota sobre
+         * desacople en [quadraticPredict].
+         *
+         * ## Por qué en tiempo y no en intervalos
+         *
+         * Antes era `MAX_EXTRAPOLATION_FACTOR`, un múltiplo del intervalo
+         * entre resultados de MediaPipe. Pero ese intervalo depende del
+         * dispositivo: `1.5×` son 50 ms con MediaPipe a 30 Hz y 90 ms a 17 Hz,
+         * o sea que el mismo número daba comportamientos muy distintos según
+         * el teléfono. Lo que en realidad limita cuánto se puede predecir es
+         * el TIEMPO: más allá de cierto horizonte la suposición de velocidad
+         * constante deja de valer y la predicción se pasa. Eso es una
+         * propiedad de cómo se mueve una cabeza, no del ritmo del dispositivo.
+         *
+         * ## Por qué 70 ms
+         *
+         * Lo que hay que cubrir es `(ahora − última muestra) + latencia`. Con
+         * la latencia real ya acotada (~51 ms: 35 de pipeline + 16 de
+         * composición) y un intervalo de ~33 ms, eso va de ~51 ms recién
+         * llegado un resultado a ~84 ms justo antes del siguiente. 70 ms cubre
+         * la mayor parte de ese rango sin llegar a predecir tan lejos como
+         * para que un frenazo de cabeza produzca un salto visible.
+         */
+        const val MAX_EXTRAPOLATION_NANOS = 70_000_000f
 
-        /** Límite de aceleración más conservador para evitar overshoot. */
-        const val MAX_ACCEL = 5e-14f
+        /** Cuánto puede aportar como máximo el término cuadrático respecto al
+         * lineal, en [quadraticPredict]. Adimensional a propósito — ver la
+         * nota extensa ahí sobre por qué reemplaza al tope absoluto
+         * `MAX_ACCEL`, que nunca llegó a actuar. */
+        const val ACCEL_TERM_MAX_RATIO = 0.5f
 
         /** Más calentamiento antes de activar predicción, para evitar
          * saltos en los primeros frames tras detectar el rostro. */

@@ -90,7 +90,14 @@ class CameraXManager(
         context = activity,
         onResult = { data, rawResult, resultBitmap ->
             // Medir la latencia REAL de MediaPipe en este dispositivo
-            val submitMs = lastFrameSubmitMs
+            // El timestamp lo devuelve el PROPIO resultado, no una variable
+            // compartida: `lastFrameSubmitMs` guardaba el último frame
+            // ENVIADO, que con cola no era el mismo cuyo resultado estaba
+            // llegando — o sea que la latencia medida salía más CHICA que la
+            // real justo cuando había retraso acumulado, y por eso este log
+            // nunca delató el problema. `timestampMs()` es el valor exacto
+            // que se pasó a detectAsync para ESTE frame.
+            val submitMs = rawResult.timestampMs()
             val nowMs = SystemClock.uptimeMillis()
             if (submitMs > 0L) {
                 val latencyMs = (nowMs - submitMs).toFloat()
@@ -183,7 +190,19 @@ class CameraXManager(
      * salida, para no alojar ~1,2 MB por frame. */
     private val orientedPool = arrayOfNulls<Bitmap>(ORIENTED_POOL_SIZE)
     private var orientedPoolIndex = 0
-    private val orientedPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    /**
+     * SIN `FILTER_BITMAP_FLAG` (2026-09-04). La matriz que se le aplica a
+     * este `drawBitmap` es siempre una rotación de 0/90/180/270 grados
+     * (`imageProxy.imageInfo.rotationDegrees` no puede ser otra cosa) más, en
+     * cámara frontal, un espejado — o sea siempre alineada a los ejes y a
+     * escala 1:1. Con ese tipo de transformación cada píxel de destino cae
+     * exactamente sobre uno de origen, así que el filtrado bilineal da EL
+     * MISMO resultado que el vecino más cercano, pero interpolando cuatro
+     * texels por píxel: costo puro por frame, sin ninguna ganancia de
+     * calidad. Sale del camino crítico que decide cada cuánto puede correr
+     * MediaPipe.
+     */
+    private val orientedPaint = Paint()
 
     private var loggedBufferWidth = -1
 
@@ -197,11 +216,6 @@ class CameraXManager(
     private var analysisDumpsWritten = 0
     private var analysisDumpFrameCounter = 0
 
-    /** Timestamp (uptimeMillis) del último frame enviado a `detectAsync`,
-     * para medir en logcat cuánto tarda MediaPipe en devolver el resultado
-     * (ver el log de latencia en el `onResult` de [helper] arriba). */
-    @Volatile
-    private var lastFrameSubmitMs = 0L
 
     fun attachPreview(view: PreviewView) {
         Log.i(TAG, "attachPreview manager=${System.identityHashCode(this)} view=${System.identityHashCode(view)}")
@@ -556,6 +570,17 @@ class CameraXManager(
             imageProxy.close()
             return
         }
+        // Ya hay un frame en vuelo en MediaPipe: se descarta este ENTERO, sin
+        // pagar la conversión del bitmap (dos pasadas de ~1,2 MB: el
+        // copyPixelsFromBuffer de más abajo y el Canvas rotado/espejado). Sin
+        // esto, la cola interna de MediaPipe crecía sin límite y el retraso
+        // llegaba a varios segundos — ver el KDoc de
+        // [FaceLandmarkerHelper.detectAsync], que es donde vive el cerrojo
+        // real. Este chequeo es sólo la optimización de saltear el trabajo.
+        if (helper.isInferenceInFlight()) {
+            imageProxy.close()
+            return
+        }
 
         try {
             val width = imageProxy.width
@@ -688,9 +713,7 @@ class CameraXManager(
             }
 
             val mpImage = BitmapImageBuilder(finalOriented).build()
-            val frameTimeMs = SystemClock.uptimeMillis()
-            lastFrameSubmitMs = frameTimeMs
-            landmarker.detectAsync(mpImage, frameTimeMs)
+            helper.detectAsync(mpImage, SystemClock.uptimeMillis())
         } catch (e: Throwable) {
             // Throwable, NO Exception: un OutOfMemoryError es un Error, se
             // escapaba de acá y mataba el hilo de `analysisExecutor` — y como

@@ -162,6 +162,36 @@ object RendererConfiguration {
      * justo al aparecer el rostro. */
     const val OPENNESS_WARMUP_SAMPLES = 15
 
+    // ── Congelado de forma por parpadeo (ver OpennessTracker/LidShape) ──
+    // Los dos valores están en apertura NORMALIZADA: 0 = cerrado
+    // (OPENNESS_CLOSED_FRACTION de la base de la persona), 1 = abierto
+    // (OPENNESS_OPEN_FRACTION o más). Un ojo en reposo se clampea a 1.
+    //
+    // Son DOS umbrales y no uno (histéresis) porque con uno solo el estado
+    // oscilaba frame a frame en la frontera — el `hideSlot -> OCULTO` /
+    // `-> VISIBLE` alternando cada decenas de milisegundos que ya se vio en
+    // logcat.
+    //
+    // Ninguno de los dos decide si la pestaña se VE: con el ojo cerrado se
+    // sigue dibujando (ver LashRenderer.applyTransform).
+
+    /** Por debajo de esto se deja de confiar en la geometría del párpado y
+     * se congela la forma ([LidShapeHold]).
+     *
+     * BAJADO de 0.75 a 0.25 (2026-09-04): con 0.75 la forma se congelaba a
+     * ~52% de apertura, o sea durante el USO NORMAL — mirando el teléfono
+     * desde abajo, con los párpados algo caídos, la pestaña dejaba de
+     * adaptarse al párpado (reportado en dispositivo). Congelar es para el
+     * PARPADEO, que lleva la apertura casi a cero en 2-3 frames; una mirada
+     * entrecerrada no es un parpadeo y ahí la pestaña tiene que seguir
+     * ajustándose. Con 0.25 hace falta bajar a ~37% de la apertura normal de
+     * la persona, cosa que fuera de un parpadeo real no pasa. */
+    const val SHAPE_TRUST_DROP_BELOW = 0.25f
+
+    /** Para volver a medir la forma en vivo hace falta superar este umbral,
+     * con margen sobre el de arriba (histéresis). */
+    const val SHAPE_TRUST_RESTORE_ABOVE = 0.45f
+
     // ── Iluminación mejorada para pestañas estéticas ────────────────────
     // Luz ambiente más intensa y cálida para que las pestañas se vean
     // bien iluminadas como en fotos de belleza profesionales.

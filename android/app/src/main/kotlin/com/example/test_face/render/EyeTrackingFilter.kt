@@ -59,12 +59,19 @@ class EyeTrackingFilter {
             scaleZ.filter(target.scale.z, now),
         )
 
+        // opennessRatio/lidShapeTrusted se COPIAN, no se filtran: son
+        // decisiones del frame, no señales continuas de pose. Antes
+        // `opennessRatio` se perdía acá (caía al default 1f = "abierto"),
+        // así que todo lo que leyera la apertura aguas abajo del filtro veía
+        // siempre un ojo abierto.
         return EyeTransform(
             position = position,
             rotation = rotation,
             scale = scale,
+            opennessRatio = target.opennessRatio,
             lashLineCurve = target.lashLineCurve,
             eyeWidthPx = target.eyeWidthPx,
+            lidShapeTrusted = target.lidShapeTrusted,
         )
     }
 

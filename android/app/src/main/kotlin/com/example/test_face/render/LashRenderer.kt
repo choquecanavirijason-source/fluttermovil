@@ -126,8 +126,8 @@ class LashRenderer(
     }
 
     /** Escribe en [slot.node] la pose extrapolada a [nowNanos] (ver
-     * [PoseInterpolator]) — no-op si el nodo no existe o está oculto (ojo
-     * cerrado/rostro perdido, ver [hideSlot]). */
+     * [PoseInterpolator]) — no-op si el nodo no existe o está oculto
+     * (rostro perdido, ver [showSlot]/[releaseSlot]). */
     private fun writeInterpolatedPose(slot: EyeModelSlot, nowNanos: Long) {
         val node = slot.node ?: return
         if (!node.isVisible) return
@@ -301,6 +301,10 @@ class LashRenderer(
                 cameraBitmap = cameraBitmap,
                 leftLidFilter = leftSlot.lidFilter,
                 rightLidFilter = rightSlot.lidFilter,
+                leftBlinkTracker = leftSlot.openness,
+                rightBlinkTracker = rightSlot.openness,
+                leftLidShape = leftSlot.lidShape,
+                rightLidShape = rightSlot.lidShape,
             )
         } catch (e: Exception) {
             Log.e(TAG, "onFaceResult: fallo calculando la transformación", e)
@@ -323,11 +327,31 @@ class LashRenderer(
      * última posición previa a la pérdida de tracking.
      */
     fun onFaceLost() {
-        hideSlot(leftSlot)
-        hideSlot(rightSlot)
+        releaseSlot(leftSlot)
+        releaseSlot(rightSlot)
     }
 
-    private fun hideSlot(slot: EyeModelSlot) {
+    /**
+     * ROSTRO PERDIDO: oculta el modelo y borra TODO el estado temporal del
+     * ojo, para que al redetectar un rostro (puede ser otra persona, o la
+     * misma a otra distancia) nada se herede.
+     *
+     * OJO — esto NO es el camino del parpadeo (ver [applyTransform]). Hasta
+     * el fix de 2026-09-04 era el mismo método para los dos casos, y por eso
+     * CADA parpadeo borraba:
+     *  - la línea base de apertura de la persona ([OpennessTracker.reset]),
+     *    con lo que el tracker volvía a calentamiento durante ~15 muestras
+     *    (≈0.5 s) justo mientras el ojo se reabría, y aprendía la base nueva
+     *    a partir de valores de ojo medio cerrado — o sea que el umbral
+     *    quedaba peor calibrado después de cada parpadeo;
+     *  - el historial de [UpperLidFilter], con lo que el primer frame tras
+     *    el parpadeo doblaba la malla con puntos SIN suavizar;
+     *  - y el suavizado de pose + el interpolador, con lo que la pestaña
+     *    reaparecía dando un salto en vez de continuar donde estaba.
+     * Esos tres borrados por parpadeo son la razón de que el efecto fuera
+     * PROGRESIVO: cuanto más parpadeaba la persona, peor quedaba.
+     */
+    private fun releaseSlot(slot: EyeModelSlot) {
         val node = slot.node
         slot.filter.reset()
         if (node != null) {
@@ -342,11 +366,31 @@ class LashRenderer(
                 // forma de hace varios segundos (ver UpperLidFilter).
                 slot.lidFilter.reset()
                 slot.openness.reset()
+                slot.lidShape.reset()
                 if (node.isVisible) {
-                    Log.i(TAG, "hideSlot node=${System.identityHashCode(node)} -> OCULTO (onFaceLost)")
+                    Log.i(TAG, "releaseSlot node=${System.identityHashCode(node)} -> OCULTO (onFaceLost)")
                 }
                 node.isVisible = false
             }
+        }
+        slot.visibleRequested = false
+    }
+
+    /**
+     * Muestra la pestaña, deduplicando contra la última visibilidad pedida
+     * (ver [EyeModelSlot.visibleRequested]) para no encolar un `post` por
+     * cada resultado de MediaPipe ni repetir el log.
+     *
+     * El único camino que oculta es [releaseSlot] (rostro perdido): el
+     * parpadeo ya no oculta nada — ver la nota en [applyTransform].
+     */
+    private fun showSlot(slot: EyeModelSlot) {
+        if (slot.visibleRequested == true) return
+        slot.visibleRequested = true
+        val node = slot.node ?: return
+        mainHandler.post {
+            Log.i(TAG, "showSlot node=${System.identityHashCode(node)} -> VISIBLE")
+            node.isVisible = true
         }
     }
 
@@ -361,32 +405,27 @@ class LashRenderer(
      * landmarks crudos del frame, que solo existen acá.
      */
     private fun applyTransform(slot: EyeModelSlot, transform: EyeTransform?, engine: Engine) {
-        val node = slot.node ?: return
+        if (slot.node == null) return
         if (transform == null) {
-            hideSlot(slot)
+            releaseSlot(slot)
             return
         }
-        // Atenuación de parpadeo ANTES del suavizado temporal: se calcula
-        // sobre la apertura cruda del frame (no la filtrada) porque cerrar
-        // el ojo debe reflejarse rápido, no arrastrar el lag del One Euro
-        // Filter de posición/rotación/escala (ver auditoría, oclusión de
-        // parpadeo). damping<=0 -> ojo cerrado, oculta sin escribir escala 0
-        // (evita un frame con la malla aplastada a tamaño cero visible).
-        // Umbral relativo al ojo de ESTA persona (ver OpennessTracker) en vez
-        // de las constantes absolutas, que confundían un ojo rasgado abierto
-        // con un ojo cerrado.
-        val damping = slot.openness.damping(transform.opennessRatio)
-        if (damping <= 0f) {
-            hideSlot(slot)
-            return
-        }
+        // EL PARPADEO YA NO OCULTA NI ENCOGE LA PESTAÑA.
+        //
+        // Antes se calculaba un `damping` en `[0,1]` a partir de la apertura,
+        // se multiplicaba `scale * damping` y, al llegar a cero, se ocultaba
+        // el nodo. Las dos cosas están mal para este producto: una extensión
+        // real no se achica al cerrar el ojo, y con el ojo CERRADO es
+        // justamente cuando más se luce — ocultarla ahí es lo contrario de
+        // lo que la usuaria quiere ver al probarse un diseño. Ahora la
+        // pestaña se dibuja siempre que haya rostro: solo [onFaceLost] la
+        // oculta.
+        //
+        // Lo único que el parpadeo decide es `lidShapeTrusted` (ver
+        // [OpennessTracker]/[LidShape]), o sea si la FORMA se re-mide o se
+        // reusa la última buena — eso ya lo resolvió FaceRenderPipeline, acá
+        // solo se consume para saber si hay que volver a doblar la malla.
         val smoothed = slot.filter.apply(transform)
-        // Damping ya horneado en la escala ANTES de entrar al interpolador:
-        // así el interpolador solo necesita conocer "la escala final a
-        // renderizar", sin bookkeeping aparte, y de paso el parpadeo también
-        // queda suavemente extrapolado frame a frame en vez de dar un salto
-        // discreto exactamente en el instante de cada resultado de MediaPipe.
-        val damped = smoothed.copy(scale = smoothed.scale * damping)
         val nowNanos = System.nanoTime()
 
         // REESCRITO a buffer directo con setBufferAt in-place (ver
@@ -404,7 +443,13 @@ class LashRenderer(
         val prior = if (slot.useBufferAAsTarget) slot.positionBufferB else slot.positionBufferA
         val restTangents = slot.restTangents
         val tangentTarget = slot.tangentBuffer
-        if (curve != null && rawMesh != null && geometry != null && target != null &&
+        // `lidShapeTrusted == false` (ojo cerrándose): NO se vuelve a
+        // doblar. El doblado ocurre en espacio LOCAL del mesh y solo depende
+        // de la curva y del ancho del ojo, así que re-doblarlo con la curva
+        // congelada daría exactamente la malla que la GPU ya tiene — saltearlo
+        // es el mismo resultado sin recorrer los vértices ni subir buffers.
+        if (transform.lidShapeTrusted &&
+            curve != null && rawMesh != null && geometry != null && target != null &&
             restTangents != null && tangentTarget != null && !slot.bendPending
         ) {
             val bent = LashMeshBender.bendInPlace(
@@ -443,21 +488,8 @@ class LashRenderer(
         // de PoseInterpolator son @Volatile, así que writeInterpolatedPose (que
         // corre en el hilo principal vía Choreographer) ve el push más reciente
         // en el próximo vsync sin problemas de visibilidad de memoria.
-        slot.interpolator.push(damped, nowNanos)
-        if (!node.isVisible) {
-            mainHandler.post {
-                Log.i(TAG, "applyTransform node=${System.identityHashCode(node)} -> VISIBLE")
-                node.isVisible = true
-            }
-        }
-    }
-
-    /** Smoothstep entre `EYE_CLOSED_OPENNESS_THRESHOLD` (0) y `EYE_OPEN_OPENNESS_THRESHOLD` (1). */
-    private fun opennessDamping(ratio: Float): Float {
-        val closed = RendererConfiguration.EYE_CLOSED_OPENNESS_THRESHOLD
-        val open = RendererConfiguration.EYE_OPEN_OPENNESS_THRESHOLD
-        val t = ((ratio - closed) / (open - closed)).coerceIn(0f, 1f)
-        return t * t * (3f - 2f * t)
+        slot.interpolator.push(smoothed, nowNanos)
+        showSlot(slot)
     }
 
     // ── Carga de modelos ──────────────────────────────────────────────────────
@@ -607,6 +639,9 @@ class LashRenderer(
                 // Oculto hasta el primer frame con rostro detectado — evita
                 // mostrar el modelo "congelado" en su posición por defecto.
                 node.isVisible = false
+                // El deduplicador de visibilidad arranca alineado con el
+                // estado real del nodo — ver [showSlot].
+                slot.visibleRequested = false
 
                 val size = node.size
                 // naturalSpan = ancho del modelo en X (la dimensión que se

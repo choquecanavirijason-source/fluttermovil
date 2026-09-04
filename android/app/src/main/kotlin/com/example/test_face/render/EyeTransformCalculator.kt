@@ -25,6 +25,18 @@ data class EyeTransform(
      * [LashMeshBender], necesario para convertir [lashLineCurve] (en
      * píxeles) a unidades locales del mesh. */
     val eyeWidthPx: Float = 0f,
+    /** `false` cuando el ojo está lo bastante cerrado como para que la
+     * geometría del párpado de este frame ya no describa un párpado abierto
+     * — ver [OpennessTracker.update]/[LidShape]. NO decide si la pestaña se
+     * ve (eso ya no depende del parpadeo): decide si su FORMA se re-mide o
+     * se reusa la última buena, y por lo tanto si [LashMeshBender] tiene que
+     * volver a doblar la malla.
+     *
+     * Se decide UNA vez por frame en [FaceRenderPipeline] (que es donde vive
+     * el tracker por ojo) y se propaga tal cual por
+     * [EyeTrackingFilter]/[PoseInterpolator], igual que [opennessRatio]: no
+     * se suaviza ni se interpola, es un booleano con su propia histéresis. */
+    val lidShapeTrusted: Boolean = true,
 )
 
 /**

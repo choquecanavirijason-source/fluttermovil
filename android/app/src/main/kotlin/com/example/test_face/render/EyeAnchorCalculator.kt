@@ -1,7 +1,11 @@
 package com.example.test_face.render
 
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
 
 /** Resultado geométrico 2D de un ojo, listo para proyectar a espacio de mundo. */
 data class EyeAnchor(
@@ -25,6 +29,11 @@ data class EyeAnchor(
     /** Canto lateral (temporal, hacia la sien) — el otro extremo real en X
      * del anillo. Ver [medialCanthus]. */
     val lateralCanthus: ImagePoint,
+    /** Forma del párpado MEDIDA en este frame, siempre — aunque el resto de
+     * este [EyeAnchor] se haya construido con una forma congelada (ver el
+     * parámetro `heldShape` de [compute]). Es lo que el llamador guarda en
+     * [LidShapeHold] mientras el ojo está abierto. */
+    val measuredShape: LidShape,
 )
 
 /**
@@ -36,9 +45,7 @@ data class EyeAnchor(
  * bounding box del modelo. Se verificó con los 10 `.glb` reales de
  * `assets/modelos/` que su bounding box en Y está centrado en el origen
  * local, pero la masa/raíz visual del mesh está muy por debajo de ese
- * centro — anclar el centro (como se hacía antes, y como una versión sin
- * commitear de `EyeTransformCalculator` encontrada y revertida en esta
- * sesión volvía a hacer) empuja la pestaña sistemáticamente lejos de la
+ * centro — anclar el centro empuja la pestaña sistemáticamente lejos de la
  * línea real del párpado. Para extensiones de pestañas reales:
  *   - El borde del párpado (lash line) es el ORIGEN de las pestañas
  *   - Las pestañas se extienden HACIA ARRIBA desde ahí
@@ -54,20 +61,31 @@ data class EyeAnchor(
  * el ancla hacia arriba (Y más pequeño = más arriba en la imagen = hacia
  * la frente).
  *
- * **Unificación de frame (2026-08-10)**: hasta esta fecha, `LashLineCurve`
+ * **Unificación de frame (2026-08-10)**: hasta esa fecha, `LashLineCurve`
  * se ajustaba alrededor de `lidCenter` (el centroide SIN desplazar) en vez
- * de `point` (el ancla de RENDER, desplazada por `noseAvoidShift`/
- * `lateralLashOffset`), porque el ajuste anterior (una parábola por mínimos
- * cuadrados) se mal-condicionaba numéricamente si se centraba lejos de la
- * nube real de puntos — eso obligaba a mantener DOS orígenes distintos
- * (`point` para el transform rígido, `lidCenter` para la curva) y una
- * corrección aparte (`lashCurveAnchorOffsetPx`, ya eliminada) solo para
- * reconciliarlos. Con el spline de Hermite/Catmull-Rom que reemplazó a esa
- * parábola (ver `LashLineCurve`, interpola los puntos reales en vez de
- * aproximarlos), ese mal-condicionamiento ya no existe — el spline es
- * válido en cualquier origen. Por eso ahora `FaceRenderPipeline` ajusta la
- * curva directamente alrededor de `point`: transform, curva y doblado del
- * mesh comparten el MISMO frame, sin offset de reconciliación.
+ * de `point` (el ancla de RENDER), porque el ajuste anterior (una parábola
+ * por mínimos cuadrados) se mal-condicionaba numéricamente si se centraba
+ * lejos de la nube real de puntos. Con el spline de Hermite que reemplazó a
+ * esa parábola (interpola los puntos reales en vez de aproximarlos) ese
+ * mal-condicionamiento ya no existe — el spline es válido en cualquier
+ * origen. Por eso ahora `FaceRenderPipeline` ajusta la curva directamente
+ * alrededor de `point`: transform, curva y doblado del mesh comparten el
+ * MISMO frame, sin offset de reconciliación.
+ *
+ * **Separación forma / posición (2026-09-04, fix de parpadeo)**: `height` y
+ * la tangente ya no se consumen directo de los landmarks de este frame.
+ * Primero se expresan como [LidShape] — una razón adimensional y un ángulo
+ * RELATIVO al eje esquina-a-esquina — y el ancla las reconstruye contra el
+ * ancho y el eje VIVOS de este frame. Así, pasar `heldShape` (lo último
+ * medido con el ojo abierto) congela sólo esas dos cantidades, que con el
+ * ojo cerrándose dejan de describir un párpado abierto; la escala por
+ * distancia y el roll de cabeza siguen siendo los de este frame.
+ *
+ * `meanX`/`meanY` (el centroide del arco) NO entran en [LidShape] a
+ * propósito: se miden siempre en vivo. Que bajen al cerrar el ojo no es
+ * ruido, es el borde del párpado bajando de verdad — y una extensión pegada
+ * a ese borde tiene que bajar con él. Ver el KDoc de [LidShape] para el
+ * desglose de qué se congela y qué no.
  */
 object EyeAnchorCalculator {
 
@@ -85,7 +103,15 @@ object EyeAnchorCalculator {
      * estilo artístico (Cat Eye vs. Natural), no son calibración física de
      * dispositivo. `LashStyleConfig.DEFAULT` reproduce el comportamiento
      * anterior (mismos valores que las constantes globales). */
-    fun compute(eye: EyeLandmarks, imageWidth: Float, styleConfig: LashStyleConfig = LashStyleConfig.DEFAULT): EyeAnchor? {
+    fun compute(
+        eye: EyeLandmarks,
+        imageWidth: Float,
+        styleConfig: LashStyleConfig = LashStyleConfig.DEFAULT,
+        /** Forma del párpado a usar en vez de la medida en este frame — ver
+         * [LidShape]. `null` (default) mide en vivo, que es el
+         * comportamiento de siempre y el único camino con el ojo abierto. */
+        heldShape: LidShape? = null,
+    ): EyeAnchor? {
         if (eye.upperLid.size < 2) return null
 
         val width = eye.width
@@ -120,6 +146,53 @@ object EyeAnchorCalculator {
             else -> ImagePoint(meanX, meanY)
         }
 
+        // ── Eje local del ojo: esquina de menor X → esquina de mayor X ────
+        // El MISMO eje que ya usa [EyePlaneCalculator] para su residuo (min X
+        // → max X, no medial → lateral), así que el ángulo ronda 0 para los
+        // dos ojos y no hay que lidiar con el envoltorio en ±π, y el residuo
+        // que se congela acá es exactamente el que consume ese cálculo.
+        //
+        // Este eje es la referencia ESTABLE del ojo: los dos cantos son las
+        // esquinas donde se juntan los párpados y prácticamente no se mueven
+        // al parpadear, a diferencia del arco del párpado superior, que baja
+        // entero. Por eso sirve para expresar la INCLINACIÓN del párpado de
+        // manera que se pueda congelar sin congelar el roll de la cabeza.
+        val frameStart = cornerA ?: ImagePoint(meanX, meanY)
+        val frameEnd = cornerB ?: ImagePoint(meanX, meanY)
+        val cornerAngle = atan2(
+            (frameEnd.y - frameStart.y).toDouble(),
+            (frameEnd.x - frameStart.x).toDouble(),
+        ).toFloat()
+
+        // ── Forma medida en ESTE frame ───────────────────────────────────
+        val rawTangent = fittedUpperLidTangent(eye.upperLid, meanX, meanY)
+        val measuredShape = LidShape(
+            heightOverWidth = height / width,
+            tangentResidualRad = normalizeAngle(
+                atan2(rawTangent.y.toDouble(), rawTangent.x.toDouble()).toFloat() - cornerAngle,
+            ),
+        )
+
+        // ── Forma efectiva: la congelada si la hay, si no la de este frame ─
+        //
+        // El CENTROIDE queda deliberadamente afuera de [LidShape]: se usa
+        // siempre el medido en vivo. Que baje al cerrar el ojo no es un
+        // artefacto del tracking, es el borde del párpado bajando de verdad,
+        // y una extensión pegada a ese borde baja con él. Congelarlo dejaría
+        // la pestaña flotando a la altura del ojo abierto sobre un párpado ya
+        // cerrado. Lo que sí se congela es lo que NO es movimiento real sino
+        // ruido/colapso de medición: la elevación extra derivada de la altura
+        // del ojo, y la inclinación ajustada sobre una nube de puntos que con
+        // el ojo cerrado ya es casi una recta (ver KDoc de [LidShape]).
+        val shape = heldShape ?: measuredShape
+        // La altura se reconstruye desde la RAZÓN alto/ancho y el ancho VIVO
+        // (que no colapsa al parpadear), así que el término de elevación del
+        // ancla sigue siendo correcto aunque la persona se acerque o se aleje
+        // con el ojo cerrado.
+        val effectiveHeight = (shape.heightOverWidth * width).coerceAtLeast(0.5f)
+        val tangentAngle = cornerAngle + shape.tangentResidualRad
+        val tangent = ImagePoint(cos(tangentAngle), sin(tangentAngle))
+
         // Desplaza el ancla X hacia la esquina EXTERNA del ojo — ver
         // LashStyleConfig.noseAvoidShift y la nota de la clase (2026-07-24):
         // evita que la expansión simétrica de WIDTH_MULTIPLIER invada la
@@ -128,7 +201,7 @@ object EyeAnchorCalculator {
         val shiftedX = meanX + shiftSign * width * styleConfig.noseAvoidShift
 
         // El ancla sube (Y decrece) desde el centroide según heightOffset.
-        val anchorY = meanY - height * styleConfig.heightOffset
+        val anchorY = meanY - effectiveHeight * styleConfig.heightOffset
 
         // CORRECCIÓN 2026-08-08 (LATERAL_LASH_OFFSET, ver
         // RendererConfiguration): reportado en dispositivo real que el
@@ -157,17 +230,27 @@ object EyeAnchorCalculator {
         val pointY = anchorY + lateralDirY * lateralOffsetPx
         val anchor = ImagePoint(pointX, pointY)
 
-        val tangent = fittedUpperLidTangent(eye.upperLid, meanX, meanY)
-
         return EyeAnchor(
             point = anchor,
             widthPx = width,
-            heightPx = height,
+            heightPx = effectiveHeight,
             upperLidTangent = tangent,
             lidCenter = ImagePoint(meanX, meanY),
             medialCanthus = medialCanthus,
             lateralCanthus = lateralCanthus,
+            measuredShape = measuredShape,
         )
+    }
+
+    /** Lleva [angleRad] al rango `[-π, π]` — [LidShape.tangentResidualRad] es
+     * una diferencia de dos `atan2`, que sin normalizar puede salir cerca de
+     * ±2π y volver discontinua la reconstrucción. */
+    private fun normalizeAngle(angleRad: Float): Float {
+        val twoPi = (2.0 * PI).toFloat()
+        var a = angleRad % twoPi
+        if (a > PI) a -= twoPi
+        if (a < -PI) a += twoPi
+        return a
     }
 
     /**
@@ -198,6 +281,11 @@ object EyeAnchorCalculator {
      * tangente nunca puede rotar 90° de golpe. Solo degenera si TODOS los
      * puntos comparten la misma x (`sxx ≈ 0`), caso imposible en un párpado
      * real y cubierto igual por el fallback.
+     *
+     * Aun sin esa discontinuidad, con el ojo a medio cerrar la pendiente se
+     * ajusta sobre una nube casi plana y queda dominada por el ruido de
+     * ±1-2 px de cada landmark — por eso el resultado se CONGELA durante el
+     * parpadeo (vía [LidShape.tangentResidualRad]) en vez de usarse crudo.
      */
     private fun fittedUpperLidTangent(
         points: List<ImagePoint>,

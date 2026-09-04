@@ -39,6 +39,12 @@ class EyeModelSlot {
 
     /** Umbral de parpadeo adaptado a la persona — ver [OpennessTracker]. */
     val openness = OpennessTracker()
+
+    /** Última forma del párpado y última curva medidas con el ojo ABIERTO —
+     * ver [LidShapeHold]. Es lo que se reusa mientras la persona parpadea,
+     * en vez de re-deducir la forma de unos landmarks que en ese instante
+     * describen un ojo cerrándose. */
+    val lidShape = LidShapeHold()
     val interpolator = PoseInterpolator()
 
     /** Malla original sin doblar, parseada del .glb (ver [GlbMeshReader]) —
@@ -103,6 +109,15 @@ class EyeModelSlot {
      * lee/escribe desde el hilo de MediaPipe, no necesita @Volatile. */
     var useBufferAAsTarget = true
 
+    /** Última visibilidad PEDIDA al nodo, o `null` si todavía no se pidió
+     * ninguna. `node.isVisible` solo se puede escribir desde el hilo
+     * principal, así que la petición viaja por `mainHandler.post` y hay una
+     * ventana en la que el valor real todavía no cambió; comparar contra
+     * `node.isVisible` en esa ventana volvería a encolar la misma petición en
+     * cada resultado de MediaPipe (y a re-loguearla). @Volatile: se escribe
+     * desde el hilo de MediaPipe y se lee desde ahí mismo. */
+    @Volatile var visibleRequested: Boolean? = null
+
     /** `false` hasta el primer doblado exitoso — antes de eso no hay
      * "frame anterior" real contra el que suavizar (el buffer opuesto
      * todavía tiene la malla cruda sin doblar, no un doblado previo
@@ -117,6 +132,7 @@ class EyeModelSlot {
         rootLocalY = 0f
         lidFilter.reset()
         openness.reset()
+        lidShape.reset()
         filter.reset()
         interpolator.reset()
         rawMesh = null
@@ -128,5 +144,6 @@ class EyeModelSlot {
         tangentBuffer = null
         useBufferAAsTarget = true
         hasBentBefore = false
+        visibleRequested = null
     }
 }
