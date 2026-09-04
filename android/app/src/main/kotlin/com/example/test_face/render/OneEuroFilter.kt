@@ -33,6 +33,21 @@ class OneEuroFilter(
     private var dxPrev = 0f
     private var tPrevNanos = 0L
 
+    /**
+     * Frecuencia de corte efectiva del último [filter] (Hz), o [minCutoff]
+     * si todavía no filtró nada.
+     *
+     * Existe porque el retardo que este filtro introduce NO es un detalle
+     * interno: es un tramo real del presupuesto de latencia del motor, y
+     * quien predice hacia adelante ([PoseInterpolator], vía
+     * [LashRenderer.writeInterpolatedPose]) necesita conocerlo para poder
+     * compensarlo. Un pasabajos de primer orden retrasa ≈ `τ = 1/(2π·fc)`,
+     * así que con el corte de acá el retardo queda determinado — ver
+     * [EyeTrackingFilter.groupDelayNanos].
+     */
+    var lastCutoffHz = minCutoff
+        private set
+
     /** [tNanos] debe ser monótono creciente (p.ej. `System.nanoTime()`). */
     fun filter(x: Float, tNanos: Long): Float {
         if (!initialized) {
@@ -57,6 +72,7 @@ class OneEuroFilter(
         // 2) Corte adaptativo: a más velocidad, más alto el corte (menos
         // suavizado, menos lag). beta controla cuánto pesa la velocidad.
         val cutoff = minCutoff + beta * abs(edx)
+        lastCutoffHz = cutoff
         val filtered = lowPass(x, xPrev, alpha(cutoff, te))
         xPrev = filtered
         return filtered
@@ -64,6 +80,7 @@ class OneEuroFilter(
 
     fun reset() {
         initialized = false
+        lastCutoffHz = minCutoff
     }
 
     private fun alpha(cutoff: Float, te: Float): Float {

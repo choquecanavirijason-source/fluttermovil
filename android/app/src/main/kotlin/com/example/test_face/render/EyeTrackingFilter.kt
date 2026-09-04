@@ -2,7 +2,10 @@ package com.example.test_face.render
 
 import dev.romainguy.kotlin.math.Float3
 import dev.romainguy.kotlin.math.Quaternion
+import kotlin.math.PI
 import kotlin.math.sqrt
+
+private const val TWO_PI = 2f * PI.toFloat()
 
 /**
  * Suavizado temporal de UN ojo: un [OneEuroFilter] independiente por
@@ -30,6 +33,34 @@ class EyeTrackingFilter {
 
     /** Último quaternion alineado, referencia para el próximo frame. */
     private var lastAlignedQ = Quaternion(0f, 0f, 0f, 1f)
+
+    /**
+     * Retardo que este filtro está introduciendo AHORA en la posición, en
+     * nanosegundos — `τ = 1/(2π·fc)` promediado sobre los tres ejes, con el
+     * corte efectivo del último frame (ver [OneEuroFilter.lastCutoffHz]).
+     *
+     * ## Por qué se expone
+     *
+     * Era el tramo FALTANTE del presupuesto de latencia. `measuredLatencyNanos`
+     * cubre captura→resultado de MediaPipe (+16 ms de composición), y
+     * [PoseFollower] declara su propio τ — pero entre esos dos la pose pasa
+     * por ESTE filtro, y su retardo no lo compensaba nadie. Con el corte de
+     * reposo (1.8 Hz) son ~88 ms; moviéndose, con el corte ya abierto, bajan
+     * a ~10-25 ms. Ese tramo sin compensar es exactamente el "todavía se
+     * atrasa cuando me muevo".
+     *
+     * Es ADAPTATIVO por construcción, y eso lo hace seguro: el retardo es
+     * grande justo cuando la velocidad es casi cero (donde predecir de más no
+     * mueve nada) y chico cuando la persona se mueve de verdad (donde
+     * predecir de más sí tendría costo). Aun así [LashRenderer] lo acota con
+     * [RendererConfiguration.FILTER_DELAY_COMPENSATION_MAX_NANOS], porque el
+     * horizonte de predicción también amplifica el ruido residual.
+     *
+     * @Volatile: se escribe en el hilo de MediaPipe ([apply]) y se lee en el
+     * hilo principal (el frame loop de [LashRenderer]).
+     */
+    @Volatile var groupDelayNanos = 0L
+        private set
 
     fun apply(target: EyeTransform): EyeTransform {
         val now = System.nanoTime()
@@ -59,6 +90,17 @@ class EyeTrackingFilter {
             scaleZ.filter(target.scale.z, now),
         )
 
+        // Retardo introducido por los tres filtros de posición en ESTE frame
+        // — se promedia el corte, no el τ, porque el corte es la magnitud que
+        // el filtro realmente ajusta (y τ es convexo en 1/fc: promediar τ le
+        // daría un peso desmedido al eje más suavizado).
+        val cutoffHz = (posX.lastCutoffHz + posY.lastCutoffHz + posZ.lastCutoffHz) / 3f
+        groupDelayNanos = if (cutoffHz > 0.01f && cutoffHz.isFinite()) {
+            (1_000_000_000f / (TWO_PI * cutoffHz)).toLong()
+        } else {
+            0L
+        }
+
         // opennessRatio/lidShapeTrusted se COPIAN, no se filtran: son
         // decisiones del frame, no señales continuas de pose. Antes
         // `opennessRatio` se perdía acá (caía al default 1f = "abierto"),
@@ -80,6 +122,7 @@ class EyeTrackingFilter {
         rotX.reset(); rotY.reset(); rotZ.reset(); rotW.reset()
         scaleX.reset(); scaleY.reset(); scaleZ.reset()
         lastAlignedQ = Quaternion(0f, 0f, 0f, 1f)
+        groupDelayNanos = 0L
     }
 
     private fun alignQuaternion(q: Quaternion): Quaternion {

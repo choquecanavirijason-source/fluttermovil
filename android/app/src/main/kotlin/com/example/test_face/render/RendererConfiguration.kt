@@ -24,7 +24,32 @@ object RendererConfiguration {
     //
     // minCutoff = 1.8Hz → τ ≈ 88ms en reposo (suaviza jitter de landmarks)
     // Target rápido = 20Hz → τ ≈ 8ms (movimiento rápido responde bien)
-    const val ONE_EURO_D_CUTOFF = 1.0f
+
+    /**
+     * Corte del pasabajos que suaviza la ESTIMACIÓN DE VELOCIDAD interna de
+     * [OneEuroFilter] — no la señal, sino la derivada que decide cuánto se
+     * abre el corte de la señal.
+     *
+     * ERA 1.0 Hz (el default del paper de One Euro) y ese era el origen
+     * principal del "delay al moverse" reportado en dispositivo. A 1 Hz esa
+     * derivada tiene τ ≈ 159 ms: cuando la persona ARRANCA a moverse, el
+     * filtro tarda ~150 ms en enterarse de que hay velocidad, y durante todo
+     * ese tramo sigue suavizando con el corte de reposo (1.8 Hz, τ ≈ 88 ms).
+     * O sea que justo en el instante en que la latencia se nota —el arranque
+     * del movimiento— el filtro estaba en su modo MÁS lento, y la parte
+     * adaptativa (que existe precisamente para eso) llegaba tarde.
+     *
+     * A 6 Hz la derivada tiene τ ≈ 27 ms: el filtro reconoce el movimiento
+     * dentro del primer par de resultados de MediaPipe y abre el corte casi
+     * de inmediato. El costo teórico es que un pico de ruido en la derivada
+     * abre el corte sin que haya movimiento real; en la práctica eso es un
+     * frame de suavizado más flojo, invisible al lado de los ~90 ms de lag
+     * que quita.
+     *
+     * CALIBRACIÓN: si aparece jitter en reposo que antes no estaba, BAJAR
+     * hacia 3-4 Hz antes de tocar [POSITION_MIN_CUTOFF].
+     */
+    const val ONE_EURO_D_CUTOFF = 6.0f
 
     private const val FAST_MOTION_TARGET_CUTOFF_HZ = 20f
 
@@ -161,6 +186,69 @@ object RendererConfiguration {
      * base confiable es preferible mostrar la pestaña de más que ocultarla
      * justo al aparecer el rostro. */
     const val OPENNESS_WARMUP_SAMPLES = 15
+
+    // ── Seguimiento a tasa de pantalla (ver PoseFollower) ───────────────
+
+    /**
+     * Constante de tiempo del seguidor de pose por vsync, en nanosegundos.
+     *
+     * Cada resultado de MediaPipe cambia la base de la predicción de
+     * [PoseInterpolator], y ese cambio llega al nodo como un escalón ~25
+     * veces por segundo — la pestaña avanza suave y da un tironcito por
+     * muestra. Este tau reparte cada corrección en el tiempo: con 35 ms, una
+     * corrección queda ~63% aplicada en el primer intervalo de MediaPipe y
+     * prácticamente completa en dos, o sea que se disuelve dentro del mismo
+     * intervalo en que llegó — no arrastra.
+     *
+     * NO agrega latencia neta: el retardo de grupo de un pasabajos de primer
+     * orden es ≈ tau, y se compensa pidiéndole al interpolador la pose de
+     * `ahora + latencia + tau` (ver [LashRenderer.writeInterpolatedPose]).
+     *
+     * CALIBRACIÓN: si todavía se ven tironcitos al mover la cabeza, SUBIR;
+     * si la pestaña se siente "blanda"/con goma al frenar, BAJAR. `0L` lo
+     * desactiva por completo (comportamiento anterior: escribe la predicción
+     * cruda), rollback de una línea.
+     */
+    const val POSE_FOLLOW_TAU_NANOS = 35_000_000L
+
+    /**
+     * Tope de la compensación del retardo del [EyeTrackingFilter] (ver
+     * [EyeTrackingFilter.groupDelayNanos]).
+     *
+     * El retardo real llega a ~88 ms con el corte de reposo, pero predecir
+     * tan lejos amplifica el ruido residual de los landmarks: el error de
+     * extrapolación crece con el horizonte, y en reposo ese error ES el
+     * temblor. 45 ms compensa el tramo que importa (el que queda cuando el
+     * corte ya se abrió porque la persona se está moviendo) sin llevar el
+     * horizonte a una zona donde el ruido se note.
+     */
+    const val FILTER_DELAY_COMPENSATION_MAX_NANOS = 45_000_000L
+
+    /**
+     * Ajuste fino manual del horizonte de predicción, en nanosegundos —
+     * positivo adelanta la pestaña, negativo la atrasa.
+     *
+     * Existe porque queda un tramo del presupuesto que NO se puede calcular
+     * desde acá: la latencia del camino de PREVIEW (sensor → PreviewView →
+     * pantalla). Lo que la pestaña tiene que seguir no es la cara real, es la
+     * cara TAL COMO SE VE en el preview, y esa superficie tiene su propio
+     * retardo, distinto en cada dispositivo y no expuesto por CameraX. Los
+     * demás tramos (MediaPipe, filtro, seguidor) sí se miden o se derivan;
+     * este es el único que solo se puede ajustar mirando la pantalla.
+     *
+     * CALIBRACIÓN, moviendo la cabeza de lado a lado a velocidad media:
+     *  - la pestaña va DETRÁS del ojo → subir de a 10 ms
+     *  - la pestaña se ADELANTA al ojo → bajar (puede quedar negativo)
+     * 0 = sin ajuste.
+     */
+    const val EXTRA_LATENCY_TRIM_NANOS = 0L
+
+    /** Hueco entre vsyncs a partir del cual el seguidor salta a la pose
+     * objetivo en vez de perseguirla: pestaña oculta por la puerta de
+     * movimiento, app en background o jank grande. Perseguir desde una pose
+     * de hace medio segundo se vería como la pestaña "volando" hasta el ojo,
+     * que es justo lo contrario de lo que buscamos. */
+    const val POSE_FOLLOW_MAX_GAP_NANOS = 250_000_000L
 
     // ── Puerta de movimiento (ver MotionGate) ───────────────────────────
     //

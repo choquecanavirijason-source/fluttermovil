@@ -10,6 +10,8 @@ import com.google.android.filament.Engine
 import com.google.android.filament.IndirectLight
 import com.google.android.filament.RenderableManager
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import dev.romainguy.kotlin.math.Float3
+import dev.romainguy.kotlin.math.Quaternion
 import io.github.sceneview.SceneView
 import io.github.sceneview.geometries.Geometry
 import io.github.sceneview.node.ModelNode
@@ -101,6 +103,14 @@ class LashRenderer(
     /** Ver [writeInterpolatedPose]. */
     private var loggedNonFinitePose = false
 
+    /** Contador del log `PRESUPUESTO_LATENCIA` de [writeInterpolatedPose] —
+     * solo el ojo izquierdo lo incrementa, así que a 60 Hz sale ~1 línea cada
+     * 2 s. Es la herramienta para calibrar
+     * [RendererConfiguration.EXTRA_LATENCY_TRIM_NANOS] en dispositivo: muestra
+     * cuánto aporta cada tramo y si el tope de extrapolación está recortando
+     * el horizonte pedido. */
+    private var latencyLogFrames = 0
+
     fun attachSceneView(view: SceneView) {
         sceneView = view
         Log.i(
@@ -126,12 +136,37 @@ class LashRenderer(
     }
 
     /** Escribe en [slot.node] la pose extrapolada a [nowNanos] (ver
-     * [PoseInterpolator]) — no-op si el nodo no existe o está oculto
-     * (rostro perdido, ver [showSlot]/[releaseSlot]). */
+     * [PoseInterpolator]), suavizada a tasa de pantalla por [PoseFollower] —
+     * no-op si el nodo no existe o está oculto (rostro perdido o cara en
+     * movimiento, ver [showSlot]/[releaseSlot]/[hideSlotWhileMoving]). */
     private fun writeInterpolatedPose(slot: EyeModelSlot, nowNanos: Long) {
         val node = slot.node ?: return
         if (!node.isVisible) return
-        val transform = slot.interpolator.sample(nowNanos, measuredLatencyNanos) ?: return
+        // ── PRESUPUESTO DE LATENCIA COMPLETO ────────────────────────────
+        // Cuánto hay que predecir hacia adelante = todo lo que la pose ya
+        // atrasó desde que la cámara capturó el frame. Son cuatro tramos, y
+        // hasta el fix del "delay al moverse" solo se contaban dos:
+        //
+        //  1. measuredLatencyNanos — captura→resultado de MediaPipe, MEDIDO
+        //     en este dispositivo, +16 ms de composición (ver onFaceResult).
+        //  2. EyeTrackingFilter — el One Euro por el que pasa la pose después
+        //     de MediaPipe. ADAPTATIVO: ~10-25 ms moviéndose, más en reposo.
+        //     No lo compensaba nadie; ver EyeTrackingFilter.groupDelayNanos.
+        //  3. POSE_FOLLOW_TAU_NANOS — el retardo del seguidor de acá abajo,
+        //     que se cancela pidiendo la pose un tau más adelante.
+        //  4. EXTRA_LATENCY_TRIM_NANOS — el camino de preview, que no se
+        //     puede medir desde acá; ajuste manual, 0 por defecto.
+        //
+        // El tramo 2 se lee del filtro del propio ojo (@Volatile, escrito
+        // desde el hilo de MediaPipe) y se acota, porque el horizonte también
+        // amplifica el ruido residual de los landmarks.
+        val filterDelayNanos = slot.filter.groupDelayNanos
+            .coerceIn(0L, RendererConfiguration.FILTER_DELAY_COMPENSATION_MAX_NANOS)
+        val horizonNanos = measuredLatencyNanos +
+            filterDelayNanos +
+            RendererConfiguration.POSE_FOLLOW_TAU_NANOS +
+            RendererConfiguration.EXTRA_LATENCY_TRIM_NANOS
+        val transform = slot.interpolator.sample(nowNanos, horizonNanos.coerceAtLeast(0L)) ?: return
         // Una pose NO FINITA (NaN/Inf) escrita en el nodo se queda ahí: el
         // modelo desaparece o se congela y ningún frame posterior lo
         // recupera, porque el valor malo ya está en la TransformManager de
@@ -152,9 +187,23 @@ class LashRenderer(
             }
             return
         }
-        node.position = p
-        node.quaternion = q
-        node.scale = sc
+        if (slot === leftSlot && ++latencyLogFrames >= LATENCY_LOG_EVERY_FRAMES) {
+            latencyLogFrames = 0
+            Log.i(
+                TAG,
+                "PRESUPUESTO_LATENCIA pipeline=${measuredLatencyNanos / 1_000_000}ms " +
+                    "filtro=${filterDelayNanos / 1_000_000}ms " +
+                    "seguidor=${RendererConfiguration.POSE_FOLLOW_TAU_NANOS / 1_000_000}ms " +
+                    "trim=${RendererConfiguration.EXTRA_LATENCY_TRIM_NANOS / 1_000_000}ms " +
+                    "-> horizonte=${horizonNanos / 1_000_000}ms " +
+                    "(tope=${(PoseInterpolator.MAX_EXTRAPOLATION_NANOS / 1_000_000f).toInt()}ms)",
+            )
+        }
+        slot.follower.advance(transform, nowNanos)
+        val f = slot.follower
+        node.position = Float3(f.posX, f.posY, f.posZ)
+        node.quaternion = Quaternion(f.rotX, f.rotY, f.rotZ, f.rotW)
+        node.scale = Float3(f.scaleX, f.scaleY, f.scaleZ)
     }
 
     /**
@@ -366,6 +415,7 @@ class LashRenderer(
                 // que no queden muestras viejas esperando a extrapolarse
                 // cuando el rostro reaparezca.
                 slot.interpolator.reset()
+                slot.follower.reset()
                 // Mismo motivo que el interpolador: sin esto, al redetectar
                 // el rostro la curva del párpado arrancaría mezclada con la
                 // forma de hace varios segundos (ver UpperLidFilter).
@@ -397,6 +447,10 @@ class LashRenderer(
         mainHandler.post {
             Log.i(TAG, "showSlot node=${System.identityHashCode(node)} -> VISIBLE")
             node.isVisible = true
+            // El seguidor arranca de cero en la pose objetivo: si conservara
+            // su estado, la pestaña reaparecería deslizándose desde donde
+            // estaba antes de ocultarse en vez de aparecer ya puesta.
+            slot.follower.reset()
             // El frame loop no escribe la pose mientras el nodo está oculto
             // (ver [writeInterpolatedPose]), así que el nodo todavía tiene la
             // pose de antes de ocultarse. Sin esto, el primer frame visible
@@ -809,5 +863,8 @@ class LashRenderer(
 
     private companion object {
         private const val TAG = "LashRenderer"
+
+        /** Ver [latencyLogFrames]. */
+        private const val LATENCY_LOG_EVERY_FRAMES = 120
     }
 }

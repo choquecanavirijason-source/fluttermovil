@@ -47,6 +47,11 @@ class EyeModelSlot {
     val lidShape = LidShapeHold()
     val interpolator = PoseInterpolator()
 
+    /** Suavizado final de la pose, a tasa de pantalla — ver [PoseFollower].
+     * Vive del lado del hilo principal (lo lee y escribe el frame loop),
+     * a diferencia de [interpolator], al que empuja el hilo de MediaPipe. */
+    val follower = PoseFollower()
+
     /** Decide si la pestaña se dibuja o se esconde según cuánto se mueve la
      * cara — ver [MotionGate]. Estado por ojo porque cada ojo tiene su propia
      * pose suavizada. */
@@ -140,6 +145,7 @@ class EyeModelSlot {
         lidShape.reset()
         filter.reset()
         interpolator.reset()
+        follower.reset()
         motionGate.reset()
         rawMesh = null
         geometry = null

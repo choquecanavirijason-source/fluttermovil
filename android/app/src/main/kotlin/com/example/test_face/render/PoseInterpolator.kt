@@ -184,7 +184,9 @@ class PoseInterpolator {
 
     private fun length(v: Float3): Float = sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
 
-    private companion object {
+    /** Público (no `private`) para que [LashRenderer] pueda incluir el tope
+     * en el log del presupuesto de latencia — ver PRESUPUESTO_LATENCIA. */
+    companion object {
         /**
          * Horizonte máximo de predicción, en NANOSEGUNDOS hacia el futuro.
          * Uno solo para posición, rotación y escala — ver la nota sobre
@@ -201,16 +203,33 @@ class PoseInterpolator {
          * constante deja de valer y la predicción se pasa. Eso es una
          * propiedad de cómo se mueve una cabeza, no del ritmo del dispositivo.
          *
-         * ## Por qué 70 ms
+         * ## Por qué 150 ms
          *
-         * Lo que hay que cubrir es `(ahora − última muestra) + latencia`. Con
-         * la latencia real ya acotada (~51 ms: 35 de pipeline + 16 de
-         * composición) y un intervalo de ~33 ms, eso va de ~51 ms recién
-         * llegado un resultado a ~84 ms justo antes del siguiente. 70 ms cubre
-         * la mayor parte de ese rango sin llegar a predecir tan lejos como
-         * para que un frenazo de cabeza produzca un salto visible.
+         * Este tope tiene que dar lugar al PRESUPUESTO DE LATENCIA COMPLETO
+         * que arma [LashRenderer.writeInterpolatedPose], si no recorta
+         * justamente la compensación que se acaba de agregar y el atraso
+         * vuelve. Sumando: ~51 ms de pipeline+composición, hasta 45 ms del
+         * One Euro de pose ([RendererConfiguration.FILTER_DELAY_COMPENSATION_MAX_NANOS]),
+         * 35 ms del lead de [PoseFollower], más `(ahora − última muestra)`,
+         * que llega a ~40 ms justo antes del resultado siguiente. Eso da un
+         * pico de ~170 ms; 150 cubre casi todo el rango sin dejar que el peor
+         * caso mande.
+         *
+         * Era 70 ms, elegido para no predecir tan lejos como para que un
+         * frenazo de cabeza produjera un salto visible. Ese motivo ya no
+         * aplica igual, por dos cambios posteriores: [PoseFollower] reparte
+         * en el tiempo cualquier corrección brusca —incluido un sobrepaso de
+         * predicción— así que un frenazo se resuelve como un asentamiento
+         * suave; y [MotionGate] directamente no dibuja la pestaña mientras la
+         * cabeza va rápido, que es cuando el sobrepaso sería mayor. O sea que
+         * el error de extrapolación solo se ve con la cara moviéndose LENTO,
+         * donde `velocidad × horizonte` es chico por el otro factor.
+         *
+         * CALIBRACIÓN: si al frenar de golpe la pestaña se pasa de largo de
+         * forma visible, bajar de a 20 ms. Es el primer valor a tocar si
+         * aparece sobrepaso.
          */
-        const val MAX_EXTRAPOLATION_NANOS = 70_000_000f
+        const val MAX_EXTRAPOLATION_NANOS = 150_000_000f
 
         /** Cuánto puede aportar como máximo el término cuadrático respecto al
          * lineal, en [quadraticPredict]. Adimensional a propósito — ver la
