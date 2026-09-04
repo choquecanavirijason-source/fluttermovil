@@ -354,6 +354,11 @@ class LashRenderer(
     private fun releaseSlot(slot: EyeModelSlot) {
         val node = slot.node
         slot.filter.reset()
+        // Mismo hilo que `filter` (ver [MotionGate]): al redetectar el rostro,
+        // la puerta de movimiento vuelve a exigir su ventana de calma antes
+        // del primer dibujado, en vez de heredar el "estaba visible" de la
+        // persona anterior.
+        slot.motionGate.reset()
         if (node != null) {
             mainHandler.post {
                 // El interpolador se resetea acá (hilo principal, mismo hilo
@@ -381,8 +386,9 @@ class LashRenderer(
      * (ver [EyeModelSlot.visibleRequested]) para no encolar un `post` por
      * cada resultado de MediaPipe ni repetir el log.
      *
-     * El único camino que oculta es [releaseSlot] (rostro perdido): el
-     * parpadeo ya no oculta nada — ver la nota en [applyTransform].
+     * Los caminos que ocultan son [releaseSlot] (rostro perdido) y
+     * [hideSlotWhileMoving] (cara en movimiento). El parpadeo NO oculta nada
+     * — ver la nota en [applyTransform].
      */
     private fun showSlot(slot: EyeModelSlot) {
         if (slot.visibleRequested == true) return
@@ -391,6 +397,36 @@ class LashRenderer(
         mainHandler.post {
             Log.i(TAG, "showSlot node=${System.identityHashCode(node)} -> VISIBLE")
             node.isVisible = true
+            // El frame loop no escribe la pose mientras el nodo está oculto
+            // (ver [writeInterpolatedPose]), así que el nodo todavía tiene la
+            // pose de antes de ocultarse. Sin esto, el primer frame visible
+            // dibujaría la pestaña en esa posición vieja — exactamente el
+            // "aparece flotando" que la puerta de movimiento viene a evitar.
+            // Se escribe acá, en el mismo Runnable del hilo principal, así
+            // visibilidad y pose llegan juntas al mismo frame de Filament.
+            writeInterpolatedPose(slot, System.nanoTime())
+        }
+    }
+
+    /**
+     * CARA EN MOVIMIENTO: oculta la pestaña sin tocar NADA del estado de
+     * tracking — al revés que [releaseSlot], que borra filtros e
+     * interpolador porque ahí el rostro se perdió de verdad.
+     *
+     * Acá el rostro sigue estando y el pipeline sigue corriendo con el nodo
+     * oculto: filtro, interpolador, apertura, forma del párpado y doblado de
+     * malla se mantienen al día. Por eso el retorno es instantáneo y en la
+     * posición correcta, en vez de tener que recalentar ([PoseInterpolator]
+     * necesita `WARMUP_PUSHES` muestras, [OpennessTracker] ~15) como pasaría
+     * si esto reseteara el estado.
+     */
+    private fun hideSlotWhileMoving(slot: EyeModelSlot) {
+        if (slot.visibleRequested == false) return
+        slot.visibleRequested = false
+        val node = slot.node ?: return
+        mainHandler.post {
+            Log.i(TAG, "hideSlotWhileMoving node=${System.identityHashCode(node)} -> OCULTO (movimiento)")
+            node.isVisible = false
         }
     }
 
@@ -489,7 +525,18 @@ class LashRenderer(
         // corre en el hilo principal vía Choreographer) ve el push más reciente
         // en el próximo vsync sin problemas de visibilidad de memoria.
         slot.interpolator.push(smoothed, nowNanos)
-        showSlot(slot)
+
+        // PUERTA DE MOVIMIENTO (ver [MotionGate]): con la cara moviéndose
+        // rápido, la pestaña no se dibuja. El push al interpolador y el
+        // doblado de arriba SIGUEN corriendo mientras está oculta — así, al
+        // volver a mostrarse, la pose y la forma ya son las del frame actual y
+        // no hay que esperar a que converjan a la vista.
+        val shouldShow = if (RendererConfiguration.MOTION_GATE_ENABLED) {
+            slot.motionGate.update(smoothed, slot.naturalSpan, nowNanos)
+        } else {
+            true
+        }
+        if (shouldShow) showSlot(slot) else hideSlotWhileMoving(slot)
     }
 
     // ── Carga de modelos ──────────────────────────────────────────────────────

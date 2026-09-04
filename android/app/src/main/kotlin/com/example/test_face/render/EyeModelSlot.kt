@@ -47,6 +47,11 @@ class EyeModelSlot {
     val lidShape = LidShapeHold()
     val interpolator = PoseInterpolator()
 
+    /** Decide si la pestaña se dibuja o se esconde según cuánto se mueve la
+     * cara — ver [MotionGate]. Estado por ojo porque cada ojo tiene su propia
+     * pose suavizada. */
+    val motionGate = MotionGate()
+
     /** Malla original sin doblar, parseada del .glb (ver [GlbMeshReader]) —
      * `null` si el parseo falló o el modelo no tiene un `RenderableNode`.
      * @Volatile: se escribe en el hilo de carga (loadIntoSlot) y se lee
@@ -135,6 +140,7 @@ class EyeModelSlot {
         lidShape.reset()
         filter.reset()
         interpolator.reset()
+        motionGate.reset()
         rawMesh = null
         geometry = null
         bendPending = false

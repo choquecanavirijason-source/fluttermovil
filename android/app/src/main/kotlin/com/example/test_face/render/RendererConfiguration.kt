@@ -162,6 +162,64 @@ object RendererConfiguration {
      * justo al aparecer el rostro. */
     const val OPENNESS_WARMUP_SAMPLES = 15
 
+    // ── Puerta de movimiento (ver MotionGate) ───────────────────────────
+    //
+    // Mientras la cabeza se mueve rápido, la pestaña NO se dibuja: el desfase
+    // que deja la latencia de MediaPipe (la parte que la predicción de
+    // PoseInterpolator no alcanza a compensar) se ve como una pestaña
+    // "flotando" al lado del ojo, y no hay predicción que lo arregle del
+    // todo. Mejor no mostrarla hasta que esté puesta sobre la pestaña real.
+    //
+    // `false` deja el comportamiento anterior (siempre visible con rostro
+    // presente) — rollback de una línea, mismo espíritu que
+    // FACE_MESH_ENABLED / LASH_ANCHOR_FROM_FACE_MESH.
+    const val MOTION_GATE_ENABLED = true
+
+    /** Velocidad de traslación a la que se considera que la pestaña ya no
+     * está confiablemente colocada, en ANCHOS DE MODELO por segundo (el
+     * ancho del modelo es ~1.15× el ancho real del ojo, ver
+     * [WIDTH_MULTIPLIER]). 2.0 ≈ recorrer dos ojos de ancho en un segundo:
+     * girar la cara para mirar a un costado lo cruza, respirar o hablar no.
+     *
+     * CALIBRACIÓN EN DISPOSITIVO: si la pestaña se oculta demasiado (se va
+     * con cualquier movimiento chico), SUBIR este valor; si todavía se ve
+     * flotar durante el movimiento, BAJARLO. Los tres umbrales de abajo se
+     * calibran igual y de a uno. */
+    const val MOTION_GATE_POSITION_HIDE_SPANS_PER_SEC = 2.0f
+
+    /** Equivalente angular del anterior: grados por segundo de la
+     * orientación del ojo. 55°/s es un giro de cabeza claro; el micro-cabeceo
+     * de estar sentada frente a la cámara queda muy por debajo. */
+    const val MOTION_GATE_ROTATION_HIDE_DEG_PER_SEC = 55f
+
+    /** Equivalente en profundidad: fracción de cambio de escala por segundo
+     * (la escala es proporcional al ancho del ojo, así que esto es
+     * "acercarse/alejarse de la cámara"). 0.9 = el ojo cambiando de tamaño
+     * un 90% en un segundo. */
+    const val MOTION_GATE_SCALE_HIDE_FRACTION_PER_SEC = 0.9f
+
+    /** Umbral de REAPARICIÓN, como fracción del de ocultado (histéresis).
+     * Con un solo umbral, un movimiento sostenido justo en el límite haría
+     * parpadear la pestaña varias veces por segundo. */
+    const val MOTION_GATE_SHOW_SCORE_RATIO = 0.45f
+
+    /** Cuánto tiene que sostenerse la calma antes de volver a dibujar. Cubre
+     * el tiempo que tardan el suavizado y el interpolador en converger
+     * después de un movimiento, para que la pestaña no reaparezca todavía
+     * deslizándose hacia su lugar. 150 ms ≈ 4-5 resultados de MediaPipe. */
+    const val MOTION_GATE_CALM_DWELL_NANOS = 150_000_000L
+
+    /** Suavizado del score de movimiento: ataque rápido (ocultar tarde se
+     * ve como pestaña flotando) y caída lenta (mostrar tarde no molesta). */
+    const val MOTION_GATE_ATTACK = 0.8f
+    const val MOTION_GATE_RELEASE = 0.3f
+
+    /** Hueco entre muestras a partir del cual la diferencia contra la muestra
+     * anterior ya no describe una velocidad real (app en background, rostro
+     * perdido y redetectado): el gate se re-arranca cerrado en vez de
+     * calcular una velocidad enorme espuria. */
+    const val MOTION_GATE_MAX_SAMPLE_GAP_NANOS = 400_000_000L
+
     // ── Congelado de forma por parpadeo (ver OpennessTracker/LidShape) ──
     // Los dos valores están en apertura NORMALIZADA: 0 = cerrado
     // (OPENNESS_CLOSED_FRACTION de la base de la persona), 1 = abierto
