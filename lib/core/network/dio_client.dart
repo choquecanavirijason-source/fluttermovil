@@ -25,7 +25,9 @@ final dioProvider = Provider<Dio>((ref) {
   )..interceptors.addAll([
       AuthInterceptor(
         storage: storage,
-        onSessionExpired: authState.markSignedOut,
+        // Con el bypass de login DEV activo un 401 no debe expulsar al login:
+        // la sesión se mantiene y cada pantalla muestra su propio error.
+        onSessionExpired: Env.kDevSkipLogin ? () {} : authState.markSignedOut,
       ),
       if (Env.isDevelopment) const LoggingInterceptor(),
       const ErrorInterceptor(),

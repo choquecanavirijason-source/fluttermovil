@@ -308,6 +308,144 @@ object RendererConfiguration {
      * calcular una velocidad enorme espuria. */
     const val MOTION_GATE_MAX_SAMPLE_GAP_NANOS = 400_000_000L
 
+    // ── Caída de la pestaña al cerrar el ojo (ver LidDropRotation) ──────
+
+    /** Interruptor maestro. `false` deja el comportamiento anterior: con el
+     * ojo cerrado la pestaña conserva la orientación de ojo abierto. */
+    const val LASH_CLOSED_DROP_ENABLED = true
+
+    /**
+     * Cuánto gira la pestaña, en grados, entre el ojo completamente ABIERTO
+     * (0°) y completamente CERRADO. El giro es alrededor del eje canto-a-canto
+     * del ojo, con pivote en la RAÍZ de la pestaña.
+     *
+     * ## Por qué más de 90°
+     *
+     * Con el ojo abierto las fibras salen hacia ARRIBA (`LASH_FORWARD_TILT_DEGREES`
+     * está en 0, así que el eje local +Y es directamente el "arriba" de la
+     * cara). Con el ojo cerrado tienen que terminar apuntando hacia ABAJO y un
+     * poco hacia adelante, que es como se ve una extensión en la foto clásica
+     * de ojos cerrados. Ese recorrido pasa por "adelante" a los 90°: con un
+     * ángulo menor, la pestaña se queda apuntando a la cámara —muy escorzada,
+     * casi un punto de frente— en vez de terminar de caer. De ahí que el
+     * valor útil esté por encima de 90 y no en 60-70 como sugeriría pensar
+     * solo en cuánto rota el párpado.
+     *
+     * ## El ángulo decide si el arco se ve como "n" o como "u"
+     *
+     * El giro no mueve solo la DIRECCIÓN de las fibras: arrastra el arco
+     * entero de la línea de pestañas. Un punto del arco que está a `h` por
+     * encima de la cuerda canto-a-canto queda, tras girar θ, a `h·cos θ` en
+     * pantalla — o sea que el alto del arco se escala por `cos θ`:
+     *
+     *  -  θ < 90°  → `cos θ` positivo: sigue siendo "n", solo más aplastada.
+     *  -  θ = 90°  → arco plano, una línea, y las fibras de frente a la
+     *                cámara (escorzadas casi a un punto).
+     *  -  θ > 90°  → `cos θ` NEGATIVO: el arco se INVIERTE y se lee como "u",
+     *                con las fibras cayendo hacia abajo.
+     *
+     * Por eso 150 y no 100/130 como en las primeras versiones: a 100° el arco
+     * queda casi plano (`cos 100 = -0.17`) y la pestaña apunta a la cámara —
+     * el ojo se ve cerrado pero la pestaña no se ve caer. A 150° el arco
+     * recupera el 87 % de su alto ya invertido (`cos 150 = -0.87`) y todavía
+     * conserva medio paso hacia adelante (`sin 150 = 0.5`), así que cae sobre
+     * el párpado en vez de clavarse en el pómulo: "u" con las fibras abajo.
+     *
+     * CALIBRACIÓN EN DISPOSITIVO, cerrando UN ojo despacio (el otro abierto
+     * sirve de referencia, cada ojo se gira por separado):
+     *  - con el ojo cerrado el arco sigue leyéndose como "n", o la pestaña se
+     *    queda a medio camino apuntando al frente → SUBIR
+     *  - la "u" queda tan cerrada que la pestaña se clava en el pómulo →
+     *    BAJAR
+     *  - gira para el lado EQUIVOCADO (se hunde en la cara en vez de caer
+     *    hacia adelante) → poner el valor en NEGATIVO. El sentido se deduce
+     *    por frame de la pose (ver [LidDropRotation]), pero si la convención
+     *    de la normal en este dispositivo resultara ser la opuesta, esto lo
+     *    invierte entero sin tocar la matemática.
+     */
+    const val LASH_CLOSED_DROP_DEGREES = 150f
+
+    /**
+     * Cuánto de la elevación del ancla sobre el centroide del párpado
+     * ([LashStyleConfig.heightOffset]) SOBREVIVE con el ojo completamente
+     * cerrado — ver el cálculo de `lift` en [EyeAnchorCalculator.compute].
+     *
+     * Esa elevación existe para subir el ancla desde el centroide del arco
+     * del párpado superior hasta el borde donde nacen las fibras. Con el ojo
+     * cerrado el arco COLAPSA sobre ese borde, así que la elevación ya no
+     * corresponde a nada: mantenerla entera es lo que dejaba la pestaña
+     * flotando a la altura del ojo abierto.
+     *
+     * No es 0 del todo porque las fibras nacen un pelo por encima de la
+     * línea de landmarks del párpado; con 0 la raíz se ve mordida por el
+     * borde. SUBIR si la pestaña sigue quedando despegada del ojo cerrado,
+     * BAJAR si se hunde dentro del párpado.
+     */
+    const val LASH_CLOSED_ANCHOR_LIFT_FRACTION = 0.15f
+
+    /**
+     * Ganancia de la CURVA DE RESPUESTA del giro: con cuánto cierre medido
+     * la pestaña ya está completamente volcada. `1` = lineal (el giro llega
+     * al máximo solo con el cierre máximo); `1.5` = ya está entera abajo
+     * con el ojo al 67 % cerrado.
+     *
+     * ## Por qué no lineal
+     *
+     * El cierre que mide [OpennessTracker] rara vez llega a 1: los
+     * blendshapes de MediaPipe dan ~0.85-0.9 con el ojo bien cerrado, y la
+     * normalización contra la línea base de la persona recorta todavía más.
+     * Con respuesta lineal eso deja el giro a ~60-70 % justo cuando el ojo
+     * YA se ve cerrado — y a esa altura la pestaña está cerca de los 90°,
+     * o sea apuntando de frente a la cámara y escorzada casi a un punto:
+     * la lectura de "se queda a medio camino".
+     *
+     * Además el volcado real del párpado no es lineal con la abertura: el
+     * último tramo del cierre es el que más gira el borde.
+     *
+     * SUBIR si la pestaña todavía se queda corta con el ojo cerrado; BAJAR
+     * si se vuelca de más con el ojo apenas entornado.
+     */
+    const val LASH_CLOSED_DROP_GAIN = 1.5f
+
+    /**
+     * Compensa el arco de la BANDA DE RAÍCES mientras el abanico gira — ver
+     * [LidDropRotation.bandCompensation].
+     *
+     * [LASH_CLOSED_DROP_DEGREES] vuelca el nodo ENTERO, así que invierte no
+     * solo la dirección de las fibras (que es lo que se quiere) sino también
+     * el arco de la línea donde nacen, que deja de seguir el borde del
+     * párpado. Con esto activo, la malla se dobla con el desvío dividido por
+     * `cos θ`, de manera que tras el giro la banda vuelve a caer sobre el
+     * párpado y lo único que queda volcado son las fibras.
+     *
+     * `false` deja el comportamiento anterior (banda y fibras giran juntas).
+     */
+    const val LASH_CLOSED_BAND_COMPENSATION_ENABLED = true
+
+    /**
+     * Tope de esa compensación. Cerca de θ=90° la banda queda de canto a la
+     * cámara (`cos θ` → 0) y el factor `1/cos θ` se dispararía, doblando la
+     * malla hasta romperla por un instante en el que, de todos modos, el
+     * arco no se ve. Se recorta acá.
+     */
+    const val LASH_CLOSED_BAND_COMPENSATION_MAX = 2.5f
+
+    /**
+     * Cuánto se APLANA el arco de la banda de raíces con el ojo del todo
+     * cerrado, como fracción del arco de ojo abierto (`1` = no se aplana).
+     *
+     * Con el ojo cerrado, la curva que se usa para doblar es la CONGELADA
+     * del ojo abierto (la viva, medida sobre un párpado plegado, es ruido —
+     * ver [LidShape]). Pero el borde de un párpado cerrado es más recto que
+     * el de uno abierto: se acerca a la cuerda canto-a-canto. Sin esto, la
+     * banda dibuja sobre el ojo cerrado el arco pronunciado que tenía
+     * abierto, y por eso la forma no termina de coincidir.
+     *
+     * BAJAR si con el ojo cerrado la línea de la raíz sigue viéndose
+     * demasiado arqueada; SUBIR si queda demasiado recta y artíficial.
+     */
+    const val LASH_CLOSED_BAND_FLATTEN = 0.7f
+
     // ── Congelado de forma por parpadeo (ver OpennessTracker/LidShape) ──
     // Los dos valores están en apertura NORMALIZADA: 0 = cerrado
     // (OPENNESS_CLOSED_FRACTION de la base de la persona), 1 = abierto

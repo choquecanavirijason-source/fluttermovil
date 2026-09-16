@@ -152,6 +152,7 @@ class PoseInterpolator {
             lashLineCurve = c.lashLineCurve,
             eyeWidthPx = c.eyeWidthPx,
             lidShapeTrusted = c.lidShapeTrusted,
+            normalizedOpenness = c.normalizedOpenness,
         )
     }
 
@@ -166,6 +167,7 @@ class PoseInterpolator {
             lashLineCurve = b.lashLineCurve,
             eyeWidthPx = b.eyeWidthPx,
             lidShapeTrusted = b.lidShapeTrusted,
+            normalizedOpenness = b.normalizedOpenness,
         )
     }
 

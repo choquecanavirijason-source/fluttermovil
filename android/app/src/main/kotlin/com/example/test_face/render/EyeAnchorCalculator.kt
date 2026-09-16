@@ -111,6 +111,12 @@ object EyeAnchorCalculator {
          * [LidShape]. `null` (default) mide en vivo, que es el
          * comportamiento de siempre y el único camino con el ojo abierto. */
         heldShape: LidShape? = null,
+        /** Apertura NORMALIZADA de este ojo (`1` = abierto, `0` = cerrado,
+         * ver [OpennessTracker.normalizedOpenness]). Solo afecta a la
+         * ELEVACIÓN del ancla sobre el centroide del párpado — ver el
+         * cálculo de `lift` más abajo. `1` (default) = comportamiento de
+         * ojo abierto. */
+        openAmount: Float = 1f,
     ): EyeAnchor? {
         if (eye.upperLid.size < 2) return null
 
@@ -201,7 +207,28 @@ object EyeAnchorCalculator {
         val shiftedX = meanX + shiftSign * width * styleConfig.noseAvoidShift
 
         // El ancla sube (Y decrece) desde el centroide según heightOffset.
-        val anchorY = meanY - effectiveHeight * styleConfig.heightOffset
+        //
+        // ELEVACIÓN QUE SE APAGA AL CERRAR (fix 2026-09-11, "la pestaña
+        // queda flotando sobre el ojo cerrado"). `heightOffset` existe para
+        // llevar el ancla desde el CENTROIDE del arco del párpado superior
+        // hasta el borde donde nacen las fibras: con el ojo abierto el arco
+        // es alto y su centroide cae bastante por debajo de ese borde. Al
+        // cerrarse, el arco COLAPSA sobre el propio borde — centroide y
+        // borde pasan a ser el mismo punto — así que esa elevación deja de
+        // corresponder a nada. Mantenerla (que es lo que pasaba, porque
+        // `effectiveHeight` se reconstruye de la razón CONGELADA de ojo
+        // abierto) dejaba la pestaña a la altura del párpado abierto,
+        // despegada del ojo ya cerrado.
+        //
+        // Se interpola con la apertura, no con un booleano, para que
+        // acompañe al párpado en vez de saltar al cruzar un umbral. Lo que
+        // NO se toca es `effectiveHeight` en sí: sale por `heightPx` y
+        // encogerlo achicaría la pestaña al parpadear, que es justo lo que
+        // este producto no quiere.
+        val closedLift = RendererConfiguration.LASH_CLOSED_ANCHOR_LIFT_FRACTION
+        val lift = styleConfig.heightOffset *
+            (closedLift + (1f - closedLift) * openAmount.coerceIn(0f, 1f))
+        val anchorY = meanY - effectiveHeight * lift
 
         // CORRECCIÓN 2026-08-08 (LATERAL_LASH_OFFSET, ver
         // RendererConfiguration): reportado en dispositivo real que el

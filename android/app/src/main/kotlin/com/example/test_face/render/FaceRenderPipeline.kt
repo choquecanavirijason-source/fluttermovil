@@ -167,7 +167,18 @@ object FaceRenderPipeline {
         // toca el doblado de mesh, ver el plan) — solo posición/rotación/
         // escala cambian de fuente según el flag.
         val heldShape = if (lidShapeTrusted) null else lidShape?.shape
-        val anchor = EyeAnchorCalculator.compute(eyeLandmarks, imageWidth, styleConfig, heldShape)
+        // La apertura normalizada entra al ancla para que la ELEVACIÓN sobre
+        // el centroide del párpado se apague al cerrarse el ojo (si no, la
+        // pestaña queda flotando a la altura del ojo abierto — ver
+        // [EyeAnchorCalculator.compute]).
+        val openAmount = opennessTracker?.normalizedOpenness ?: 1f
+        val anchor = EyeAnchorCalculator.compute(
+            eyeLandmarks,
+            imageWidth,
+            styleConfig,
+            heldShape,
+            openAmount,
+        )
             ?: return null
         if (lidShapeTrusted) lidShape?.latchShape(anchor.measuredShape)
         // Ver MeshEyeTransformCalculator (fix 2026-09-01): el plano/orientación
@@ -246,6 +257,10 @@ object FaceRenderPipeline {
             lashLineCurve = curve,
             eyeWidthPx = anchor.widthPx,
             lidShapeTrusted = lidShapeTrusted,
+            // Sin tracker (no debería pasar en el flujo normal) se reporta el
+            // ojo abierto: es el criterio del resto del pipeline y deja la
+            // pestaña sin girar, que es el estado seguro.
+            normalizedOpenness = opennessTracker?.normalizedOpenness ?: 1f,
         )
     }
 

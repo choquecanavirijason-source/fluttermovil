@@ -77,6 +77,21 @@ class PoseFollower {
     var scaleY = 1f; private set
     var scaleZ = 1f; private set
 
+    /**
+     * Cuánto está cerrado el ojo, suavizado a tasa de pantalla: `0` =
+     * abierto, `1` = cerrado. Lo consume [LidDropRotation] para girar la
+     * pestaña hacia abajo con el párpado.
+     *
+     * Viaja por acá y no por [PoseInterpolator] a propósito: la apertura
+     * llega a la tasa de MediaPipe (~25 Hz), o sea como una escalera, y sin
+     * suavizar el giro se vería a saltos. Pero tampoco se puede EXTRAPOLAR
+     * como la pose — un parpadeo no tiene la inercia de una cabeza y
+     * predecirlo hacia adelante mandaría la pestaña a caer antes que el
+     * párpado. Suavizar sí, predecir no: por eso comparte el τ del seguidor
+     * pero no pasa por el interpolador.
+     */
+    var closedAmount = 0f; private set
+
     /** Descarta el estado: el próximo [advance] salta directo a la pose
      * objetivo en vez de acercarse a ella. Se llama al mostrar la pestaña
      * tras haber estado oculta y al perder el rostro — en los dos casos, ir
@@ -84,6 +99,7 @@ class PoseFollower {
     fun reset() {
         initialized = false
         lastNanos = 0L
+        closedAmount = 0f
     }
 
     /**
@@ -117,6 +133,8 @@ class PoseFollower {
         scaleY += (s.y - scaleY) * a
         scaleZ += (s.z - scaleZ) * a
 
+        closedAmount += (targetClosedAmount(target) - closedAmount) * a
+
         // Alineación antipodal antes de mezclar: `q` y `−q` son la misma
         // rotación, pero interpolar entre ellas pasa "por el otro lado" y da
         // un giro completo espurio (mismo cuidado que [EyeTrackingFilter] y
@@ -141,6 +159,12 @@ class PoseFollower {
         }
     }
 
+    private fun targetClosedAmount(target: EyeTransform): Float {
+        val openness = target.normalizedOpenness
+        if (!openness.isFinite()) return closedAmount
+        return (1f - openness).coerceIn(0f, 1f)
+    }
+
     private fun snapTo(target: EyeTransform, nowNanos: Long) {
         val t = target.position
         posX = t.x; posY = t.y; posZ = t.z
@@ -148,6 +172,7 @@ class PoseFollower {
         rotX = r.x; rotY = r.y; rotZ = r.z; rotW = r.w
         val s = target.scale
         scaleX = s.x; scaleY = s.y; scaleZ = s.z
+        closedAmount = targetClosedAmount(target)
         lastNanos = nowNanos
         initialized = true
     }

@@ -6,7 +6,12 @@ import 'env.dart';
 /// (`core/services/api_client.dart`) en vez del `dioProvider` más nuevo.
 class ApiConfig {
   static const String host = Env.host;
-  static const String apiPrefix = Env.kUseLocalBackend ? '' : '/api';
+
+  /// Fuente única de verdad: [Env.apiPrefix] (`/api` salvo override con
+  /// `--dart-define=API_PREFIX=`). Antes se derivaba de `kUseLocalBackend`
+  /// porque el FastAPI local no tenía el proxy que montaba `/api`; el
+  /// servidor nuevo expone las mismas rutas en local y en producción.
+  static const String apiPrefix = Env.apiPrefix;
 
   /// Rutas relativas al prefijo `/api` (sin duplicar).
   static const String docs = '$apiPrefix/docs';

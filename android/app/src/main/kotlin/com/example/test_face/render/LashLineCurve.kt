@@ -45,7 +45,20 @@ class LashLineCurve private constructor(
      * garantizar monotonía por tramo (sin overshoot) — ver
      * [Companion.monotoneTangents]. */
     private val nodeSlope: FloatArray,
+    /** Escala aplicada al desvío perpendicular — ver [withDeviationScale].
+     * `1` = la curva tal cual se ajustó a los landmarks. */
+    private val deviationScale: Float = 1f,
 ) {
+
+    /**
+     * Misma curva con el desvío multiplicado por [scale] (negativo =
+     * ESPEJADA respecto a la cuerda). Comparte los arrays de nodos, no los
+     * copia: se llama una vez por frame mientras el ojo se cierra — ver
+     * [LidDropRotation.bandCompensation].
+     */
+    fun withDeviationScale(scale: Float): LashLineCurve =
+        if (scale == deviationScale) this
+        else LashLineCurve(nodeX, nodeY, nodeSlope, scale)
     private val minLocalX: Float get() = nodeX[0]
     private val maxLocalX: Float get() = nodeX[nodeX.size - 1]
 
@@ -54,7 +67,9 @@ class LashLineCurve private constructor(
      * borde, con la pendiente decayendo suavemente a cero (mismo mecanismo
      * de falloff C1-continuo que ya tenía la versión de parábola — ver nota
      * de clase y [slopeAt]), para que nunca explote lejos de datos reales. */
-    fun deviationAt(localX: Float): Float {
+    fun deviationAt(localX: Float): Float = rawDeviationAt(localX) * deviationScale
+
+    private fun rawDeviationAt(localX: Float): Float {
         if (localX <= minLocalX || localX >= maxLocalX) {
             val edge = localX.coerceIn(minLocalX, maxLocalX)
             val edgeIdx = if (localX <= minLocalX) 0 else nodeX.size - 1
@@ -77,7 +92,9 @@ class LashLineCurve private constructor(
      * doblar (ver [LashMeshBender]). Dentro del rango, la derivada real del
      * segmento de Hermite que contiene a `localX`. Más allá, decae
      * suavemente a cero con un smoothstep sobre [falloffDistancePx]. */
-    fun slopeAt(localX: Float): Float {
+    fun slopeAt(localX: Float): Float = rawSlopeAt(localX) * deviationScale
+
+    private fun rawSlopeAt(localX: Float): Float {
         if (localX <= minLocalX || localX >= maxLocalX) {
             val edge = localX.coerceIn(minLocalX, maxLocalX)
             val edgeIdx = if (localX <= minLocalX) 0 else nodeX.size - 1

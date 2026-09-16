@@ -20,6 +20,8 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import kotlin.math.abs
+import kotlin.math.exp
 
 /**
  * Dueño de todo lo que ocurre dentro del [SceneView]: entorno/iluminación de
@@ -201,8 +203,26 @@ class LashRenderer(
         }
         slot.follower.advance(transform, nowNanos)
         val f = slot.follower
-        node.position = Float3(f.posX, f.posY, f.posZ)
-        node.quaternion = Quaternion(f.rotX, f.rotY, f.rotZ, f.rotW)
+
+        var position = Float3(f.posX, f.posY, f.posZ)
+        var rotation = Quaternion(f.rotX, f.rotY, f.rotZ, f.rotW)
+
+        // OJO CERRÁNDOSE: la pestaña gira hacia abajo con el párpado (ver
+        // [LidDropRotation]). Va acá, al final de todo, y no en el cálculo de
+        // la transformación, porque un parpadeo NO se puede extrapolar como
+        // se extrapola la pose de la cabeza.
+        LidDropRotation.apply(
+            closedAmount = f.closedAmount,
+            rootLocalY = slot.rootLocalY,
+            scaleY = f.scaleY,
+            q = rotation,
+        )?.let { drop ->
+            rotation = drop.rotation
+            position += drop.positionDelta
+        }
+
+        node.position = position
+        node.quaternion = rotation
         node.scale = Float3(f.scaleX, f.scaleY, f.scaleZ)
     }
 
@@ -533,13 +553,38 @@ class LashRenderer(
         val prior = if (slot.useBufferAAsTarget) slot.positionBufferB else slot.positionBufferA
         val restTangents = slot.restTangents
         val tangentTarget = slot.tangentBuffer
-        // `lidShapeTrusted == false` (ojo cerrándose): NO se vuelve a
-        // doblar. El doblado ocurre en espacio LOCAL del mesh y solo depende
-        // de la curva y del ancho del ojo, así que re-doblarlo con la curva
-        // congelada daría exactamente la malla que la GPU ya tiene — saltearlo
-        // es el mismo resultado sin recorrer los vértices ni subir buffers.
-        if (transform.lidShapeTrusted &&
-            curve != null && rawMesh != null && geometry != null && target != null &&
+        // ── Compensación de banda con el ojo cerrándose ─────────────────
+        // [LidDropRotation.apply] vuelca el NODO ENTERO, o sea que invierte
+        // también el arco de la línea donde nacen las fibras y la raíz deja
+        // de seguir el párpado. Doblar la malla con el desvío dividido por
+        // `cos θ` cancela justo esa parte: tras el giro la banda vuelve a
+        // apoyarse en el párpado y lo único volcado son las fibras.
+        //
+        // El cierre se suaviza acá con el mismo τ del seguidor porque el
+        // giro se aplica en el hilo de render CON esa inercia; compensar
+        // por el cierre crudo adelantaría la malla al giro y se vería un
+        // tirón en cada parpadeo.
+        val targetClosed = (1f - transform.normalizedOpenness).coerceIn(0f, 1f)
+        val closedDtNanos = nowNanos - slot.bendClosedNanos
+        val closedTau = RendererConfiguration.POSE_FOLLOW_TAU_NANOS.toFloat()
+        val closedAlpha = if (
+            slot.bendClosedNanos == 0L || closedDtNanos <= 0L || closedTau <= 0f ||
+            closedDtNanos > RendererConfiguration.POSE_FOLLOW_MAX_GAP_NANOS
+        ) 1f else 1f - exp(-closedDtNanos.toFloat() / closedTau)
+        slot.bendClosedAmount += (targetClosed - slot.bendClosedAmount) * closedAlpha
+        slot.bendClosedNanos = nowNanos
+        val bandScale = LidDropRotation.bandCompensation(slot.bendClosedAmount)
+        val bendCurve = curve?.withDeviationScale(bandScale)
+
+        // `lidShapeTrusted == false` (ojo cerrándose): con la forma congelada
+        // el doblado se saltea, porque ocurre en espacio LOCAL del mesh y
+        // solo depende de la curva y del ancho del ojo — re-doblarlo con la
+        // curva congelada daría exactamente la malla que la GPU ya tiene.
+        // La excepción es que haya cambiado [bandScale]: ahí la curva
+        // efectiva SÍ es otra y hay que rehacer el doblado.
+        val bandScaleChanged = abs(bandScale - slot.lastBandScale) > 1e-3f
+        if ((transform.lidShapeTrusted || bandScaleChanged) &&
+            bendCurve != null && rawMesh != null && geometry != null && target != null &&
             restTangents != null && tangentTarget != null && !slot.bendPending
         ) {
             val bent = LashMeshBender.bendInPlace(
@@ -549,7 +594,7 @@ class LashRenderer(
                 restTangents = restTangents,
                 tangentTarget = tangentTarget,
                 smoothing = RendererConfiguration.LASH_BEND_SMOOTHING,
-                curve = curve,
+                curve = bendCurve,
                 styleConfig = currentStyleConfig,
                 eyeWidthPx = transform.eyeWidthPx,
             )
@@ -557,6 +602,7 @@ class LashRenderer(
                 target.rewind()
                 tangentTarget.rewind()
                 slot.hasBentBefore = true
+                slot.lastBandScale = bandScale
                 slot.useBufferAAsTarget = !slot.useBufferAAsTarget
                 slot.bendPending = true
                 val vertexCount = rawMesh.vertices.size

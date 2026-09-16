@@ -63,6 +63,24 @@ class OpennessTracker {
     private var shapeTrusted = true
 
     /**
+     * Apertura NORMALIZADA del último [update]: `0` = cerrado, `1` =
+     * completamente abierto, relativa a la línea base de ESTA persona.
+     *
+     * Ya se calculaba adentro de [update] para decidir la histéresis, pero se
+     * descartaba: lo único que salía de acá era el booleano. Ahora también se
+     * publica, porque [LidDropRotation] necesita cuánto está cerrado el ojo
+     * como valor CONTINUO — un booleano haría que la pestaña cayera de golpe
+     * en el frame en que se cruza el umbral, en vez de acompañar al párpado.
+     *
+     * Vale `1f` durante el calentamiento y mientras no haya línea base
+     * confiable: sin base, el criterio del resto de la clase es tratar el ojo
+     * como abierto, y girar la pestaña por una medición en la que no se
+     * confía sería peor que no girarla.
+     */
+    var normalizedOpenness = 1f
+        private set
+
+    /**
      * Actualiza la línea base con [ratio] (la apertura de ESTE frame, ya
      * corregida por escorzo — ver
      * [FaceRenderPipeline.foreshorteningCorrectedOpenness]) y devuelve si se
@@ -75,6 +93,8 @@ class OpennessTracker {
     fun update(ratio: Float): Boolean {
         if (!ratio.isFinite() || ratio <= 0f) {
             shapeTrusted = false
+            // Medición inservible: no se toca la apertura publicada. Dejarla
+            // caer a 0 haría que la pestaña se desplome por un frame malo.
             return false
         }
 
@@ -88,6 +108,7 @@ class OpennessTracker {
 
         if (samples < RendererConfiguration.OPENNESS_WARMUP_SAMPLES || baseline <= 1e-4f) {
             shapeTrusted = true
+            normalizedOpenness = 1f
             return true
         }
 
@@ -98,6 +119,7 @@ class OpennessTracker {
         // da 2.33 antes del clamp), así que sólo baja de 1 cuando el ojo
         // realmente se está cerrando.
         val t = if (open - closed <= 1e-6f) 1f else ((ratio - closed) / (open - closed)).coerceIn(0f, 1f)
+        normalizedOpenness = t
 
         // Histéresis: confiando, hace falta caer por debajo del umbral BAJO
         // para dejar de confiar; sin confiar, hace falta superar el ALTO.
@@ -127,5 +149,6 @@ class OpennessTracker {
         baseline = 0f
         samples = 0
         shapeTrusted = true
+        normalizedOpenness = 1f
     }
 }

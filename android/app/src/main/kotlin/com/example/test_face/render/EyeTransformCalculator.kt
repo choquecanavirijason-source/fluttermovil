@@ -37,6 +37,18 @@ data class EyeTransform(
      * [EyeTrackingFilter]/[PoseInterpolator], igual que [opennessRatio]: no
      * se suaviza ni se interpola, es un booleano con su propia histéresis. */
     val lidShapeTrusted: Boolean = true,
+    /** Apertura NORMALIZADA del ojo en este frame: `0` = cerrado, `1` =
+     * abierto, relativa a la línea base de la persona (ver
+     * [OpennessTracker.normalizedOpenness]). Distinta de [opennessRatio], que
+     * es el alto/ancho CRUDO y depende de la forma del ojo.
+     *
+     * La consume [LidDropRotation] para girar la pestaña hacia abajo a medida
+     * que el párpado baja. Se COPIA por todo el pipeline sin filtrar ni
+     * interpolar, igual que [opennessRatio] y [lidShapeTrusted]: el suavizado
+     * que necesita es el de [PoseFollower.closedAmount], a tasa de pantalla, y
+     * la extrapolación de [PoseInterpolator] sería directamente nociva acá
+     * (un parpadeo no se predice). */
+    val normalizedOpenness: Float = 1f,
 )
 
 /**

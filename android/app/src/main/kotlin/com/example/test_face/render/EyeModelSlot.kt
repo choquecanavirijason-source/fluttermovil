@@ -135,6 +135,26 @@ class EyeModelSlot {
      * resultado. */
     var hasBentBefore = false
 
+    /**
+     * Cierre del ojo (`0` abierto, `1` cerrado) suavizado a la tasa de
+     * MediaPipe con el mismo τ que usa [PoseFollower] para el giro de
+     * caída. Lo consume el doblado de malla
+     * ([LidDropRotation.bandCompensation]), que corre en ESTE hilo y no
+     * puede leer el `closedAmount` del seguidor, que vive en el de render.
+     * Sin el suavizado la banda se compensaría por un giro que todavía no
+     * se aplicó y la malla daría un tirón en cada parpadeo.
+     */
+    var bendClosedAmount = 0f
+
+    /** `System.nanoTime()` del último [bendClosedAmount]; `0` = sin muestra
+     * previa (el próximo valor se toma tal cual, sin suavizar). */
+    var bendClosedNanos = 0L
+
+    /** Último factor de compensación con el que se dobló la malla. Mientras
+     * no cambie (y con la forma congelada), re-doblar daría exactamente la
+     * misma malla y se saltea. */
+    var lastBandScale = 1f
+
     fun reset() {
         node = null
         path = null
@@ -156,6 +176,9 @@ class EyeModelSlot {
         tangentBuffer = null
         useBufferAAsTarget = true
         hasBentBefore = false
+        bendClosedAmount = 0f
+        bendClosedNanos = 0L
+        lastBandScale = 1f
         visibleRequested = null
     }
 }

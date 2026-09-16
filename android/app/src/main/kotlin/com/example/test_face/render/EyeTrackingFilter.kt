@@ -114,6 +114,7 @@ class EyeTrackingFilter {
             lashLineCurve = target.lashLineCurve,
             eyeWidthPx = target.eyeWidthPx,
             lidShapeTrusted = target.lidShapeTrusted,
+            normalizedOpenness = target.normalizedOpenness,
         )
     }
 

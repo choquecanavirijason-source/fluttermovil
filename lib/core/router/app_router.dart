@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../config/env.dart';
 import '../../features/auth/presentation/providers/auth_state_provider.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/splash_screen.dart';
@@ -42,15 +43,30 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // trabada en la pantalla verde para siempre.
       if (path == AppRoutes.splash) {
         if (status == AuthStatus.authenticated) return AppRoutes.shell;
-        if (status == AuthStatus.unauthenticated) return AppRoutes.login;
+        // Con el bypass DEV el splash se queda mostrándose mientras reintenta
+        // el auto-login; sin él, cae a la pantalla de login.
+        if (status == AuthStatus.unauthenticated) {
+          return Env.kDevSkipLogin ? null : AppRoutes.login;
+        }
         return null;
+      }
+
+      // Bypass de login en DEV (Env.kDevSkipLogin): /login nunca se muestra;
+      // todo lo que iría ahí pasa por el splash, que abre sesión de admin
+      // (real si el backend responde, local si no) y sigue al shell.
+      final signedOutTarget =
+          Env.kDevSkipLogin ? AppRoutes.splash : AppRoutes.login;
+      if (Env.kDevSkipLogin && path == AppRoutes.login) {
+        return status == AuthStatus.authenticated
+            ? AppRoutes.shell
+            : AppRoutes.splash;
       }
 
       final isAuthRoute = path == AppRoutes.login;
 
       // Si no está autenticado y no está en login, redirige a login.
       if (status != AuthStatus.authenticated && !isAuthRoute) {
-        return AppRoutes.login;
+        return signedOutTarget;
       }
 
       // Si ya está autenticado y está en login, mandarlo al shell principal.
