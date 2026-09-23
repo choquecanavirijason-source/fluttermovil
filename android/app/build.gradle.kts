@@ -62,6 +62,21 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+
+            // R8 rompe MediaPipe en release. Sus mensajes protobuf se
+            // resuelven por reflection y la ofuscación los deja
+            // irreconocibles: al abrir la cámara saltaba
+            // `PlatformException(TRACKING_ERROR, Field platform_ for r2.a
+            // not found)` — ese `r2.a` ES el nombre ya ofuscado, por eso
+            // solo ocurría en release y nunca en debug. Filament/SceneView
+            // y el puente JNI corren el mismo riesgo.
+            //
+            // Se desactiva en vez de escribir reglas `-keep`: el APK pesa
+            // ~140 MB por los modelos .task/.glb, así que lo que R8 podía
+            // ahorrar en bytecode es marginal frente al riesgo de que
+            // falte un keep y vuelva a romperse solo en producción.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

@@ -77,6 +77,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   /// Evita doble atrás mientras se detiene una grabación en curso.
   bool _exitInProgress = false;
 
+
   @override
   void initState() {
     super.initState();
@@ -426,6 +427,12 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     if (_isRecording) {
       unawaited(_service.stopRecording());
     }
+    // Esta pantalla arranca el tracking en [initState], así que también
+    // tiene que apagarlo: sin esto la cámara y MediaPipe quedaban corriendo
+    // al salir hacia cualquier pantalla que no sea el probador. Volver al
+    // probador no se rompe, porque este lo reinicia en
+    // `_resumeEyePreviewAfterAssistant`.
+    unawaited(_service.stopTracking());
     super.dispose();
   }
 
@@ -824,6 +831,9 @@ Widget _assistantFloatingBar() {
           // 3D encima del rostro en esta pantalla.
           child: const HybridCameraPreview(),
         ),
+        // Sin mapeo sobre la cámara en vivo: la guía de la operaria es la
+        // FOTO de arriba, que ya lo trae horneado. Acá encima taparía el
+        // trabajo real sin aportar nada.
         if (_isRecording)
           Positioned(
             top: 8,

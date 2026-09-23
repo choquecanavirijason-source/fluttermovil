@@ -23,7 +23,7 @@ class Env {
   //  5. Guarda y haz stop + `flutter run` de nuevo (no hot-restart: esta
   //     pantalla usa cámara nativa y el PlatformView crashea).
   // Antes de compilar el APK para el salón, vuelve a ponerlo en false.
-  static const bool kUseLocalBackend = true;
+  static const bool kUseLocalBackend = false;
 
   // ── Overrides sin tocar código ─────────────────────────────────────────
   // Todos estos valores se pueden cambiar al lanzar la app, útil cuando el
@@ -52,7 +52,7 @@ class Env {
   /// Host de producción (sin `/api`, sin barra final).
   static const String _remoteHost = String.fromEnvironment(
     'API_REMOTE_HOST',
-    defaultValue: 'http://34.55.150.142',
+    defaultValue: 'http://37.60.247.213',
   );
 
   /// Host raíz del backend (sin `/api`). Usado para imágenes `/media/...`
@@ -89,7 +89,7 @@ class Env {
   //
   // Ponlo en false antes de compilar el APK para el salón: deja el usuario y
   // la contraseña en texto plano dentro del binario.
-  static const bool kDevAutoLogin = true;
+  static const bool kDevAutoLogin = false;
   static const String kDevAutoLoginUsername =
       String.fromEnvironment('DEV_USER', defaultValue: 'admin');
   static const String kDevAutoLoginPassword =
@@ -101,7 +101,7 @@ class Env {
   // que piden datos a la API mostrarán su propio error/vacío, pero nunca
   // rebota al login. Solo para desarrollo — ponlo en false junto con
   // [kDevAutoLogin] antes de compilar el APK del salón.
-  static const bool kDevOfflineSessionFallback = true;
+  static const bool kDevOfflineSessionFallback = false;
 
   /// True cuando la app debe comportarse como "siempre logueada": nunca
   /// navega al login, ni al arrancar ni tras un 401.

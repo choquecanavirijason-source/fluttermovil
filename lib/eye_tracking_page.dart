@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data' show Uint8List;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -168,6 +169,34 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
+  /// true mientras dura el asistente de encuadre (guía del botón robot):
+  /// el modelo 3D de pestaña se oculta para no tapar el párpado justo
+  /// cuando hace falta ver si el ojo ya está cerrado.
+  bool _hidingLashesForAlignmentGuide = false;
+
+  /// Igual mecanismo que [_setHidingCameraForSaveSheet] pero para el flujo
+  /// de encuadre del asistente IA. Idempotente: si ya está en el estado
+  /// pedido, no hace nada.
+  Future<void> _setHidingLashesForAlignmentGuide(bool hide) async {
+    if (!mounted || _hidingLashesForAlignmentGuide == hide) return;
+    _hidingLashesForAlignmentGuide = hide;
+    try {
+      if (hide) {
+        await _service.loadEyeModels(leftPath: null, rightPath: null);
+      } else {
+        await _service.loadEyeModels(
+          leftPath: _leftModelPath,
+          rightPath: _rightModelPath,
+        );
+      }
+    } catch (e) {
+      debugPrint(
+        '[EyeTracking] no se pudo ${hide ? 'ocultar' : 'restaurar'} '
+        'el modelo 3D para el asistente de encuadre: $e',
+      );
+    }
+  }
+
   int _selectedFilter = 0;
   int _selectedLashIndex = 0;
   int _selectedDesignIndex = 2;
@@ -191,6 +220,35 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   String? _leftModelPath;
   String? _rightModelPath;
 
+  /// `styleId` del diseño activo (ver [_lashStyleIdFor]) — lo usa
+  /// `LashMappingPainter` para dibujar el patrón de mapeo correcto (Cat Eye
+  /// tiene una secuencia de números y largos distinta a un abanico
+  /// genérico). Arranca en `'cateye'` porque el modelo por defecto
+  /// (`defaultLeftEyeModelAsset`/`defaultRightEyeModelAsset`, ver
+  /// [_resolveEyeModelPaths]) es literalmente el diseño Cat Eye.
+  String _activeLashStyleId = 'cateye';
+
+  /// Espejo local de la cámara activa en el tracking — la fuente de verdad
+  /// es Kotlin (`CameraXManager.lensFacing`), que sobrevive a la recreación
+  /// de esta pantalla y también lo cambia el botón del asistente de trabajo.
+  /// Por eso se CONSULTA (ver [_syncCameraFacing]) en vez de llevar una
+  /// copia propia: alternarlo a ciegas se desincronizaba y la foto final
+  /// salía con la cámara equivocada (la operaria apunta a la clienta, no es
+  /// una selfie — ver [_finishWorkAssistantOpen]).
+  bool _usingFrontCamera = true;
+
+  Future<void> _syncCameraFacing() async {
+    final isFront = await _service.isUsingFrontCamera();
+    if (!mounted || isFront == null || isFront == _usingFrontCamera) return;
+    setState(() => _usingFrontCamera = isFront);
+  }
+
+  Future<void> _onSwitchCamera() async {
+    final isFront = await _service.switchCamera();
+    if (!mounted || isFront == null) return;
+    setState(() => _usingFrontCamera = isFront);
+  }
+
   CatalogItem? _selectedEyeType;
   List<CatalogItem>? _eyeTypes;
 
@@ -203,14 +261,28 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// ubique sus ojos en el marco antes de capturar).
   bool _alignmentGuideActive = false;
 
-  /// true cuando ambos ojos están dentro de la zona objetivo (marcadores en verde).
+  /// true cuando se cumplen LAS DOS condiciones (rostro encuadrado + ojos
+  /// cerrados) — dispara la captura tras `_alignmentHoldDuration`.
   bool _eyesAligned = false;
 
-  /// Momento en que se detectó alineación continua (para exigir estabilidad breve).
-  DateTime? _alignedSince;
+  /// true cuando el óvalo de `faceContour` está centrado y del tamaño
+  /// esperado dentro de la guía fija (independiente de si los ojos ya están
+  /// cerrados).
+  bool _faceFramed = false;
 
-  /// Duración mínima que los ojos deben permanecer alineados antes de disparar la captura.
-  static const Duration _alignmentHoldDuration = Duration(milliseconds: 900);
+  /// true cuando ambos ojos están cerrados (necesario para mapear la línea
+  /// de pestañas — con el ojo abierto el párpado tapa la base real).
+  bool _eyesClosedOk = false;
+
+  /// true desde el instante en que se cierra la guía de alineación hasta que
+  /// termina TODO el pipeline de captura (restaurar pestaña 3D, capturar
+  /// overlay, detener tracking, abrir cámara nueva y tomar la foto real —
+  /// 1-2s en total). Antes de esto la pantalla quedaba "normal" en ese
+  /// tramo sin ningún aviso, así que quien prueba sola sin nadie que le
+  /// sostenga el gesto abría los ojos pensando que ya había terminado,
+  /// justo antes de que la cámara real disparase. Ver overlay condicionado
+  /// a esta bandera en el `build`.
+  bool _capturingPhoto = false;
 
   /// Diseños del catálogo mostrados actualmente en el carrusel inferior
   /// ("Compatible" = filtrados en vivo por forma de ojo, "Explorar" = todo
@@ -248,7 +320,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // antes) filtraba un motor gráfico por cada diseño tocado — con el
       // tiempo/varios cambios de diseño terminaba tronando la app.
       await _service.loadEyeModels(leftPath: path, rightPath: path);
-      await _service.setLashStyle(_lashStyleIdFor(design.name));
+      final styleId = _lashStyleIdFor(design.name);
+      await _service.setLashStyle(styleId);
+      if (mounted) setState(() => _activeLashStyleId = styleId);
     } catch (e) {
       debugPrint('No se pudo cargar el modelo del diseño ${design.id}: $e');
       if (mounted) {
@@ -274,7 +348,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _leftModelPath = leftPath;
       _rightModelPath = rightPath;
       await _service.loadEyeModels(leftPath: leftPath, rightPath: rightPath);
-      await _service.setLashStyle(_lashStyleIdFor(preset.name));
+      final styleId = _lashStyleIdFor(preset.name);
+      await _service.setLashStyle(styleId);
+      if (mounted) setState(() => _activeLashStyleId = styleId);
     } catch (e) {
       debugPrint('No se pudo cargar el preset local ${preset.name}: $e');
       if (mounted) {
@@ -375,8 +451,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// limita, salvo que el estado de detección de rostro recién cambie.
   void _handleTrackingFrame(TrackingFrame frame) {
     if (!mounted) return;
-    final newStatus = frame.faceDetected ? 'Rostro detectado' : 'Sin rostro';
-    final statusChanged = newStatus != _status;
+    // El badge "Rostro detectado"/"Sin rostro" se quitó: era redundante con
+    // la guía de encuadre (ver `EyePositionGuidePainter`) y quedaba
+    // desactualizado/engañoso fuera del flujo del asistente. `_status` ahora
+    // solo lo tocan los mensajes de ciclo de vida (permiso, error, "iniciando
+    // cámara…") — la llegada del primer frame oculta el badge (ver
+    // `_frame == null` en el `build`).
+    final isFirstFrame = _frame == null;
     _frame = frame;
     // Repintado de los overlays: independiente del throttle de `setState`
     // (ver [_frameNotifier]) — aquí no hay límite, cada frame que llega se
@@ -387,13 +468,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
     final now = DateTime.now();
     final last = _lastFrameUiUpdate;
-    if (!statusChanged &&
+    if (!isFirstFrame &&
         last != null &&
         now.difference(last) < const Duration(milliseconds: 150)) {
       return;
     }
     _lastFrameUiUpdate = now;
-    setState(() => _status = newStatus);
+    setState(() {});
   }
 
   Future<void> _rebindPreview() async {
@@ -451,6 +532,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
+    unawaited(_service.setInvertedFaceMode(false));
     _service.stopTracking();
     _frameNotifier.dispose();
     ref.read(sessionClientProvider.notifier).state = null;
@@ -562,20 +644,53 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       await Future<void>.delayed(const Duration(milliseconds: 80));
       if (!mounted) return;
 
-      // 2. Captura el overlay (pestañas + líneas de medición) ANTES de detener MediaPipe.
+      // 2. Captura el overlay SOLO con el mapeo — el modelo 3D de pestaña
+      // sigue oculto desde [_startAlignmentGuide] y NO se restaura antes de
+      // capturar: en este flujo la referencia es el mapeo sobre la pestaña
+      // natural de la clienta, la pestaña virtual es otra cosa y taparía
+      // justo lo que hay que ver. Se restaura al final, en el `finally`.
       final overlayBytes = await _photoPipeline.captureOverlay(context);
 
-      // 3. Detiene MediaPipe y espera que libere el sensor.
-      await _service.stopTracking();
-      await Future<void>.delayed(const Duration(milliseconds: 450));
+      // Qué cámara está usando el tracking AHORA, preguntándoselo a Kotlin
+      // (ver [_syncCameraFacing]). Se consulta acá, sobre el final, para que
+      // la foto salga con la misma cámara aunque el estado se haya cambiado
+      // desde otra pantalla o esta se haya recreado en el medio.
+      await _syncCameraFacing();
       if (!mounted) return;
 
-      // 4. Toma foto real con la cámara Flutter y compone con el overlay.
-      final finalPhoto = await _photoPipeline.captureAndComposite(
-        context,
-        overlayBytes,
-      );
+      // 3. Foto por la MISMA sesión de cámara, sin detener el tracking: sale
+      // a los ~200 ms del overlay en vez de 1-2 s, que es lo que hacía que
+      // con el pulso de la mano el mapeo quedara corrido respecto del ojo.
+      final nativeShot = await _service.takePhoto();
       if (!mounted) return;
+
+      Uint8List? finalPhoto;
+      if (nativeShot != null) {
+        finalPhoto = EyeTrackingPhotoPipeline.compositeAndCrop(
+          nativeShot,
+          overlayBytes,
+          mirror: _usingFrontCamera,
+        );
+      } else {
+        // Respaldo: si el caso de uso de foto no estaba disponible, se cae
+        // al camino viejo (segunda sesión de cámara), que funciona igual
+        // pero con el desfase de siempre.
+        debugPrint('[EyeTracking] takePhoto nativo no disponible — usando el '
+            'camino de respaldo con el plugin camera');
+        await _service.stopTracking();
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+        if (!mounted) return;
+        finalPhoto = await _photoPipeline.captureAndComposite(
+          context,
+          overlayBytes,
+          preferFrontCamera: _usingFrontCamera,
+        );
+      }
+      if (!mounted) return;
+      // Foto real ya tomada — ya no importa si abre los ojos, apaga el
+      // aviso acá y no en el `finally` (que sigue corriendo durante la
+      // navegación a `/work-assistant`).
+      setState(() => _capturingPhoto = false);
 
       await context.push(
         '/work-assistant',
@@ -585,7 +700,16 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
       await _resumeEyePreviewAfterAssistant();
     } finally {
+      // Red de seguridad: si algo falló ANTES del paso 4 (foto real), el
+      // aviso quedaría colgado en pantalla para siempre sin esto.
+      _capturingPhoto = false;
       _workAssistantOpening = false;
+      // Recién acá vuelve la pestaña virtual: durante TODO el flujo del
+      // robot (guía + captura) se muestra solo el mapeo.
+      unawaited(_setHidingLashesForAlignmentGuide(false));
+      // Y se apaga el modo clienta acostada, que fuera del asistente
+      // descoloca el modelo 3D.
+      unawaited(_service.setInvertedFaceMode(false));
       if (mounted) setState(() {});
     }
   }
@@ -606,6 +730,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       final overlayBytes = await _photoPipeline.captureOverlay(context);
       final analysis = EyeShapeAnalyzer.analyze(_frame);
 
+      await _syncCameraFacing();
+      if (!mounted) return;
+
       await _service.stopTracking();
       await Future<void>.delayed(const Duration(milliseconds: 450));
       if (!mounted) return;
@@ -613,6 +740,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       final finalPhoto = await _photoPipeline.captureAndComposite(
         context,
         overlayBytes,
+        preferFrontCamera: _usingFrontCamera,
       );
       if (!mounted) return;
 
@@ -632,36 +760,46 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
-  void _startAlignmentGuide() {
-    if (_workAssistantOpening || _alignmentGuideActive) return;
+  /// Enciende o apaga el asistente de encuadre (botón del robot).
+  ///
+  /// NO dispara la captura solo: el óvalo y el mapeo quedan en pantalla como
+  /// referencia y la foto la saca la operaria con el botón de captura (ver
+  /// [_beginWorkAssistantFlow]). Auto-disparar obligaba a sostener los ojos
+  /// cerrados durante todo el procesamiento posterior, y además la foto
+  /// salía de un instante distinto al que se estaba viendo.
+  void _toggleAlignmentGuide() {
+    if (_workAssistantOpening) return;
+    final activating = !_alignmentGuideActive;
     setState(() {
-      _alignmentGuideActive = true;
+      _alignmentGuideActive = activating;
+      _showMapping = activating;
       _eyesAligned = false;
-      _alignedSince = null;
+      _faceFramed = false;
+      _eyesClosedOk = false;
     });
+    // El modelo 3D de pestaña taparía el párpado justo cuando hace falta ver
+    // la pestaña natural y el mapeo encima.
+    unawaited(_setHidingLashesForAlignmentGuide(activating));
+    // Modo clienta acostada: el rostro llega volcado y el análisis se rota
+    // para que MediaPipe lo vea derecho. Va SOLO acá — fuera del asistente
+    // rompe la ubicación del modelo 3D, que lee los landmarks sin desrotar
+    // (ver [NativeEyeTrackingService.setInvertedFaceMode]).
+    unawaited(_service.setInvertedFaceMode(activating));
   }
 
   void _evaluateAlignment(TrackingFrame frame) {
     if (!mounted || !_alignmentGuideActive) return;
     final size = MediaQuery.sizeOf(context);
-    final aligned = EyeAlignmentGuide.isAligned(frame, size);
-    final now = DateTime.now();
+    final status = EyeAlignmentGuide.evaluate(frame, size);
 
-    if (aligned) {
-      _alignedSince ??= now;
-      if (now.difference(_alignedSince!) >= _alignmentHoldDuration) {
-        setState(() {
-          _alignmentGuideActive = false;
-          _eyesAligned = false;
-          _alignedSince = null;
-        });
-        _beginWorkAssistantFlow();
-        return;
-      }
-      if (!_eyesAligned) setState(() => _eyesAligned = true);
-    } else {
-      _alignedSince = null;
-      if (_eyesAligned) setState(() => _eyesAligned = false);
+    if (_eyesAligned != status.ready ||
+        _faceFramed != status.faceFramed ||
+        _eyesClosedOk != status.eyesClosed) {
+      setState(() {
+        _eyesAligned = status.ready;
+        _faceFramed = status.faceFramed;
+        _eyesClosedOk = status.eyesClosed;
+      });
     }
   }
 
@@ -688,6 +826,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     setState(() => _selectedEyeType = match);
   }
 
+  /// Dispara la captura. Lo llama el botón de captura de la guía — no se
+  /// activa solo (ver [_toggleAlignmentGuide]).
   void _beginWorkAssistantFlow() {
     if (!Platform.isAndroid) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -698,6 +838,14 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       return;
     }
     if (_workAssistantOpening) return;
+
+    // Cierra la guía y muestra el aviso de "tomando la foto" mientras corre
+    // el pipeline (ver [_capturingPhoto]); `_showMapping` sigue activo
+    // porque el mapeo tiene que salir en la captura.
+    setState(() {
+      _alignmentGuideActive = false;
+      _capturingPhoto = true;
+    });
     unawaited(_finishWorkAssistantOpen());
   }
 
@@ -920,7 +1068,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       Positioned.fill(
                         child: CustomPaint(
                           isComplex: true,
-                          painter: LashMappingPainter(frames: _frameNotifier),
+                          painter: LashMappingPainter(
+                            frames: _frameNotifier,
+                            styleId: _activeLashStyleId,
+                          ),
                         ),
                       ),
                     // DEBUG: puntos de landmarks del párpado (verde =
@@ -943,10 +1094,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             ),
             ...EyeTrackingOverlay.buildSiblings(
               onBack: () => _goHome(context),
-              status: _status,
+              status: _frame == null ? _status : null,
               title: _selectedEyeType?.name ?? '',
               onEyeTypeTap: _showEyeTypeSheet,
-              onSwitchCamera: () => _service.switchCamera(),
+              onSwitchCamera: () => unawaited(_onSwitchCamera()),
               onFlashTap: () {},
               onDesignTap: () => _onCategoryTap('design'),
               onTechniqueTap: () => _onCategoryTap('tech'),
@@ -954,7 +1105,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               onThicknessTap: () => _onCategoryTap('thickness'),
               activeCategory: _activeCategory,
             ),
-            EyeTrackingWorkAssistantButton(onTap: _startAlignmentGuide),
+            EyeTrackingWorkAssistantButton(onTap: _toggleAlignmentGuide),
 
             EyeTrackingFilterRow(
               selectedFilter: _selectedFilter,
@@ -1069,7 +1220,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     children: [
                       CustomPaint(
                         painter: EyePositionGuidePainter(
-                          aligned: _eyesAligned,
+                          faceFramed: _faceFramed,
+                          eyesClosed: _eyesClosedOk,
                         ),
                       ),
                       Positioned(
@@ -1090,22 +1242,131 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                                   : const Color(0xDD0D5C41),
                               borderRadius: BorderRadius.circular(16),
                             ),
-                            child: Text(
-                              _eyesAligned
-                                  ? '¡Perfecto! Quédate así…'
-                                  : 'Ubica tus ojos dentro del marco',
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _eyesAligned
+                                      ? Icons.check_circle
+                                      : (!_faceFramed
+                                            ? Icons.crop_free
+                                            : Icons.remove_red_eye_outlined),
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 10),
+                                Flexible(
+                                  child: Text(
+                                    _eyesAligned
+                                        ? 'Listo para capturar'
+                                        : (!_faceFramed
+                                              ? 'Encuadra el rostro dentro de la guía'
+                                              : 'Ojos cerrados para ver la línea de pestañas'),
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                      height: 1.3,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Botón de captura: FUERA del `IgnorePointer` de la guía, que
+            // deja pasar los toques. La captura es manual a propósito —
+            // ver [_toggleAlignmentGuide].
+            if (_alignmentGuideActive && !_capturingPhoto)
+              Positioned(
+                bottom: 130,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: GestureDetector(
+                    onTap: _beginWorkAssistantFlow,
+                    child: Container(
+                      width: 74,
+                      height: 74,
+                      decoration: BoxDecoration(
+                        color: _eyesAligned
+                            ? const Color(0xFF2ECC71)
+                            : Colors.white,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 4),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black45, blurRadius: 10),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.camera_alt_rounded,
+                        color: _eyesAligned
+                            ? Colors.white
+                            : AppColors.brandPrimary,
+                        size: 32,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // ── Procesando captura: la guía de arriba ya desapareció acá,
+            // pero la foto REAL todavía no se tomó — restaurar la pestaña
+            // 3D, capturar el overlay, detener MediaPipe y abrir una cámara
+            // nueva para la foto real toma 1-2s. Sin este aviso la pantalla
+            // se ve "normal" y da la impresión de que ya terminó, así que
+            // se abren los ojos antes de que dispare la foto de verdad.
+            if (_capturingPhoto)
+              Positioned.fill(
+                child: AbsorbPointer(
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    child: Center(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 40),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 20,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xDD0D5C41),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
+                              ),
+                            ),
+                            SizedBox(height: 14),
+                            Text(
+                              'Tomando la foto…\nMantén los ojos cerrados',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 16,
                                 fontWeight: FontWeight.w500,
                                 height: 1.3,
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),

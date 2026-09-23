@@ -46,8 +46,60 @@ class NativeEyeTrackingService {
   Future<void> stopTracking() async =>
       _methodChannel.invokeMethod('stopTracking');
 
-  Future<void> switchCamera() async =>
-      _methodChannel.invokeMethod('switchCamera');
+  /// Alterna entre cámara frontal y trasera. Devuelve `true` si quedó en la
+  /// frontal — Kotlin (`CameraXManager.lensFacing`) es la única fuente de
+  /// verdad de este estado; Flutter no debe llevar su propia copia porque el
+  /// manager nativo sobrevive a la recreación de las pantallas y hay dos que
+  /// ofrecen cambiar de cámara. `null` si el manager todavía no existe.
+  Future<bool?> switchCamera() async =>
+      _methodChannel.invokeMethod<bool>('switchCamera');
+
+  /// Modo "clienta acostada": el frame se rota 180° antes del análisis, así
+  /// MediaPipe ve una cara derecha y la ajusta bien.
+  ///
+  /// Se activa SOLO dentro del asistente de mapeo, por dos motivos. Uno: con
+  /// el análisis rotado el modelo 3D de pestañas se ubica mal, porque lee
+  /// los landmarks crudos por otro camino y no recibe la corrección que sí
+  /// recibe el overlay de Flutter (en el asistente no molesta, ahí el modelo
+  /// está oculto). Dos: fuera del asistente el rostro viene derecho, y
+  /// rotarlo lo volvería indetectable.
+  Future<void> setInvertedFaceMode(bool enabled) async {
+    try {
+      await _methodChannel.invokeMethod<void>('setInvertedFaceMode', {
+        'enabled': enabled,
+      });
+    } catch (e) {
+      debugPrint('[EyeTracking] setInvertedFaceMode error: $e');
+    }
+  }
+
+  /// Saca una foto (JPEG) por la MISMA sesión de cámara que está
+  /// analizando, sin detener el tracking ni abrir otra cámara.
+  ///
+  /// Es lo que permite que la foto del asistente salga casi del mismo
+  /// instante que el mapeo dibujado encima: abrir una segunda sesión metía
+  /// 1-2 s en el medio y, con el pulso de la mano, el mapeo quedaba corrido
+  /// respecto del ojo. Solo funciona con [setInvertedFaceMode] activo, que
+  /// es cuando se enlaza el caso de uso de foto. `null` si no está
+  /// disponible — ahí el llamador debe caer al camino viejo.
+  Future<Uint8List?> takePhoto() async {
+    try {
+      return await _methodChannel.invokeMethod<Uint8List>('takePhoto');
+    } catch (e) {
+      debugPrint('[EyeTracking] takePhoto error: $e');
+      return null;
+    }
+  }
+
+  /// Consulta a Kotlin qué cámara está activa ahora mismo (ver
+  /// [switchCamera]). `null` si el manager nativo todavía no está creado.
+  Future<bool?> isUsingFrontCamera() async {
+    try {
+      return await _methodChannel.invokeMethod<bool>('isUsingFrontCamera');
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Fuerza un nuevo bind de CameraX al [PreviewView] (útil al volver del plugin `camera`).
   Future<void> refreshPreviewBind() async {

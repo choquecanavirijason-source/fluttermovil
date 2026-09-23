@@ -55,8 +55,27 @@ class EyeTrackingPlugin(
                 stopTracking(result)
             }
             "switchCamera" -> {
-                cameraXManager?.switchCamera()
+                // Devuelve el estado resultante para que Flutter no tenga que
+                // llevar su propia copia (se desincronizaba: este manager
+                // sobrevive a la recreación de las pantallas y hay dos que
+                // ofrecen cambiar de cámara).
+                result.success(cameraXManager?.switchCamera())
+            }
+            "isUsingFrontCamera" -> {
+                result.success(cameraXManager?.isUsingFrontCamera())
+            }
+            "setInvertedFaceMode" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                cameraXManager?.setInvertedFaceMode(enabled)
                 result.success(null)
+            }
+            "takePhoto" -> {
+                val mgr = cameraXManager
+                if (mgr == null) {
+                    result.success(null)
+                } else {
+                    mgr.takePhoto(result)
+                }
             }
             "refreshPreviewBind" -> {
                 cameraXManager?.refreshPreviewBind()

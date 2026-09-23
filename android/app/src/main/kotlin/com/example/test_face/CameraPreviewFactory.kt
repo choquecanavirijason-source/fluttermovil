@@ -6,6 +6,7 @@ import android.util.Log
 import android.view.View
 import android.widget.FrameLayout
 import androidx.camera.view.PreviewView
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
@@ -51,7 +52,7 @@ class CameraPreviewFactory(
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
 
-        val sceneView = SceneView(
+        val sceneView = CrashSafeSceneView(
             context = activity,
             sharedLifecycle = (activity as? LifecycleOwner)?.lifecycle,
             // isOpaque=false configura a la vez: formato de superficie TRANSLUCENT,
@@ -125,5 +126,43 @@ class CameraPreviewFactory(
 
     private companion object {
         private const val TAG = "CameraPreviewFactory"
+    }
+}
+
+/**
+ * Subclase de [SceneView] que traga la excepción fatal documentada en
+ * `RECONOCIMIENTO_OJOS.md`: la librería puede lanzar `NullPointerException`
+ * dentro de su PROPIO `onDetachedFromWindow()` → `destroy()` →
+ * `CameraNode.destroy()` → `getCamera()` cuando el engine/cámara de Filament
+ * ya fue liberado. Una excepción de Java sin capturar durante el desmonte de
+ * un `PlatformView` es FATAL para TODO el proceso en Flutter (aborta con
+ * SIGABRT vía `platform_view_android_jni_impl.cc: CheckException`), no solo
+ * cierra la Activity.
+ *
+ * El `try/catch` en `CameraPreviewFactory.dispose()` NO alcanza a cubrir el
+ * caso de hot restart: ahí Android destruye la jerarquía de vistas
+ * directamente (la Activity/FlutterView se desmonta del `ViewRootImpl` sin
+ * pasar por nuestro `dispose()`), así que `onDetachedFromWindow()` se
+ * dispara solo, fuera de cualquier `try/catch` nuestro — confirmado en
+ * logcat: el crash ocurre sin ningún log previo de `dispose()`.
+ * Envolviendo aquí, en la fuente real del bug, se cubre cualquier ruta de
+ * desmonte (hot restart, recreación del PlatformView, dispose normal).
+ */
+private class CrashSafeSceneView(
+    context: Context,
+    sharedLifecycle: Lifecycle?,
+    isOpaque: Boolean,
+) : SceneView(context = context, sharedLifecycle = sharedLifecycle, isOpaque = isOpaque) {
+    override fun onDetachedFromWindow() {
+        try {
+            super.onDetachedFromWindow()
+        } catch (e: Throwable) {
+            Log.e(
+                "CameraPreviewFactory",
+                "onDetachedFromWindow: excepción ignorada (bug conocido de " +
+                    "SceneView.destroy()/CameraNode.destroy() con engine ya liberado)",
+                e,
+            )
+        }
     }
 }

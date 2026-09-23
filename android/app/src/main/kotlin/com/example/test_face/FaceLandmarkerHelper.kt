@@ -43,6 +43,27 @@ class FaceLandmarkerHelper(
     // entre llamadas (ver EyeTrackingResultMapper — ahora es class, no object).
     private val mapper = EyeTrackingResultMapper()
 
+    /** Lo setea `CameraXManager` cuando rota el frame de análisis 180°
+     * (clienta acostada — ver `CameraXManager.analysisRotated180`). El
+     * mapper lo necesita para desrotar las coordenadas y que el overlay de
+     * Flutter siga cayendo sobre el preview, que NO rota. */
+    @Volatile var analysisRotated180 = false
+
+    /**
+     * El valor de [analysisRotated180] con el que se rotó el frame que está
+     * EN VUELO, congelado al enviarlo.
+     *
+     * No alcanza con leer [analysisRotated180] al recibir el resultado: la
+     * rotación se alterna sola mientras no hay rostro (ver
+     * `CameraXManager.maybeFlipAnalysisRotation`), así que puede cambiar
+     * entre que el frame sale y el resultado vuelve. Ahí el mapper desrotaba
+     * con el valor equivocado y los landmarks salían dados vuelta — con el
+     * rostro invertido respecto del preview, lo que daba vuelta la dirección
+     * del mapeo de pestañas de una corrida a otra. Como [inferenceInFlight]
+     * garantiza un solo frame a la vez, un único campo alcanza.
+     */
+    @Volatile private var rotationInFlight = false
+
     /**
      * Intenta GPU primero: la inferencia de FaceLandmarker con
      * `outputFacialTransformationMatrixes(true)` en CPU agrega decenas de ms
@@ -136,6 +157,7 @@ class FaceLandmarkerHelper(
                         image.width,
                         image.height,
                         bitmap,
+                        rotated180 = rotationInFlight,
                     )
                     onResult(mapped, result, bitmap)
                 } catch (e: Exception) {
@@ -210,6 +232,8 @@ class FaceLandmarkerHelper(
             )
         }
         inFlightSinceMs = now
+        // Congela la rotación de ESTE frame — ver [rotationInFlight].
+        rotationInFlight = analysisRotated180
         return try {
             landmarker.detectAsync(image, timestampMs)
             true

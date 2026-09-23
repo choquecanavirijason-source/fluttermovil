@@ -11,7 +11,14 @@ class EyeTrackingOverlay {
 
   static List<Widget> buildSiblings({
     required VoidCallback onBack,
-    required String status,
+    // `null` oculta el badge por completo: se muestra solo mientras no haya
+    // llegado ningún frame de tracking todavía (mensajes de ciclo de vida:
+    // permiso de cámara, "iniciando cámara…", error). Una vez que la
+    // detección de rostro/ojos está corriendo, la guía de encuadre
+    // (`EyePositionGuidePainter`) y el pill de tipo de ojo ya comunican el
+    // estado — el badge "Rostro detectado"/"Sin rostro" quedaba redundante
+    // y a veces desactualizado.
+    String? status,
     String title = 'Almendrado',
     required VoidCallback onSwitchCamera,
     required VoidCallback onFlashTap,
@@ -25,11 +32,12 @@ class EyeTrackingOverlay {
     return [
       EyeTrackingBackButton(onTap: onBack),
       EyeTrackingHeader(title: title, onTap: onEyeTypeTap),
-      Positioned(
-        left: 12,
-        top: 96,
-        child: EyeTrackingStatusBadge(status: status),
-      ),
+      if (status != null)
+        Positioned(
+          left: 12,
+          top: 96,
+          child: EyeTrackingStatusBadge(status: status),
+        ),
       EyeTrackingSideMenu(
         onFlashTap: onFlashTap,
         onRotateTap: onSwitchCamera,

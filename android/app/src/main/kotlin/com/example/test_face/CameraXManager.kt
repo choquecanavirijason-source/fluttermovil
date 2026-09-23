@@ -18,6 +18,8 @@ import android.util.Size
 import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
@@ -155,7 +157,120 @@ class CameraXManager(
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val mainExecutor by lazy { ContextCompat.getMainExecutor(activity) }
 
-    @Volatile
+    /**
+     * `true` cuando el frame se rota 180° ANTES de dárselo a MediaPipe.
+     * Se enciende con [setInvertedFaceMode], SOLO mientras el asistente de
+     * mapeo (robot) está abierto.
+     *
+     * Hace falta porque la clienta trabaja acostada y la operaria filma
+     * desde la cabecera: el rostro llega dado vuelta. Rotando el frame,
+     * MediaPipe ve una cara derecha —lo único con lo que fue entrenado— y
+     * la ajusta bien.
+     *
+     * NO se detecta la orientación automáticamente, y esto es deliberado.
+     * Se probó alternar la rotación cuando no había rostro, y falló por una
+     * razón que no tiene arreglo desde afuera: MediaPipe a veces SÍ engancha
+     * una cara invertida sin rotar el frame, pero le calza la malla al
+     * revés (frente donde está el mentón, párpado superior donde está el
+     * inferior). Los ojos quedan en su lugar, así que "hay rostro" y la
+     * alternancia nunca se dispara — pero la dirección del mapeo sale
+     * invertida, y como MediaPipe hace tracking a partir del ajuste
+     * anterior, se queda enganchado ahí hasta que se pierde la cara (por
+     * eso "sacudir la cámara" lo arreglaba). Ese ajuste malo es coherente
+     * consigo mismo: no hay forma de reconocerlo mirando los landmarks. La
+     * única salida robusta es que MediaPipe nunca vea una cara invertida.
+     *
+     * Solo afecta al bitmap de ANÁLISIS: el preview se deja como está, así
+     * la operaria sigue viendo el rostro tal cual lo tiene delante. Las
+     * coordenadas que devuelve MediaPipe quedan en el espacio rotado y las
+     * desrota el mapper (ver `EyeTrackingResultMapper.map(rotated180 = ...)`),
+     * para que el overlay de Flutter siga coincidiendo con el preview.
+     *
+     * No puede quedar encendido fuera del robot: el paquete `render/`
+     * (modelo 3D de pestañas) lee los landmarks CRUDOS por otro camino y con
+     * el análisis rotado el .glb se ubica mal. En el robot no molesta porque
+     * el modelo 3D está oculto a propósito (ver
+     * `_setHidingLashesForAlignmentGuide` en Flutter).
+     */
+    @Volatile private var analysisRotated180 = false
+
+    /**
+     * Frames de análisis que se mandan EN NEGRO tras cambiar la rotación;
+     * ver [setInvertedFaceMode].
+     */
+    @Volatile private var blankFramesRemaining = 0
+
+    /**
+     * Modo "clienta acostada": rota el análisis 180° (`true`) o lo deja
+     * normal (`false`).
+     *
+     * Al cambiar, se mandan [BLANK_FRAMES_ON_ROTATION_CHANGE] frames negros
+     * al detector para cortarle el tracking y obligarlo a detectar de cero.
+     * Sin esto, MediaPipe intentaba seguir al rostro que venía siguiendo
+     * (ahora en otra posición y dado vuelta) y podía quedar enganchado en
+     * un ajuste malo — el mismo problema que describe [analysisRotated180],
+     * solo que provocado por la transición.
+     */
+    fun setInvertedFaceMode(enabled: Boolean) {
+        if (analysisRotated180 == enabled) return
+        analysisRotated180 = enabled
+        helper.analysisRotated180 = enabled
+        blankFramesRemaining = BLANK_FRAMES_ON_ROTATION_CHANGE
+        Log.i(TAG, "setInvertedFaceMode=$enabled → análisis rotado180=$enabled")
+        // Reenlaza para cambiar grabación ↔ foto (ver [applyBinding]).
+        mainHandler.post {
+            if (!stopped.get() && helper.getLandmarker() != null) scheduleRebind()
+        }
+    }
+
+    /**
+     * `ImageCapture` enlazado mientras dura el asistente de mapeo; `null`
+     * fuera de él. Ver [applyBinding] y [takePhoto].
+     */
+    private var imageCaptureUseCase: ImageCapture? = null
+
+    /**
+     * Saca una foto por la MISMA sesión de cámara que está analizando, y la
+     * devuelve como JPEG.
+     *
+     * Existe para que la foto del asistente salga casi del mismo instante
+     * que el mapeo dibujado encima. Antes se abría una segunda sesión de
+     * cámara (plugin `camera`) y entre una cosa y otra pasaban 1-2 s: con
+     * el pulso de la mano, el mapeo quedaba corrido respecto del ojo. Por
+     * el mismo motivo tampoco hace falta detener el tracking antes.
+     */
+    fun takePhoto(result: MethodChannel.Result) {
+        val capture = imageCaptureUseCase
+        if (capture == null) {
+            result.success(null)
+            return
+        }
+        capture.takePicture(
+            mainExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val bytes = try {
+                        // JPEG: `ImageCapture` entrega un solo plano ya
+                        // comprimido, no hay que recomprimir nada.
+                        val buffer = image.planes[0].buffer
+                        ByteArray(buffer.remaining()).also { buffer.get(it) }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "takePhoto: no se pudo leer el JPEG", e)
+                        null
+                    } finally {
+                        image.close()
+                    }
+                    result.success(bytes)
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e(TAG, "takePhoto falló", exception)
+                    result.success(null)
+                }
+            },
+        )
+    }
+
     private var cameraProvider: ProcessCameraProvider? = null
 
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
@@ -330,7 +445,17 @@ class CameraXManager(
         mainHandler.post(phaseClear)
     }
 
-    fun switchCamera() {
+    /** `true` si la cámara activa es la frontal. Fuente de verdad única:
+     * Flutter no puede llevar su propia copia de este estado porque el
+     * manager sobrevive a la recreación de las pantallas (y hay dos que
+     * ofrecen cambiar de cámara), así que lo consulta con
+     * `isUsingFrontCamera` en vez de adivinarlo. Lo necesita para tomar la
+     * foto final con la MISMA cámara del tracking — el caso real es la
+     * operaria apuntando a la clienta, no una selfie. */
+    fun isUsingFrontCamera(): Boolean = lensFacing == CameraSelector.LENS_FACING_FRONT
+
+    /** Alterna la cámara y devuelve `true` si quedó en la frontal. */
+    fun switchCamera(): Boolean {
         lensFacing =
             if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
                 CameraSelector.LENS_FACING_BACK
@@ -342,6 +467,7 @@ class CameraXManager(
                 scheduleRebind()
             }
         }
+        return isUsingFrontCamera()
     }
 
     fun refreshPreviewBind() {
@@ -519,6 +645,25 @@ class CameraXManager(
                     .build(),
             ).also { videoCapture = it }
 
+            // Cuarto caso de uso: en el asistente se enlaza ImageCapture EN
+            // LUGAR de VideoCapture, no además. Preview + análisis + foto es
+            // una combinación que CameraX garantiza en cualquier equipo;
+            // sumarle grabación son cuatro usos simultáneos y no todos los
+            // dispositivos los soportan. En el asistente no se graba, así
+            // que el cambio no le quita nada.
+            val photoMode = analysisRotated180
+            val ic = if (photoMode) {
+                (imageCaptureUseCase ?: ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .build()
+                    .also { imageCaptureUseCase = it })
+                    .apply { targetRotation = rotation }
+            } else {
+                imageCaptureUseCase = null
+                null
+            }
+            val extraUseCase = ic ?: vc
+
             val selector =
                 CameraSelector.Builder()
                     .requireLensFacing(lensFacing)
@@ -537,7 +682,7 @@ class CameraXManager(
                     selector,
                     preview,
                     imageAnalysis,
-                    vc,
+                    extraUseCase,
                 )
                 // DIAGNÓSTICO alineación overlay: el overlay de Flutter asume
                 // que preview y análisis comparten encuadre (mismo aspect +
@@ -555,7 +700,7 @@ class CameraXManager(
                     lifecycleOwner,
                     selector,
                     imageAnalysis,
-                    vc,
+                    extraUseCase,
                 )
             }
         } catch (e: Exception) {
@@ -643,6 +788,10 @@ class CameraXManager(
                         // que además eran las dimensiones PRE-rotación).
                         postScale(-1f, 1f, 0f, 0f)
                     }
+                    // Al FINAL, después del espejo: así equivale a girar la
+                    // imagen ya terminada y la corrección del mapper es un
+                    // simple (1-x, 1-y). Ver [analysisRotated180].
+                    if (analysisRotated180) postRotate(180f)
                 }
 
             // POOL de bitmaps de salida, en vez de `Bitmap.createBitmap(...)`
@@ -690,15 +839,24 @@ class CameraXManager(
 
             val canvas = Canvas(out)
             canvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC)
-            canvas.save()
-            canvas.concat(drawMatrix)
-            // Recorta el padding de fila: `raw` puede ser más ancho que
-            // `width` (ver el bloque de rowStride arriba) y `drawBitmap`
-            // dibujaría también esas columnas de relleno. El clip se aplica
-            // en el espacio de coordenadas de `raw`, ya con la matriz puesta.
-            canvas.clipRect(srcRect)
-            canvas.drawBitmap(raw, 0f, 0f, orientedPaint)
-            canvas.restore()
+            // Tras cambiar la rotación se mandan unos frames EN NEGRO: el
+            // canvas ya quedó negro, así que alcanza con no dibujar encima.
+            // Le corta el tracking a MediaPipe para que vuelva a detectar de
+            // cero en la orientación nueva — ver [setInvertedFaceMode].
+            if (blankFramesRemaining > 0) {
+                blankFramesRemaining--
+            } else {
+                canvas.save()
+                canvas.concat(drawMatrix)
+                // Recorta el padding de fila: `raw` puede ser más ancho que
+                // `width` (ver el bloque de rowStride arriba) y `drawBitmap`
+                // dibujaría también esas columnas de relleno. El clip se
+                // aplica en el espacio de coordenadas de `raw`, ya con la
+                // matriz puesta.
+                canvas.clipRect(srcRect)
+                canvas.drawBitmap(raw, 0f, 0f, orientedPaint)
+                canvas.restore()
+            }
 
             val finalOriented = out
             latestFrameBitmap = finalOriented
@@ -824,6 +982,13 @@ class CameraXManager(
          * sea menos de un frame, y acá un buffer se reutiliza recién 3
          * frames (~100 ms) después. */
         private const val ORIENTED_POOL_SIZE = 3
+
+        /** Frames negros que se le mandan al detector al cambiar la
+         * rotación del análisis (ver [setInvertedFaceMode]), para cortarle
+         * el tracking y forzar una detección de cero. 3 alcanzan: MediaPipe
+         * da por perdido el rostro en cuanto un frame no trae nada, y a ~30
+         * fps son ~100 ms, imperceptibles. */
+        private const val BLANK_FRAMES_ON_ROTATION_CHANGE = 3
 
         /** Ver [dumpAnnotatedAnalysisFrame] — cuántos frames anotados
          * guardar y cada cuántos frames con rostro. Diagnóstico temporal:
