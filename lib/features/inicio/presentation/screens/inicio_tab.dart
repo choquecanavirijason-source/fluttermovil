@@ -3,12 +3,14 @@ import 'dart:async' show StreamSubscription, unawaited;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 import '../../../../core/router/routes.dart';
 import '../../../../core/services/agenda_service.dart';
 import '../../../../core/services/agenda_ws_service.dart';
 import '../../../../core/services/local_notifications_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/theme/theme_mode_provider.dart';
 import '../../../auth/presentation/providers/auth_state_provider.dart';
 import '../../../../core/models/mobile_appointment.dart';
 import '../../../clientes/domain/entities/client.dart';
@@ -128,7 +130,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               elevation: 2,
             ),
-            child: const Text('Cerrar sesión'),
+            child: const Text('Cerrar Sesión'),
           ),
         ],
       ),
@@ -143,6 +145,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
     final cs = Theme.of(context).colorScheme;
     final user = ref.watch(authUserProvider);
     final ticketsAsync = ref.watch(_todayTicketsProvider);
+    final themeMode = ref.watch(themeModeProvider);
 
     return Scaffold(
       backgroundColor: cs.surface,
@@ -153,7 +156,14 @@ class _InicioTabState extends ConsumerState<InicioTab>
           padding: EdgeInsets.zero,
           children: [
             // ── Hero con info de operaria ─────────────────────────────
-            _HeroSection(user: user, ticketsAsync: ticketsAsync, onLogout: _logout),
+            _HeroSection(
+              user: user,
+              ticketsAsync: ticketsAsync,
+              themeMode: themeMode,
+              onToggleTheme: () =>
+                  ref.read(themeModeProvider.notifier).toggleTheme(),
+              onLogout: _logout,
+            ),
 
             // ── Cuerpo principal ──────────────────────────────────────
             Padding(
@@ -239,11 +249,15 @@ class _HeroSection extends StatelessWidget {
   const _HeroSection({
     required this.user,
     required this.ticketsAsync,
+    required this.themeMode,
+    required this.onToggleTheme,
     required this.onLogout,
   });
 
   final dynamic user;
   final AsyncValue<List<MobileAppointment>> ticketsAsync;
+  final ThemeMode themeMode;
+  final VoidCallback onToggleTheme;
   final VoidCallback onLogout;
 
   @override
@@ -297,11 +311,21 @@ class _HeroSection extends StatelessWidget {
                 ),
               ),
             ),
-            // Botón cerrar sesión
+            // Controles de tema y sesión
             Positioned(
               top: topPad + 8,
               right: 14,
-              child: _StyledLogoutButton(onTap: onLogout),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ThemeModeButton(
+                    isDark: themeMode == ThemeMode.dark,
+                    onTap: onToggleTheme,
+                  ),
+                  const SizedBox(width: 8),
+                  _StyledLogoutButton(onTap: onLogout),
+                ],
+              ),
             ),
             // Info operaria (bottom)
             Positioned(
@@ -555,6 +579,38 @@ class _SectionLabel extends StatelessWidget {
 // Styled logout button
 // ─────────────────────────────────────────────────────────────────────────────
 
+class _ThemeModeButton extends StatelessWidget {
+  const _ThemeModeButton({required this.isDark, required this.onTap});
+
+  final bool isDark;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onTap,
+      tooltip: isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro',
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      padding: EdgeInsets.zero,
+      style: IconButton.styleFrom(
+        backgroundColor: Colors.black.withValues(alpha: 0.35),
+        foregroundColor: Colors.white,
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.28)),
+        shape: const CircleBorder(),
+        minimumSize: const Size(40, 40),
+        maximumSize: const Size(40, 40),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: Icon(
+        isDark ? Icons.light_mode : Icons.dark_mode_outlined,
+        size: 20,
+      ),
+    );
+  }
+}
+
+enum _AccountMenuAction { profile, logout }
+
 class _StyledLogoutButton extends StatelessWidget {
   const _StyledLogoutButton({required this.onTap});
 
@@ -562,35 +618,87 @@ class _StyledLogoutButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.18),
-      borderRadius: BorderRadius.circular(14),
-      elevation: 6,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    return PopupMenuButton<_AccountMenuAction>(
+      tooltip: 'Opciones de cuenta',
+      position: PopupMenuPosition.under,
+      offset: const Offset(0, 8),
+      color: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onSelected: (action) {
+        if (action == _AccountMenuAction.profile) {
+          unawaited(context.push(AppRoutes.perfil));
+          return;
+        }
+        onTap();
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: _AccountMenuAction.profile,
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.brandPrimary.withValues(alpha: 0.18),
-                  border: Border.all(color: Colors.white24, width: 1),
-                ),
-                child: const Icon(Icons.logout, color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: 10),
-              const Text(
-                'Salir',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+              Icon(Icons.person_outline, size: 18),
+              SizedBox(width: 8),
+              Text('Ver perfil'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: _AccountMenuAction.logout,
+          child: Row(
+            children: [
+              const Icon(Icons.logout, size: 18, color: Color(0xFFB3261E)),
+              const SizedBox(width: 8),
+              Text(
+                'Cerrar sesión',
+                style: TextStyle(color: Color(0xFFB3261E)),
               ),
             ],
           ),
+        ),
+      ],
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xCC154734),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.14),
+              ),
+              child: const Icon(Icons.logout, color: Colors.white, size: 18),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              width: 1,
+              height: 18,
+              color: Colors.white.withValues(alpha: 0.28),
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'Salir',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 3),
+            const Icon(
+              Icons.keyboard_arrow_down,
+              color: Colors.white,
+              size: 18,
+            ),
+          ],
         ),
       ),
     );
@@ -871,27 +979,25 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color:
-                            AppColors.brandPrimary.withValues(alpha: 0.10),
+                        color: cs.primary.withValues(alpha: 0.14),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color:
-                              AppColors.brandPrimary.withValues(alpha: 0.3),
+                          color: cs.primary.withValues(alpha: 0.55),
                           width: 1,
                         ),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
-                        children: const [
+                        children: [
                           Icon(Icons.list_alt_outlined,
-                              size: 13, color: AppColors.brandPrimary),
-                          SizedBox(width: 4),
+                              size: 13, color: cs.primary),
+                          const SizedBox(width: 4),
                           Text(
                             'Ver todos',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.brandPrimary,
+                              color: cs.primary,
                             ),
                           ),
                         ],
@@ -906,16 +1012,15 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
-                      color:
-                          AppColors.brandPrimary.withValues(alpha: 0.12),
+                      color: cs.primary.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
                       '$count',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
-                        color: AppColors.brandPrimary,
+                        color: cs.primary,
                       ),
                     ),
                   ),
@@ -1016,6 +1121,26 @@ class _ClientRow extends StatelessWidget {
 
   final MobileAppointment ticket;
 
+  String get _clientName => ticket.clientDisplayName
+      .replaceFirst(
+        RegExp(r'\s+[—–-]\s+Sucursal\b.*$', caseSensitive: false),
+        '',
+      )
+      .trim();
+
+  String get _ticketLabel {
+    final code = ticket.ticketCode.trim();
+    return code.isEmpty ? '#${ticket.id.toString().padLeft(4, '0')}' : code;
+  }
+
+  String? get _appointmentDateTime {
+    final startTime = ticket.startTime;
+    if (startTime == null) return null;
+    final dateTime = DateTime.tryParse(startTime);
+    if (dateTime == null) return null;
+    return DateFormat('dd/MM/yyyy - HH:mm').format(dateTime.toLocal());
+  }
+
   static const _statusLabel = {
     'pending': 'Pendiente',
     'waiting': 'En espera',
@@ -1033,77 +1158,188 @@ class _ClientRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final statusColor = _statusColor[ticket.status] ?? const Color(0xFF757575);
+    final statusTextColor = isDark ? Colors.white70 : statusColor;
+    final statusBackground = isDark
+      ? const Color(0xFF353535)
+      : statusColor.withValues(alpha: 0.12);
     final statusLabel = _statusLabel[ticket.status] ?? ticket.status;
+    final appointmentDateTime = _appointmentDateTime;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 9),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(14),
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.4)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           CircleAvatar(
-            radius: 19,
-            backgroundColor: AppColors.brandPrimary.withValues(alpha: 0.14),
+            radius: 16,
+            backgroundColor: cs.primary.withValues(alpha: 0.14),
             child: Text(
-              ticket.clientDisplayName.isNotEmpty
-                  ? ticket.clientDisplayName[0].toUpperCase()
+              _clientName.isNotEmpty
+                  ? _clientName[0].toUpperCase()
                   : '?',
-              style: const TextStyle(
-                color: AppColors.brandPrimary,
+              style: TextStyle(
+                color: cs.primary,
                 fontWeight: FontWeight.w800,
                 fontSize: 14,
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  ticket.clientDisplayName,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13.5,
-                    color: cs.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  ticket.servicesSummary,
+                  _clientName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: theme.textTheme.bodyLarge?.color ?? cs.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  ticket.servicesSummary,
+                  style: TextStyle(
                     fontSize: 11.5,
-                    color: cs.onSurfaceVariant,
+                    color: theme.textTheme.bodyMedium?.color ??
+                        cs.onSurfaceVariant,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-            decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              statusLabel,
-              style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: FontWeight.w700,
-                color: statusColor,
-              ),
+            width: 1,
+            height: 42,
+            margin: const EdgeInsets.symmetric(horizontal: 8),
+            color: cs.outlineVariant,
+          ),
+          SizedBox(
+            width: 126,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Align(
+                  alignment: Alignment.topRight,
+                  child: _StatusBadge(
+                    label: statusLabel,
+                    color: statusTextColor,
+                    backgroundColor: statusBackground,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.confirmation_number_outlined,
+                      size: 14,
+                      color: cs.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 3),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          _ticketLabel,
+                          maxLines: 1,
+                          softWrap: false,
+                          style: TextStyle(
+                            color: cs.onSurface,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (appointmentDateTime != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.access_time,
+                        size: 14,
+                        color: cs.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            appointmentDateTime,
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                              color: cs.onSurface,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
             ),
           ),
+          const SizedBox(width: 3),
+          Icon(
+            Icons.chevron_right,
+            size: 20,
+            color: cs.onSurfaceVariant,
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({
+    required this.label,
+    required this.color,
+    required this.backgroundColor,
+  });
+
+  final String label;
+  final Color color;
+  final Color backgroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 88),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
       ),
     );
   }

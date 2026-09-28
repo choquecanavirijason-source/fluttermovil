@@ -18,6 +18,10 @@ class ThemeModeController extends Notifier<ThemeMode> {
     await ref.read(prefsStorageProvider).writeString(_key, mode.name);
   }
 
+  Future<void> toggleTheme() async {
+    await set(state == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark);
+  }
+
   static ThemeMode _parse(String? raw) {
     switch (raw) {
       case 'system':

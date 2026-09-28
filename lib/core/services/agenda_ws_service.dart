@@ -121,7 +121,7 @@ class AgendaWsService {
         },
         cancelOnError: true,
       );
-      debugPrint('AgendaWsService: conectado a $uri');
+      debugPrint('AgendaWsService: conectado al branch $branchId');
     } catch (e) {
       debugPrint('AgendaWsService: falló la conexión: $e');
       _scheduleReconnect();

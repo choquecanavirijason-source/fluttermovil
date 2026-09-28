@@ -1,76 +1,19 @@
 /// Configuración de entorno de la app de operaria.
-///
-/// El backend se sirve bajo el prefijo `/api`; las imágenes estáticas
-/// (`/media/...`) cuelgan de la raíz del host.
 class Env {
   Env._();
 
-  // ── Switch rápido local <-> producción ─────────────────────────────────
-  // true  = habla con el backend nuevo (Node) corriendo en tu PC/LAN.
-  // false = habla con el servidor de producción ([_remoteHost]).
-  //
-  // Para probar en local con el teléfono físico:
-  //  1. PC y teléfono deben estar en la MISMA red WiFi.
-  //  2. El backend debe escuchar en todas las interfaces — el `.env` del
-  //     servidor ya trae `HOST=0.0.0.0` y `PORT=3001`, así que sirve.
-  //  3. Permite el puerto 3001 en el Firewall de Windows si te lo pide
-  //     (`netsh advfirewall firewall add rule name="API 3001" dir=in
-  //      action=allow protocol=TCP localport=3001`).
-  //  4. Verifica que [_defaultLocalHost] siga siendo la IPv4 de tu PC
-  //     (`ipconfig` -> adaptador Wi-Fi). Puede cambiar si el router
-  //     reasigna la IP; si cambia no hace falta editar este archivo, se
-  //     puede sobreescribir al vuelo (ver "Overrides" abajo).
-  //  5. Guarda y haz stop + `flutter run` de nuevo (no hot-restart: esta
-  //     pantalla usa cámara nativa y el PlatformView crashea).
-  // Antes de compilar el APK para el salón, vuelve a ponerlo en false.
   static const bool kUseLocalBackend = false;
+  static const String _localLanIp = '37.60.247.213';
 
-  // ── Overrides sin tocar código ─────────────────────────────────────────
-  // Todos estos valores se pueden cambiar al lanzar la app, útil cuando el
-  // router te da otra IP o pruebas desde el emulador:
-  //
-  //   flutter run --dart-define=API_HOST=192.168.0.50
-  //   flutter run --dart-define=API_HOST=10.0.2.2      (emulador Android)
-  //   flutter run --dart-define=API_PREFIX=            (backend sin /api)
-  //
-  // Ojo: `localhost`/`127.0.0.1` NO sirven desde el teléfono ni desde el
-  // emulador — apuntan al propio dispositivo. Desde el emulador Android el
-  // localhost de tu PC es `10.0.2.2`; desde el teléfono físico, la IP LAN.
-
-  /// IPv4 del PC en la WiFi (adaptador Wi-Fi, no el 192.168.56.x de
-  /// VirtualBox/Docker que no ve el teléfono).
-  static const String _defaultLocalHost = '192.168.0.39';
-
-  /// `PORT` del `.env` del backend.
-  static const int _defaultLocalPort = 3001;
-
-  static const String _localHost =
-      String.fromEnvironment('API_HOST', defaultValue: _defaultLocalHost);
-  static const int _localPort =
-      int.fromEnvironment('API_PORT', defaultValue: _defaultLocalPort);
-
-  /// Host de producción (sin `/api`, sin barra final).
-  static const String _remoteHost = String.fromEnvironment(
-    'API_REMOTE_HOST',
-    defaultValue: 'http://37.60.247.213',
-  );
-
-  /// Host raíz del backend (sin `/api`). Usado para imágenes `/media/...`
-  /// y para derivar la URL del WebSocket (`ws://<host>/ws/branch/{id}`).
+  /// Host raíz del backend (sin `/api`).
   static const String host =
-      kUseLocalBackend ? 'http://$_localHost:$_localPort' : _remoteHost;
+      kUseLocalBackend ? 'http://$_localLanIp:8000' : 'http://37.60.247.213';
 
-  /// Prefijo bajo el que el backend expone la API REST. El servidor nuevo
-  /// mantiene las mismas rutas que el anterior (`/api/auth/login`,
-  /// `/api/catalogs/...`), por eso vale igual en local y en producción.
-  /// Si tu instancia responde en la raíz (`/auth/login`), lánzala con
-  /// `--dart-define=API_PREFIX=` en vez de editar esto.
-  static const String apiPrefix =
-      String.fromEnvironment('API_PREFIX', defaultValue: '/api');
+  /// Base de la API REST.
+  static const String apiBaseUrl = kUseLocalBackend ? host : '$host/api';
 
-  /// Base de la API REST — lo que consume `dioProvider`. `ApiEndpoints`
-  /// agrega rutas relativas sin repetir el prefijo.
-  static const String apiBaseUrl = '$host$apiPrefix';
+  /// Compatibility field used by ApiConfig on develop.
+  static const String apiPrefix = kUseLocalBackend ? '' : '/api';
 
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 30);
