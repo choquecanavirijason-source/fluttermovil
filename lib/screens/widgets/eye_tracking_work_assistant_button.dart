@@ -13,7 +13,8 @@ class EyeTrackingWorkAssistantButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Positioned(
-      bottom: 28,
+      // Centrado en altura con el botón "Natural" (bottom 24, alto 28).
+      bottom: 15,
       right: 16,
       child: SafeArea(
         top: false,

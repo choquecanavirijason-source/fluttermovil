@@ -23,7 +23,7 @@ class EyeTrackingFilterRow extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _chip('COMPATIBLE', 0),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             _chip('EXPLORAR', 1),
           ],
         ),
@@ -37,26 +37,26 @@ class EyeTrackingFilterRow extends StatelessWidget {
       onTap: () => onSelect(index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 290),
-        padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 10),
+        padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 7),
         decoration: BoxDecoration(
           color: isSelected
               ? Colors.white
               : Colors.white.withValues(alpha: 0.07),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: isSelected
                 ? Colors.white
                 : Colors.white.withValues(alpha: 0.15),
-            width: 1.1,
+            width: 1,
           ),
         ),
         child: Text(
           text,
           style: TextStyle(
             color: isSelected ? AppColors.actionGreen : Colors.white,
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.3,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.1,
           ),
         ),
       ),

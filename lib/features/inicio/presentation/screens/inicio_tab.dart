@@ -1,4 +1,5 @@
 import 'dart:async' show StreamSubscription, unawaited;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -658,47 +659,24 @@ class _StyledLogoutButton extends StatelessWidget {
           ),
         ),
       ],
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xCC154734),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.14),
-              ),
-              child: const Icon(Icons.logout, color: Colors.white, size: 18),
+      // Botón circular tipo glassmorphism: desenfoca lo que hay detrás.
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.black.withValues(alpha: 0.25),
+              border: Border.all(color: AppColors.brandAccent, width: 1.5),
             ),
-            const SizedBox(width: 8),
-            Container(
-              width: 1,
-              height: 18,
-              color: Colors.white.withValues(alpha: 0.28),
-            ),
-            const SizedBox(width: 8),
-            const Text(
-              'Salir',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 3),
-            const Icon(
-              Icons.keyboard_arrow_down,
+            child: const Icon(
+              Icons.logout_rounded,
               color: Colors.white,
-              size: 18,
+              size: 24,
             ),
-          ],
+          ),
         ),
       ),
     );

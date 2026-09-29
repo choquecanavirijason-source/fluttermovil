@@ -20,14 +20,16 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Positioned(
       left: 64,
-      right: 72,
+      // Deja libre la columna del botón del robot (right: 16 + ~46 de ancho)
+      // con margen, para que no se solapen en pantallas angostas.
+      right: 82,
       bottom: 24,
       child: SafeArea(
         top: false,
         child: GestureDetector(
           onTap: onTap,
           child: Container(
-            height: 37,
+            height: 28,
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(25),
@@ -42,13 +44,13 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
               alignment: Alignment.center,
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 30),
                   child: Text(
                     label,
                     style: const TextStyle(
                       color: AppColors.actionGreen,
                       fontWeight: FontWeight.w700,
-                      fontSize: 18,
+                      fontSize: 12,
                     ),
                     textAlign: TextAlign.center,
                     maxLines: 1,
@@ -58,13 +60,13 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
                 Positioned(
                   left: 0,
                   child: Container(
-                    width: 42,
-                    height: 42,
+                    width: 28,
+                    height: 28,
                     decoration: const BoxDecoration(
                       color: AppColors.actionGreen,
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.bookmark, color: Colors.white, size: 24),
+                    child: const Icon(Icons.bookmark, color: Colors.white, size: 16),
                   ),
                 ),
               ],

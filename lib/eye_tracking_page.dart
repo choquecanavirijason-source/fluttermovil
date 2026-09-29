@@ -704,6 +704,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // aviso quedaría colgado en pantalla para siempre sin esto.
       _capturingPhoto = false;
       _workAssistantOpening = false;
+      // El mapeo solo se usa para hornearlo en la foto: si la captura se
+      // cortó a medias no debe quedar encima de la vista en vivo.
+      _showMapping = false;
       // Recién acá vuelve la pestaña virtual: durante TODO el flujo del
       // robot (guía + captura) se muestra solo el mapeo.
       unawaited(_setHidingLashesForAlignmentGuide(false));
@@ -756,14 +759,18 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       await _resumeEyePreviewAfterAssistant();
     } finally {
       _openingRecommendation = false;
+      // El mapeo solo se usa para hornearlo en la foto: si la captura se
+      // cortó a medias no debe quedar encima de la vista en vivo.
+      _showMapping = false;
       if (mounted) setState(() {});
     }
   }
 
   /// Enciende o apaga el asistente de encuadre (botón del robot).
   ///
-  /// NO dispara la captura solo: el óvalo y el mapeo quedan en pantalla como
-  /// referencia y la foto la saca la operaria con el botón de captura (ver
+  /// NO dispara la captura solo: el óvalo queda en pantalla como referencia
+  /// (el mapeo numérico se pinta recién al capturar) y la foto la saca la
+  /// operaria con el botón de captura (ver
   /// [_beginWorkAssistantFlow]). Auto-disparar obligaba a sostener los ojos
   /// cerrados durante todo el procesamiento posterior, y además la foto
   /// salía de un instante distinto al que se estaba viendo.
@@ -772,13 +779,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final activating = !_alignmentGuideActive;
     setState(() {
       _alignmentGuideActive = activating;
-      _showMapping = activating;
+      _showMapping = false;
       _eyesAligned = false;
       _faceFramed = false;
       _eyesClosedOk = false;
     });
-    // El modelo 3D de pestaña taparía el párpado justo cuando hace falta ver
-    // la pestaña natural y el mapeo encima.
+    // La pestaña virtual taparía el borde natural durante el encuadre; el
+    // mapeo numérico queda reservado para la captura.
     unawaited(_setHidingLashesForAlignmentGuide(activating));
     // Modo clienta acostada: el rostro llega volcado y el análisis se rota
     // para que MediaPipe lo vea derecho. Va SOLO acá — fuera del asistente
@@ -838,6 +845,19 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       return;
     }
     if (_workAssistantOpening) return;
+    // La línea de pestañas solo se mapea bien con los ojos cerrados: con el
+    // ojo abierto el párpado tapa la base real.
+    if (!_eyesClosedOk) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Cierra los ojos para tomar la foto'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      return;
+    }
 
     // Cierra la guía y muestra el aviso de "tomando la foto" mientras corre
     // el pipeline (ver [_capturingPhoto]); `_showMapping` sigue activo
@@ -1292,7 +1312,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 child: Center(
                   child: GestureDetector(
                     onTap: _beginWorkAssistantFlow,
-                    child: Container(
+                    // Atenuado hasta que se detectan los ojos cerrados: antes
+                    // de eso [_beginWorkAssistantFlow] no deja capturar.
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 200),
+                      opacity: _eyesClosedOk ? 1 : 0.4,
+                      child: Container(
                       width: 74,
                       height: 74,
                       decoration: BoxDecoration(
@@ -1311,6 +1336,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                             ? Colors.white
                             : AppColors.brandPrimary,
                         size: 32,
+                      ),
                       ),
                     ),
                   ),
