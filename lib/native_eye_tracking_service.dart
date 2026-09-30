@@ -63,10 +63,15 @@ class NativeEyeTrackingService {
   /// recibe el overlay de Flutter (en el asistente no molesta, ahí el modelo
   /// está oculto). Dos: fuera del asistente el rostro viene derecho, y
   /// rotarlo lo volvería indetectable.
-  Future<void> setInvertedFaceMode(bool enabled) async {
+  ///
+  /// [photoMode] enlaza la foto rápida por la misma sesión (ver
+  /// [takePhoto]); por defecto sigue a [enabled]. El asistente lo pasa en
+  /// `true` también con la clienta de frente (análisis sin rotar).
+  Future<void> setInvertedFaceMode(bool enabled, {bool? photoMode}) async {
     try {
       await _methodChannel.invokeMethod<void>('setInvertedFaceMode', {
         'enabled': enabled,
+        'photoMode': photoMode ?? enabled,
       });
     } catch (e) {
       debugPrint('[EyeTracking] setInvertedFaceMode error: $e');
@@ -79,8 +84,8 @@ class NativeEyeTrackingService {
   /// Es lo que permite que la foto del asistente salga casi del mismo
   /// instante que el mapeo dibujado encima: abrir una segunda sesión metía
   /// 1-2 s en el medio y, con el pulso de la mano, el mapeo quedaba corrido
-  /// respecto del ojo. Solo funciona con [setInvertedFaceMode] activo, que
-  /// es cuando se enlaza el caso de uso de foto. `null` si no está
+  /// respecto del ojo. Solo funciona con `photoMode` activo en
+  /// [setInvertedFaceMode], que es cuando se enlaza el caso de uso de foto. `null` si no está
   /// disponible — ahí el llamador debe caer al camino viejo.
   Future<Uint8List?> takePhoto() async {
     try {

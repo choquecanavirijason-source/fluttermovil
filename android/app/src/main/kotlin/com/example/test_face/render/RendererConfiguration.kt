@@ -138,6 +138,18 @@ object RendererConfiguration {
     const val RIGHT_EYE_X_NUDGE = 0.0f
     const val LEFT_EYE_X_NUDGE = 0.0f
 
+    // Corrección vertical en PANTALLA del ancla de la pestaña, como fracción
+    // del ancho del ojo en la imagen (escala sola con la distancia a la
+    // cámara). POSITIVO sube (hacia la ceja), NEGATIVO baja. Se aplica en
+    // EyeTransformCalculator DESPUÉS del mapeo cover (FILL_CENTER), así que
+    // es independiente del aspect ratio cámara/pantalla.
+    // Calibrar contra el overlay de landmarks (LidLandmarkDebugPainter):
+    // 0 = exactamente sobre el ancla. Referencia: un ojo mide ~30 mm de
+    // ancho, así que 0.01 ≈ 0.3 mm.
+    // 0.10f (2026-09-30): primera corrección por pestaña corrida hacia abajo.
+    // 0.03f (2026-09-30): con 0.10 quedaba ~2 mm por encima en dispositivo.
+    const val LASH_VERTICAL_NUDGE_EYE_WIDTHS = 0.0f
+
     // NOSE_AVOID_SHIFT = 0: sin desplazamiento horizontal del ancla.
     // El centro del modelo va exactamente sobre el centroide de los puntos verdes.
     // A 0f (2026-09-02): con el overlay de debug de landmarks activado se vio

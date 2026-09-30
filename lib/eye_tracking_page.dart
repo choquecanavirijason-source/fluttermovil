@@ -120,6 +120,25 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   final ValueNotifier<TrackingFrame?> _frameNotifier =
       ValueNotifier<TrackingFrame?>(null);
 
+  /// Frame CONGELADO que dibuja el mapeo al capturar (ver
+  /// [_freezeMappingFrame]). El mapeo no puede seguir a [_frameNotifier]:
+  /// el overlay se captura en un instante puntual y, con la clienta
+  /// acostada y los ojos cerrados, MediaPipe pierde el rostro de a ratos —
+  /// si justo ese frame venía sin cara, la foto salía sin marcas.
+  final ValueNotifier<TrackingFrame?> _mappingFrameNotifier =
+      ValueNotifier<TrackingFrame?>(null);
+
+  /// Último frame con rostro y los dos ojos, y cuándo llegó. Fuente de
+  /// [_freezeMappingFrame].
+  TrackingFrame? _lastMappableFrame;
+  DateTime? _lastMappableAt;
+
+  /// Cuánto puede tener el último frame válido para usarse en la captura.
+  /// La operaria acaba de ver el botón habilitado (que exige rostro y ojos
+  /// cerrados), así que un frame de hasta ~1,5 s atrás sigue siendo la
+  /// misma pose.
+  static const Duration _mappableFrameMaxAge = Duration(milliseconds: 1500);
+
   String _status = 'Inicializando...';
   DateTime? _lastFrameUiUpdate;
 
@@ -463,6 +482,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // (ver [_frameNotifier]) — aquí no hay límite, cada frame que llega se
     // dibuja, que es lo que hace que los puntos sigan la cabeza sin saltos.
     _frameNotifier.value = frame;
+    if (frame.faceDetected &&
+        frame.leftEye.length >= 4 &&
+        frame.rightEye.length >= 4) {
+      _lastMappableFrame = frame;
+      _lastMappableAt = DateTime.now();
+    }
     if (_alignmentGuideActive) _evaluateAlignment(frame);
     _detectEyeTypeFromFrame(frame);
 
@@ -535,6 +560,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     unawaited(_service.setInvertedFaceMode(false));
     _service.stopTracking();
     _frameNotifier.dispose();
+    _mappingFrameNotifier.dispose();
     ref.read(sessionClientProvider.notifier).state = null;
     super.dispose();
   }
@@ -608,15 +634,38 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await Future<void>.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
 
+    // Descarta todo lo que quedó de la captura: sin esto el mapeo/los
+    // landmarks del último frame siguen pintados sobre el rostro hasta que
+    // llegue el primer frame nuevo, y se ven "congelados".
+    _frameNotifier.value = null;
+    _mappingFrameNotifier.value = null;
+    _lastMappableFrame = null;
+    _lastMappableAt = null;
     setState(() {
       _previewSession++;
       _showMapping = false;
+      _frame = null;
+      _eyesAligned = false;
+      _faceFramed = false;
+      _eyesClosedOk = false;
     });
 
     // Tiempo para que el nuevo AndroidView llame a attachPreview().
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
 
+    // La suscripción al stream puede haberse cortado mientras el asistente
+    // estaba encima (p. ej. el ciclo de vida pasó por `paused` y puso `_sub`
+    // en null). Se re-suscribe siempre: el stream es broadcast y compartido,
+    // así que cancelar y volver a escuchar es seguro.
+    await _sub?.cancel();
+    _sub = _service.trackingStream.listen(
+      _handleTrackingFrame,
+      onError: (Object e, StackTrace st) {
+        if (!mounted) return;
+        setState(() => _status = 'Error: $e');
+      },
+    );
     await _service.startTracking();
 
     // refreshPreviewBind() es no-op si previewView==null.
@@ -639,6 +688,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     _workAssistantOpening = true;
     try {
       // 1. Activa las líneas de medición y espera un frame para que se pinten.
+      _freezeMappingFrame();
       setState(() => _showMapping = true);
       await WidgetsBinding.instance.endOfFrame;
       await Future<void>.delayed(const Duration(milliseconds: 80));
@@ -665,11 +715,28 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       if (!mounted) return;
 
       Uint8List? finalPhoto;
+      Future<Uint8List?>? pendingPhoto;
       if (nativeShot != null) {
-        finalPhoto = EyeTrackingPhotoPipeline.compositeAndCrop(
+        // Se navega YA y la composición (decodificar, recortar, componer,
+        // codificar: la parte más lenta) sigue en un isolate; el asistente
+        // muestra un cargando en el panel hasta que llega.
+        //
+        // Tampoco se detiene el tracking acá: el asistente usa la MISMA
+        // cámara y MediaPipe, y detenerlo para que él lo vuelva a arrancar
+        // costaba el desenlace diferido del stop más recargar el modelo en
+        // frío (~1 s). Durante la foto el análisis ya quedó pausado en
+        // nativo (`CameraXManager.analysisPausedForCapture`).
+        final mirror = _usingFrontCamera;
+        pendingPhoto = EyeTrackingPhotoPipeline.compositeAndCropInBackground(
           nativeShot,
           overlayBytes,
-          mirror: _usingFrontCamera,
+          mirror: mirror,
+        ).then<Uint8List?>(
+          (bytes) => bytes,
+          onError: (Object e) {
+            debugPrint('[EyeTracking] compositeAndCrop falló: $e');
+            return nativeShot;
+          },
         );
       } else {
         // Respaldo: si el caso de uso de foto no estaba disponible, se cae
@@ -694,7 +761,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
       await context.push(
         '/work-assistant',
-        extra: WorkAssistantArgs(panelPngBytes: finalPhoto),
+        extra: WorkAssistantArgs(
+          panelPngBytes: finalPhoto,
+          panelBytesFuture: pendingPhoto,
+        ),
       );
       if (!mounted) return;
 
@@ -725,6 +795,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (_openingRecommendation || _workAssistantOpening) return;
     _openingRecommendation = true;
     try {
+      _freezeMappingFrame();
       setState(() => _showMapping = true);
       await WidgetsBinding.instance.endOfFrame;
       await Future<void>.delayed(const Duration(milliseconds: 80));
@@ -787,11 +858,35 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // La pestaña virtual taparía el borde natural durante el encuadre; el
     // mapeo numérico queda reservado para la captura.
     unawaited(_setHidingLashesForAlignmentGuide(activating));
-    // Modo clienta acostada: el rostro llega volcado y el análisis se rota
-    // para que MediaPipe lo vea derecho. Va SOLO acá — fuera del asistente
-    // rompe la ubicación del modelo 3D, que lee los landmarks sin desrotar
-    // (ver [NativeEyeTrackingService.setInvertedFaceMode]).
-    unawaited(_service.setInvertedFaceMode(activating));
+    // Clienta DE FRENTE: el análisis no se rota (el modo acostada, con el
+    // análisis girado 180°, quedó fuera por ahora — ver
+    // `CameraXManager.analysisRotated180`). Solo se enlaza la foto rápida
+    // por la misma sesión mientras la guía está abierta.
+    unawaited(_service.setInvertedFaceMode(false, photoMode: activating));
+  }
+
+  /// Voltear cámara desde la guía: cambia frontal ↔ trasera según hacia
+  /// dónde está la persona (selfie o la operaria filmando a la clienta). Se
+  /// resetea el encuadre porque el rostro cambia de lugar en el cuadro. La
+  /// foto rápida sigue enlazada: el rebind nativo conserva `photoMode`, y el
+  /// espejado de la foto sigue a [_usingFrontCamera].
+  Future<void> _switchCameraFromGuide() async {
+    setState(() {
+      _eyesAligned = false;
+      _faceFramed = false;
+      _eyesClosedOk = false;
+    });
+    await _onSwitchCamera();
+  }
+
+  /// Fija el frame que dibuja el mapeo en la captura: el actual si trae
+  /// rostro y ojos, si no el último válido reciente (ver
+  /// [_mappingFrameNotifier] / [_mappableFrameMaxAge]).
+  void _freezeMappingFrame() {
+    final at = _lastMappableAt;
+    final recent = at != null &&
+        DateTime.now().difference(at) <= _mappableFrameMaxAge;
+    _mappingFrameNotifier.value = recent ? _lastMappableFrame : _frame;
   }
 
   void _evaluateAlignment(TrackingFrame frame) {
@@ -867,6 +962,36 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _capturingPhoto = true;
     });
     unawaited(_finishWorkAssistantOpen());
+  }
+
+  /// Botón "Voltear cámara" de la guía — ver [_switchCameraFromGuide].
+  Widget _flipCameraButton() {
+    return GestureDetector(
+      onTap: () => unawaited(_switchCameraFromGuide()),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.flip_camera_android, color: Colors.white, size: 16),
+            SizedBox(width: 6),
+            Text(
+              'Voltear cámara',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showEyeTypeSheet() {
@@ -1089,7 +1214,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         child: CustomPaint(
                           isComplex: true,
                           painter: LashMappingPainter(
-                            frames: _frameNotifier,
+                            frames: _mappingFrameNotifier,
                             styleId: _activeLashStyleId,
                           ),
                         ),
@@ -1127,11 +1252,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             ),
             EyeTrackingWorkAssistantButton(onTap: _toggleAlignmentGuide),
 
-            EyeTrackingFilterRow(
-              selectedFilter: _selectedFilter,
-              onSelect: _onFilterSelect,
-            ),
-            if (_showTransparentMenu && _activeCategory == null)
+            // Chips y carrusel se ocultan con la guía de captura activa: ocupan
+            // la misma franja inferior que el botón de disparo y el mensaje de
+            // la guía, y durante la captura no se usan.
+            if (!_alignmentGuideActive)
+              EyeTrackingFilterRow(
+                selectedFilter: _selectedFilter,
+                onSelect: _onFilterSelect,
+              ),
+            if (_showTransparentMenu &&
+                _activeCategory == null &&
+                !_alignmentGuideActive)
               Positioned(
                 left: 0,
                 right: 0,
@@ -1244,102 +1375,110 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                           eyesClosed: _eyesClosedOk,
                         ),
                       ),
-                      Positioned(
-                        bottom: 60,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            margin: const EdgeInsets.symmetric(horizontal: 36),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _eyesAligned
-                                  ? const Color(0xDD1FA24A)
-                                  : const Color(0xDD0D5C41),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _eyesAligned
-                                      ? Icons.check_circle
-                                      : (!_faceFramed
-                                            ? Icons.crop_free
-                                            : Icons.remove_red_eye_outlined),
-                                  color: Colors.white,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 10),
-                                Flexible(
-                                  child: Text(
-                                    _eyesAligned
-                                        ? 'Listo para capturar'
-                                        : (!_faceFramed
-                                              ? 'Encuadra el rostro dentro de la guía'
-                                              : 'Ojos cerrados para ver la línea de pestañas'),
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                      height: 1.3,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 ),
               ),
 
-            // Botón de captura: FUERA del `IgnorePointer` de la guía, que
-            // deja pasar los toques. La captura es manual a propósito —
-            // ver [_toggleAlignmentGuide].
-            if (_alignmentGuideActive && !_capturingPhoto)
+            // Botón de captura + mensaje de la guía, apilados en una sola
+            // columna inferior para que no se pisen entre sí ni con el resto
+            // de los controles (chips/carrusel se ocultan con la guía activa).
+            // Queda FUERA del `IgnorePointer` de la guía para que el botón
+            // reciba toques. La captura es manual a propósito — ver
+            // [_toggleAlignmentGuide].
+            if (_alignmentGuideActive)
               Positioned(
-                bottom: 130,
+                bottom: 62,
                 left: 0,
                 right: 0,
-                child: Center(
-                  child: GestureDetector(
-                    onTap: _beginWorkAssistantFlow,
-                    // Atenuado hasta que se detectan los ojos cerrados: antes
-                    // de eso [_beginWorkAssistantFlow] no deja capturar.
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 200),
-                      opacity: _eyesClosedOk ? 1 : 0.4,
-                      child: Container(
-                      width: 74,
-                      height: 74,
-                      decoration: BoxDecoration(
-                        color: _eyesAligned
-                            ? const Color(0xFF2ECC71)
-                            : Colors.white,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 4),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.black45, blurRadius: 10),
-                        ],
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!_capturingPhoto) ...[
+                      _flipCameraButton(),
+                      const SizedBox(height: 12),
+                    ],
+                    if (!_capturingPhoto)
+                      GestureDetector(
+                        onTap: _beginWorkAssistantFlow,
+                        // Atenuado hasta que se detectan los ojos cerrados:
+                        // antes de eso [_beginWorkAssistantFlow] no deja
+                        // capturar.
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 200),
+                          opacity: _eyesClosedOk ? 1 : 0.4,
+                          child: Container(
+                            width: 68,
+                            height: 68,
+                            decoration: BoxDecoration(
+                              color: _eyesAligned
+                                  ? const Color(0xFF2ECC71)
+                                  : Colors.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 4),
+                              boxShadow: const [
+                                BoxShadow(color: Colors.black45, blurRadius: 10),
+                              ],
+                            ),
+                            child: Icon(
+                              Icons.camera_alt_rounded,
+                              color: _eyesAligned
+                                  ? Colors.white
+                                  : AppColors.brandPrimary,
+                              size: 30,
+                            ),
+                          ),
+                        ),
                       ),
-                      child: Icon(
-                        Icons.camera_alt_rounded,
-                        color: _eyesAligned
-                            ? Colors.white
-                            : AppColors.brandPrimary,
-                        size: 32,
-                      ),
+                    const SizedBox(height: 12),
+                    IgnorePointer(
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        margin: const EdgeInsets.symmetric(horizontal: 56),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _eyesAligned
+                              ? const Color(0xDD1FA24A)
+                              : const Color(0xDD0D5C41),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _eyesAligned
+                                  ? Icons.check_circle
+                                  : (!_faceFramed
+                                        ? Icons.crop_free
+                                        : Icons.remove_red_eye_outlined),
+                              color: Colors.white,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                _eyesAligned
+                                    ? 'Listo para capturar'
+                                    : (!_faceFramed
+                                          ? 'Encuadra el rostro dentro de la guía'
+                                          : 'Ojos cerrados para ver la línea de pestañas'),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.2,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
               ),
 

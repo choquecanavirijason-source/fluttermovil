@@ -90,7 +90,10 @@ object EyeTransformCalculator {
         rootLocalY: Float = 0f,
     ): EyeTransform {
         val nx = (anchor.point.x / imageWidth) + xNudgeNormalized
-        val ny = anchor.point.y / imageHeight
+        // Y de imagen crece hacia abajo: restar sube el ancla. Ver
+        // [RendererConfiguration.LASH_VERTICAL_NUDGE_EYE_WIDTHS].
+        val ny = (anchor.point.y -
+            anchor.widthPx * RendererConfiguration.LASH_VERTICAL_NUDGE_EYE_WIDTHS) / imageHeight
         // NDC: X crece a la derecha [-1,1] igual que la imagen; Y de imagen
         // crece hacia abajo pero NDC (OpenGL/Filament) crece hacia arriba,
         // de ahí el signo invertido en ndcY.

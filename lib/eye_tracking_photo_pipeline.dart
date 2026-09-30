@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -101,7 +102,7 @@ class EyeTrackingPhotoPipeline {
       final xfile = await ctrl.takePicture();
       final faceBytes = await File(xfile.path).readAsBytes();
 
-      return compositeAndCrop(
+      return await compositeAndCropInBackground(
         faceBytes,
         overlayBytes,
         mirror: preferFrontCamera,
@@ -112,6 +113,20 @@ class EyeTrackingPhotoPipeline {
     } finally {
       await ctrl?.dispose();
     }
+  }
+
+  /// [compositeAndCrop] en un isolate aparte. Decodificar, escalar y
+  /// codificar con el paquete `image` (Dart puro) toma cientos de ms
+  /// a segundos: en el hilo de la UI congelaba la pantalla y el aviso de
+  /// "procesando" mientras tanto.
+  static Future<Uint8List> compositeAndCropInBackground(
+    Uint8List faceRaw,
+    Uint8List? overlayRaw, {
+    bool mirror = true,
+  }) {
+    return Isolate.run(
+      () => compositeAndCrop(faceRaw, overlayRaw, mirror: mirror),
+    );
   }
 
   /// Compone la foto de cara con el overlay de pestañas (alpha blend) y
@@ -170,12 +185,17 @@ class EyeTrackingPhotoPipeline {
         // mapeo son líneas finas y números, y encogerlos a ~480p (lo que
         // mide la foto) era lo que los dejaba pixelados. Escalando la foto
         // hacia arriba, el mapeo entra 1:1 y queda limpio.
+        //
+        // Lineal y no cúbica: la cúbica muestrea 16 píxeles por píxel de
+        // salida en Dart puro y era de lo más lento de la captura; sobre la
+        // FOTO (no sobre las líneas del mapeo, que entran 1:1) la diferencia
+        // no se nota.
         if (overlayBand.width > canvas.width) {
           canvas = img.copyResize(
             canvas,
             width: overlayBand.width,
             height: overlayBand.height,
-            interpolation: img.Interpolation.cubic,
+            interpolation: img.Interpolation.linear,
           );
           img.compositeImage(canvas, overlayBand, blend: img.BlendMode.alpha);
         } else {
@@ -187,7 +207,7 @@ class EyeTrackingPhotoPipeline {
           );
           img.compositeImage(canvas, overlayScaled, blend: img.BlendMode.alpha);
         }
-        return Uint8List.fromList(img.encodePng(canvas));
+        return _encode(canvas);
       }
     }
 
@@ -197,8 +217,15 @@ class EyeTrackingPhotoPipeline {
     // quedar en la misma orientación en que ve a la clienta, que está
     // acostada. Enderezarla obligaba a traducir mentalmente izquierda y
     // derecha contra lo que tiene delante.
-    return Uint8List.fromList(img.encodePng(cropped));
+    return _encode(cropped);
   }
+
+  /// JPEG y no PNG: el resultado es una foto (solo se muestra con
+  /// `Image.memory` y la IA la recibe como `.jpg`), y codificar PNG de ~2 MP
+  /// en Dart puro tomaba segundos — era la mayor parte de la demora al
+  /// capturar. 92 conserva nítidas las líneas y los números del mapeo.
+  static Uint8List _encode(img.Image image) =>
+      Uint8List.fromList(img.encodeJpg(image, quality: 92));
 
   /// Franja de los ojos: y=22%–64% del alto, a todo lo ancho.
   ///

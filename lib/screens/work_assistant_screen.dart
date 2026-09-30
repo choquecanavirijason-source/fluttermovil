@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import 'package:Probador/core/theme/app_colors.dart';
 import 'package:Probador/work_assistant_args.dart';
 
+import '../core/error/api_exception.dart';
 import '../core/recommendation/eye_shape_analyzer.dart';
 import '../eye_tracking_model.dart';
 import '../features/tracking/data/tracking_repository_impl.dart';
@@ -51,6 +52,31 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   Uint8List? _referenceBytes;
   bool _mirrorTopPanel = false;
 
+  /// `true` mientras la foto de referencia se compone en segundo plano —
+  /// ver [WorkAssistantArgs.panelBytesFuture].
+  bool _referenceLoading = false;
+
+  Future<void> _awaitPendingReference(Future<Uint8List?> pending) async {
+    Uint8List? bytes;
+    try {
+      bytes = await pending;
+    } catch (e) {
+      debugPrint('[WorkAssistant] composición de la referencia falló: $e');
+    }
+    if (!mounted) return;
+    // Si mientras tanto se sacó una referencia manual, no pisarla.
+    if (!_referenceLoading) return;
+    if (bytes != null && bytes.isNotEmpty) {
+      setState(() {
+        _referenceBytes = bytes;
+        _referenceLoading = false;
+      });
+    } else {
+      setState(() => _referenceLoading = false);
+      unawaited(_loadAsset(_defaultRefAsset));
+    }
+  }
+
   bool _analyzing = false;
   final FlutterTts _tts = FlutterTts();
 
@@ -83,7 +109,15 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     final pref = widget.args?.panelPngBytes;
-    if (pref != null && pref.isNotEmpty) {
+    final pending = widget.args?.panelBytesFuture;
+    if (pending != null) {
+      // La foto se sigue componiendo en segundo plano (ver
+      // [WorkAssistantArgs.panelBytesFuture]): el panel muestra un cargando
+      // y se completa cuando llega.
+      _referenceLoading = true;
+      _mirrorTopPanel = widget.args?.mirrorTopPanel ?? false;
+      unawaited(_awaitPendingReference(pending));
+    } else if (pref != null && pref.isNotEmpty) {
       _referenceBytes = pref;
       _mirrorTopPanel = widget.args?.mirrorTopPanel ?? false;
     } else {
@@ -222,7 +256,11 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       return;
     }
     if (!mounted) return;
-    setState(() => _referenceBytes = jpeg);
+    setState(() {
+      _referenceBytes = jpeg;
+      // Una referencia manual gana sobre la que se estaba componiendo.
+      _referenceLoading = false;
+    });
   }
 
   Future<void> _pickReferenceSheet() async {
@@ -326,11 +364,29 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       });
       unawaited(_speak(text));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo obtener el consejo de IA: $e')),
-        );
+      if (!mounted) return;
+      final aiDisabled = ApiException.from(e)?.isAiDisabled ?? false;
+      if (aiDisabled) {
+        // IA apagada en la configuración: detener el ciclo automático — si
+        // no, reintenta cada [_aiCycleInterval] y repite el mismo aviso. Un
+        // toque manual (Play / "Evaluar ahora") vuelve a consultar, por si
+        // ya la activaron.
+        _aiCycleTimer?.cancel();
+        _aiCycleTimer = null;
+        setState(() => _aiGuidanceActive = false);
       }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              ApiException.userMessage(
+                e,
+                fallback: 'No se pudo obtener el consejo de IA. Reintenta.',
+              ),
+            ),
+          ),
+        );
     } finally {
       if (mounted) setState(() => _analyzing = false);
     }
@@ -591,6 +647,17 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           )
         else
           const ColoredBox(color: Colors.black),
+        if (_referenceLoading)
+          const Center(
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            ),
+          ),
         Positioned(
           top: topInset + 8,
           left: 10,

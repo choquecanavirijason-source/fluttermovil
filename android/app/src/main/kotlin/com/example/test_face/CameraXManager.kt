@@ -201,6 +201,14 @@ class CameraXManager(
     @Volatile private var blankFramesRemaining = 0
 
     /**
+     * Enlaza ImageCapture (foto del asistente) en lugar de VideoCapture — ver
+     * [applyBinding]. Antes era `analysisRotated180` a secas, pero el
+     * asistente también se usa con la clienta DE FRENTE (análisis sin rotar)
+     * y ahí la foto igual tiene que salir por la sesión rápida.
+     */
+    @Volatile private var photoModeEnabled = false
+
+    /**
      * Modo "clienta acostada": rota el análisis 180° (`true`) o lo deja
      * normal (`false`).
      *
@@ -211,12 +219,15 @@ class CameraXManager(
      * un ajuste malo — el mismo problema que describe [analysisRotated180],
      * solo que provocado por la transición.
      */
-    fun setInvertedFaceMode(enabled: Boolean) {
-        if (analysisRotated180 == enabled) return
-        analysisRotated180 = enabled
-        helper.analysisRotated180 = enabled
-        blankFramesRemaining = BLANK_FRAMES_ON_ROTATION_CHANGE
-        Log.i(TAG, "setInvertedFaceMode=$enabled → análisis rotado180=$enabled")
+    fun setInvertedFaceMode(enabled: Boolean, photoMode: Boolean = enabled) {
+        if (analysisRotated180 == enabled && photoModeEnabled == photoMode) return
+        if (analysisRotated180 != enabled) {
+            analysisRotated180 = enabled
+            helper.analysisRotated180 = enabled
+            blankFramesRemaining = BLANK_FRAMES_ON_ROTATION_CHANGE
+        }
+        photoModeEnabled = photoMode
+        Log.i(TAG, "setInvertedFaceMode rotado180=$enabled photoMode=$photoMode")
         // Reenlaza para cambiar grabación ↔ foto (ver [applyBinding]).
         mainHandler.post {
             if (!stopped.get() && helper.getLandmarker() != null) scheduleRebind()
@@ -239,16 +250,28 @@ class CameraXManager(
      * el pulso de la mano, el mapeo quedaba corrido respecto del ojo. Por
      * el mismo motivo tampoco hace falta detener el tracking antes.
      */
+    /**
+     * `true` mientras [takePhoto] está en vuelo: [processFrame] descarta cada
+     * frame de análisis sin convertirlo ni pasarlo a MediaPipe. El overlay
+     * con el mapeo ya se capturó antes de pedir la foto, así que el tracking
+     * no aporta nada en ese intervalo y solo le quitaba CPU/ancho de banda a
+     * la captura. Se pausa el ANÁLISIS, no la cámara: desenlazar cortaría la
+     * misma sesión por la que sale la foto.
+     */
+    @Volatile private var analysisPausedForCapture = false
+
     fun takePhoto(result: MethodChannel.Result) {
         val capture = imageCaptureUseCase
         if (capture == null) {
             result.success(null)
             return
         }
+        analysisPausedForCapture = true
         capture.takePicture(
             mainExecutor,
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
+                    analysisPausedForCapture = false
                     val bytes = try {
                         // JPEG: `ImageCapture` entrega un solo plano ya
                         // comprimido, no hay que recomprimir nada.
@@ -264,6 +287,7 @@ class CameraXManager(
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    analysisPausedForCapture = false
                     Log.e(TAG, "takePhoto falló", exception)
                     result.success(null)
                 }
@@ -284,6 +308,20 @@ class CameraXManager(
 
     private val stopped = AtomicBoolean(true)
     private val bindGeneration = AtomicLong(0L)
+
+    /**
+     * Se incrementa en cada [start] y [stop]. Las fases DIFERIDAS de [stop]
+     * (limpiar el analizador, desenlazar la cámara, cerrar MediaPipe) solo
+     * corren si nadie llamó a [start]/[stop] después.
+     *
+     * Bug que corrige: al volver del asistente de trabajo, su `dispose` llama
+     * a `stopTracking` y el probador llama a `startTracking` enseguida. La
+     * fase de desenlace del stop (con [STOP_UNBIND_DELAY_MS]) corría DESPUÉS
+     * del start: desenlazaba la cámara recién enlazada y cerraba el
+     * landmarker, así que no llegaban más frames y el overlay quedaba
+     * congelado hasta salir y volver a entrar a la pantalla.
+     */
+    private val lifecycleGeneration = AtomicLong(0L)
     private var pendingBindRunnable: Runnable? = null
 
     /** Último frame orientado/espejado del análisis; fuente de [captureFrame]. */
@@ -393,6 +431,9 @@ class CameraXManager(
     }
 
     fun start() {
+        // Anula las fases pendientes de un stop anterior — ver
+        // [lifecycleGeneration].
+        lifecycleGeneration.incrementAndGet()
         analysisExecutor.execute {
             if (helper.getLandmarker() == null) {
                 helper.setup()
@@ -408,6 +449,7 @@ class CameraXManager(
     }
 
     fun stop(result: MethodChannel.Result? = null) {
+        val generation = lifecycleGeneration.incrementAndGet()
         stopped.set(true)
         cancelPendingBind()
         bindGeneration.incrementAndGet()
@@ -421,7 +463,15 @@ class CameraXManager(
         activeRecording = null
         pendingStopResult = null
 
+        // Un start()/stop() posterior dejó obsoleto este stop: no tocar la
+        // cámara ni MediaPipe que ya reenlazó ese otro llamado.
+        fun superseded() = lifecycleGeneration.get() != generation
+
         val phaseClear = Runnable {
+            if (superseded()) {
+                result?.success(null)
+                return@Runnable
+            }
             try {
                 imageAnalysisUseCase?.clearAnalyzer()
             } catch (_: Exception) {
@@ -429,6 +479,10 @@ class CameraXManager(
             imageAnalysisUseCase = null
 
             val phaseUnbind = Runnable {
+                if (superseded()) {
+                    result?.success(null)
+                    return@Runnable
+                }
                 try {
                     try {
                         cameraProvider?.unbindAll()
@@ -651,10 +705,14 @@ class CameraXManager(
             // sumarle grabación son cuatro usos simultáneos y no todos los
             // dispositivos los soportan. En el asistente no se graba, así
             // que el cambio no le quita nada.
-            val photoMode = analysisRotated180
+            val photoMode = photoModeEnabled
             val ic = if (photoMode) {
                 (imageCaptureUseCase ?: ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    // Explícito: con flash AUTO/ON CameraX corre un ciclo de
+                    // pre-captura (AE/AF + pre-flash) antes del disparo.
+                    .setFlashMode(ImageCapture.FLASH_MODE_OFF)
+                    .setResolutionSelector(captureResolutionSelector)
                     .build()
                     .also { imageCaptureUseCase = it })
                     .apply { targetRotation = rotation }
@@ -711,7 +769,7 @@ class CameraXManager(
 
     private fun processFrame(imageProxy: ImageProxy) {
         val landmarker = helper.getLandmarker()
-        if (landmarker == null || stopped.get()) {
+        if (landmarker == null || stopped.get() || analysisPausedForCapture) {
             imageProxy.close()
             return
         }
@@ -1043,6 +1101,24 @@ class CameraXManager(
                     ResolutionStrategy(
                         Size(640, 480),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                    ),
+                )
+                .build()
+
+        /** Foto del asistente (ImageCapture): 4:3 como preview y análisis
+         * (mismo encuadre), acotada a ~1440x1080. Sin selector CameraX
+         * elegía la resolución MÁXIMA del sensor (12-50 MP): el JPEG tardaba
+         * en salir y después Dart lo decodificaba entero en
+         * `compositeAndCrop` — era la mayor parte de la demora al capturar.
+         * Más píxeles no aportan: la foto se recorta a la franja de ojos y se
+         * compone a la resolución del overlay. */
+        private val captureResolutionSelector: ResolutionSelector =
+            ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        Size(1440, 1080),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
                     ),
                 )
                 .build()

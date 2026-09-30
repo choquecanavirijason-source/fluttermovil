@@ -1,5 +1,4 @@
 import 'dart:async' show StreamSubscription, unawaited;
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -591,20 +590,20 @@ class _ThemeModeButton extends StatelessWidget {
     return IconButton(
       onPressed: onTap,
       tooltip: isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro',
-      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
       padding: EdgeInsets.zero,
       style: IconButton.styleFrom(
-        backgroundColor: Colors.black.withValues(alpha: 0.35),
+        backgroundColor: Colors.black.withValues(alpha: 0.6),
         foregroundColor: Colors.white,
         side: BorderSide(color: Colors.white.withValues(alpha: 0.28)),
         shape: const CircleBorder(),
-        minimumSize: const Size(40, 40),
-        maximumSize: const Size(40, 40),
+        minimumSize: const Size(48, 48),
+        maximumSize: const Size(48, 48),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
       icon: Icon(
         isDark ? Icons.light_mode : Icons.dark_mode_outlined,
-        size: 20,
+        size: 24,
       ),
     );
   }
@@ -659,24 +658,19 @@ class _StyledLogoutButton extends StatelessWidget {
           ),
         ),
       ],
-      // Botón circular tipo glassmorphism: desenfoca lo que hay detrás.
-      child: ClipOval(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-          child: Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.black.withValues(alpha: 0.25),
-              border: Border.all(color: AppColors.brandAccent, width: 1.5),
-            ),
-            child: const Icon(
-              Icons.logout_rounded,
-              color: Colors.white,
-              size: 24,
-            ),
-          ),
+      // Mismo borde, tamaño y fondo que _ThemeModeButton.
+      child: Container(
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.black.withValues(alpha: 0.6),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+        ),
+        child: const Icon(
+          Icons.logout_rounded,
+          color: Colors.white,
+          size: 31,
         ),
       ),
     );

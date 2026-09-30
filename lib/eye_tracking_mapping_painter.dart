@@ -61,11 +61,16 @@ const _fanPivotT = 0.30;
 /// Cuánto se corre el mapeo desde la línea de pestañas hacia la mejilla, en
 /// fracción del ancho del ojo.
 ///
-/// 0.16 es el valor validado en dispositivo. Este es el número a mover si
+/// Referencia: en un teléfono típico el ojo mide ~58 px lógicos, así que
+/// 0.1 ≈ 6 px. Va siempre hacia la MEJILLA (anatómico, ver [_towardCheek]).
+///
+/// Historial 2026-09-30: 0.16 → 0 (base sobre la línea de pestañas) → 0.2
+/// (quedaba en el pliegue) → 0.1 → 0.05, punto medio entre 0 y 0.1 validado
+/// en dispositivo con la clienta de frente. Este es el número a mover si
 /// queda muy encima de la pestaña o demasiado separado — y SOLO ese: si el
-/// mapeo aparece del lado de las cejas, eso no se arregla acá, es la
-/// dirección (ver [_towardCheek]).
-const _lashLineOffsetRatio = 0.16;
+/// mapeo aparece del lado de las cejas, eso no se arregla acá (ver
+/// `CameraXManager.analysisRotated180`).
+const _lashLineOffsetRatio = 0.1;
 
 _LashMappingPattern _patternForStyle(String? styleId) {
   switch (styleId) {

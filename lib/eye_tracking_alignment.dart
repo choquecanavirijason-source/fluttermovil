@@ -54,8 +54,12 @@ class EyeAlignmentGuide {
   /// (para decidir si el rostro real está encuadrado dentro de ella). Cubre
   /// el ROSTRO COMPLETO (frente a mentón, como las guías de verificación de
   /// identidad de un banco) — no la franja angosta de solo ojos que usa
-  /// `EyeTrackingPhotoPipeline.compositeAndCrop` para el recorte final (esa
-  /// franja es independiente y no necesita coincidir con esta guía visual).
+  /// `EyeTrackingPhotoPipeline.compositeAndCrop` para el recorte final.
+  ///
+  /// NO mover el óvalo hacia abajo ni achicarlo: la foto final se recorta a
+  /// una franja FIJA de pantalla (`EyeTrackingPhotoPipeline._cropEyeBand`,
+  /// 22%–64% del alto). Con el óvalo centrado (probado 2026-09-30) el rostro
+  /// se encuadraba más abajo y el mapeo de medidas quedaba fuera de la foto.
   static Rect guideRect(Size canvasSize) => Rect.fromLTWH(
     canvasSize.width * 0.14,
     canvasSize.height * 0.16,

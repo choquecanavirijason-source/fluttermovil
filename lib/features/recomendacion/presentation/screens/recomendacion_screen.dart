@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../../../core/error/api_exception.dart';
 import '../../../../core/presentation/organisms/async_value_view.dart';
 import '../../../../core/recommendation/eye_shape_analyzer.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -69,7 +70,10 @@ class _RecomendacionScreenState extends ConsumerState<RecomendacionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(
-        () => _aiError = 'No se pudo obtener la recomendación de la IA: $e',
+        () => _aiError = ApiException.userMessage(
+          e,
+          fallback: 'No se pudo obtener la recomendación de la IA.',
+        ),
       );
     } finally {
       if (mounted) setState(() => _aiLoading = false);

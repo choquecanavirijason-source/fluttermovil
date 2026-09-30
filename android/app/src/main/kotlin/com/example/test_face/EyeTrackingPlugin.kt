@@ -66,7 +66,8 @@ class EyeTrackingPlugin(
             }
             "setInvertedFaceMode" -> {
                 val enabled = call.argument<Boolean>("enabled") ?: false
-                cameraXManager?.setInvertedFaceMode(enabled)
+                val photoMode = call.argument<Boolean>("photoMode") ?: enabled
+                cameraXManager?.setInvertedFaceMode(enabled, photoMode)
                 result.success(null)
             }
             "takePhoto" -> {
