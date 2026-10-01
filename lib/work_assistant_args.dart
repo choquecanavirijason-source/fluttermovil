@@ -1,4 +1,7 @@
 import 'dart:typed_data';
+import 'dart:ui' show Size;
+
+import 'eye_tracking_model.dart';
 
 /// Argumentos opcionales al abrir [WorkAssistantScreen] desde la cámara con pestañas.
 class WorkAssistantArgs {
@@ -6,6 +9,11 @@ class WorkAssistantArgs {
     this.panelPngBytes,
     this.panelBytesFuture,
     this.mirrorTopPanel = false,
+    this.mappingFrame,
+    this.mappingStyleId,
+    this.cropOverlayBytes,
+    this.mappingPreviewSize,
+    this.mirrorPhoto = false,
   });
 
   /// Captura (preview + filtro dibujado en Flutter), ya lista.
@@ -19,4 +27,11 @@ class WorkAssistantArgs {
 
   /// Espejo horizontal solo en el panel superior (p. ej. selfie coherente con preview).
   final bool mirrorTopPanel;
+
+  /// Landmarks proyectados al mismo eye band que la captura del panel.
+  final TrackingFrame? mappingFrame;
+  final String? mappingStyleId;
+  final Uint8List? cropOverlayBytes;
+  final Size? mappingPreviewSize;
+  final bool mirrorPhoto;
 }

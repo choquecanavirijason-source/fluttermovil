@@ -7,29 +7,19 @@ import '../../eye_tracking_alignment.dart';
 /// óvalo fijo donde el usuario debe encajar su rostro COMPLETO (frente a
 /// mentón). El rect base es `EyeAlignmentGuide.guideRect` (única fuente,
 /// compartida con la lógica que decide si el rostro está encuadrado). El
-/// color del contorno refleja las DOS condiciones necesarias para disparar
-/// la captura:
-///   - blanco: el rostro todavía no está encuadrado en la guía.
-///   - ámbar: el rostro ya está encuadrado, falta cerrar los ojos.
-///   - verde: ambas condiciones listas.
+/// Óvalo y guías de nariz/ojos comparten el color del detector de ojos
+/// cerrados, independientemente de las demás condiciones de captura.
 class EyePositionGuidePainter extends CustomPainter {
-  final bool faceFramed;
   final bool eyesClosed;
 
-  const EyePositionGuidePainter({
-    required this.faceFramed,
-    required this.eyesClosed,
-  });
+  const EyePositionGuidePainter({required this.eyesClosed});
 
-  Color get _color {
-    if (faceFramed && eyesClosed) return const Color(0xFF2ECC71);
-    if (faceFramed) return const Color(0xFFFFC107);
-    return Colors.white;
-  }
+  Color get _color => eyesClosed ? Colors.greenAccent : Colors.white54;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final facePath = _faceGuidePath(EyeAlignmentGuide.guideRect(size));
+    final guideRect = EyeAlignmentGuide.guideRect(size);
+    final facePath = _faceGuidePath(guideRect);
 
     final outerPath = Path()..addRect(Offset.zero & size);
     final maskPath = Path.combine(
@@ -44,8 +34,40 @@ class EyePositionGuidePainter extends CustomPainter {
       Paint()
         ..color = _color
         ..style = PaintingStyle.stroke
-        ..strokeWidth = faceFramed ? 3.5 : 2.5,
+        ..strokeWidth = eyesClosed ? 3.5 : 2.5,
     );
+
+    final guidePaint = Paint()
+      ..color = _color
+      ..strokeWidth = eyesClosed ? 2.2 : 1.4
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final eyeLineY = guideRect.top + guideRect.height / 3;
+    _drawDashedLine(
+      canvas,
+      Offset(guideRect.left + guideRect.width * 0.18, eyeLineY),
+      Offset(guideRect.right - guideRect.width * 0.18, eyeLineY),
+      guidePaint,
+    );
+    _drawDashedLine(
+      canvas,
+      Offset(guideRect.center.dx, guideRect.top + guideRect.height * 0.12),
+      Offset(guideRect.center.dx, guideRect.bottom - guideRect.height * 0.12),
+      guidePaint,
+    );
+  }
+
+  void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint) {
+    final delta = end - start;
+    final length = delta.distance;
+    if (length <= 0) return;
+    final direction = delta / length;
+    const dashLength = 7.0;
+    const gapLength = 5.0;
+    for (double offset = 0; offset < length; offset += dashLength + gapLength) {
+      final dashEnd = (offset + dashLength).clamp(0.0, length);
+      canvas.drawLine(start + direction * offset, start + direction * dashEnd, paint);
+    }
   }
 
   /// Óvalo simple (elipse) inscrito en [rect] — como la guía "OVAL" clásica
@@ -57,5 +79,5 @@ class EyePositionGuidePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(EyePositionGuidePainter old) =>
-      old.faceFramed != faceFramed || old.eyesClosed != eyesClosed;
+      old.eyesClosed != eyesClosed;
 }

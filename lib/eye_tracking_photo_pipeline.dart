@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -10,14 +11,86 @@ import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 
+import 'eye_tracking_model.dart';
+
 /// Captura la foto final del asistente de trabajo / recomendación IA:
 /// overlay Flutter (pestañas + líneas de medición) + foto real de la cámara
 /// frontal, compuestas y recortadas a la franja de ojos. Concentra toda la
 /// dependencia de los paquetes `image` y `camera` fuera de la página.
 class EyeTrackingPhotoPipeline {
+  static const double _overlayPixelRatio = 2.0;
+  static const double _eyeBandStartRatio = 0.22;
+  static const double _eyeBandHeightRatio = 0.42;
+
   final GlobalKey previewCaptureKey;
 
   const EyeTrackingPhotoPipeline({required this.previewCaptureKey});
+
+  Size? get previewSize {
+    final boundary =
+        previewCaptureKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+    if (boundary == null || !boundary.attached) return null;
+    return boundary.size;
+  }
+
+  /// Proyecta los landmarks al eye band usando el mismo `BoxFit.cover` del
+  /// preview y la misma banda vertical aplicada a la foto capturada.
+  static TrackingFrame? frameForCapturedBand(
+    TrackingFrame? frame,
+    Size previewSize,
+  ) {
+    if (frame == null ||
+        !frame.faceDetected ||
+        frame.imageWidth <= 0 ||
+        frame.imageHeight <= 0 ||
+        previewSize.width <= 0 ||
+        previewSize.height <= 0) {
+      return null;
+    }
+
+    final sourceWidth = frame.imageWidth.toDouble();
+    final sourceHeight = frame.imageHeight.toDouble();
+    final scale = math.max(
+      previewSize.width / sourceWidth,
+      previewSize.height / sourceHeight,
+    );
+    final dx = (previewSize.width - sourceWidth * scale) / 2;
+    final dy = (previewSize.height - sourceHeight * scale) / 2;
+    final overlayWidth = (previewSize.width * _overlayPixelRatio).round();
+    final overlayHeight = (previewSize.height * _overlayPixelRatio).round();
+    final cropTop = (overlayHeight * _eyeBandStartRatio).round();
+    final bandHeight = (overlayHeight * _eyeBandHeightRatio)
+        .round()
+        .clamp(1, overlayHeight - cropTop);
+
+    EyePoint project(EyePoint point) => EyePoint(
+      x: (point.x * scale + dx) * _overlayPixelRatio,
+      y: (point.y * scale + dy) * _overlayPixelRatio - cropTop,
+    );
+
+    List<EyePoint> projectAll(List<EyePoint> points) =>
+        points.map(project).toList(growable: false);
+
+    return TrackingFrame(
+      faceDetected: frame.faceDetected,
+      imageWidth: overlayWidth,
+      imageHeight: bandHeight,
+      faceContour: projectAll(frame.faceContour),
+      leftEye: projectAll(frame.leftEye),
+      rightEye: projectAll(frame.rightEye),
+      leftIris: frame.leftIris == null ? null : project(frame.leftIris!),
+      rightIris: frame.rightIris == null ? null : project(frame.rightIris!),
+      leftOpenRatio: frame.leftOpenRatio,
+      rightOpenRatio: frame.rightOpenRatio,
+      leftUpperLid: projectAll(frame.leftUpperLid),
+      leftLowerLid: projectAll(frame.leftLowerLid),
+      rightUpperLid: projectAll(frame.rightUpperLid),
+      rightLowerLid: projectAll(frame.rightLowerLid),
+      leftLashLine: projectAll(frame.leftLashLine),
+      rightLashLine: projectAll(frame.rightLashLine),
+    );
+  }
 
   /// Captura el overlay Flutter (pestañas PNG) mientras MediaPipe sigue
   /// activo. Las áreas de cámara nativa quedan transparentes en el PNG
@@ -41,8 +114,7 @@ class EyeTrackingPhotoPipeline {
       // Ese pico, con Filament y MediaPipe todavía cargados, fue la causa
       // confirmada de que el sistema matara el proceso por falta de memoria
       // (logcat: lmkd "min2x watermark is breached even after kill").
-      const ratio = 2.0;
-      final image = await boundary.toImage(pixelRatio: ratio);
+      final image = await boundary.toImage(pixelRatio: _overlayPixelRatio);
       final bd = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       return bd?.buffer.asUint8List();
@@ -234,8 +306,10 @@ class EyeTrackingPhotoPipeline {
   /// cerrado y centrado en las cejas, y el mapeo terminaba fuera del cuadro.
   /// La franja fija encuadra bien en la práctica.
   static img.Image _cropEyeBand(img.Image src) {
-    final y = (src.height * 0.22).round().clamp(0, src.height - 1);
-    final h = (src.height * 0.42).round().clamp(1, src.height - y);
+    final y = (src.height * _eyeBandStartRatio).round().clamp(0, src.height - 1);
+    final h = (src.height * _eyeBandHeightRatio)
+      .round()
+      .clamp(1, src.height - y);
     return img.copyCrop(src, x: 0, y: y, width: src.width, height: h);
   }
 }

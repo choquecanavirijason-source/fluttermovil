@@ -104,8 +104,15 @@ class LashMappingPainter extends CustomPainter {
   /// `styleId` del diseño activo (ver `_lashStyleIdFor` en
   /// `eye_tracking_page.dart`) — decide qué [_LashMappingPattern] usar.
   final String? styleId;
+  final Offset leftEyeOffset;
+  final Offset rightEyeOffset;
 
-  const LashMappingPainter({required this.frames, this.styleId})
+  const LashMappingPainter({
+    required this.frames,
+    this.styleId,
+    this.leftEyeOffset = Offset.zero,
+    this.rightEyeOffset = Offset.zero,
+  })
     : super(repaint: frames);
 
   /// Misma lógica de transformación usada en el resto del tracking (BoxFit.cover / FILL_CENTER).
@@ -133,10 +140,22 @@ class LashMappingPainter extends CustomPainter {
     if (m != null) canvas.transform(m.storage);
 
     if (f.leftEye.length >= 4) {
-      _drawEyeMapping(canvas, f, f.leftEye, f.leftUpperLid);
+      _drawEyeMapping(
+        canvas,
+        f,
+        f.leftEye,
+        f.leftUpperLid,
+        leftEyeOffset,
+      );
     }
     if (f.rightEye.length >= 4) {
-      _drawEyeMapping(canvas, f, f.rightEye, f.rightUpperLid);
+      _drawEyeMapping(
+        canvas,
+        f,
+        f.rightEye,
+        f.rightUpperLid,
+        rightEyeOffset,
+      );
     }
 
     canvas.restore();
@@ -147,7 +166,15 @@ class LashMappingPainter extends CustomPainter {
     TrackingFrame frame,
     List<EyePoint> eye,
     List<EyePoint> upperLid,
+    Offset eyeOffset,
   ) {
+    List<EyePoint> shifted(List<EyePoint> points) => [
+      for (final point in points)
+        EyePoint(x: point.x + eyeOffset.dx, y: point.y + eyeOffset.dy),
+    ];
+
+    eye = shifted(eye);
+    upperLid = shifted(upperLid);
     final pattern = _patternForStyle(styleId);
 
     // Esquina interna (la más cerca del centro del rostro) y externa. Se
@@ -195,6 +222,7 @@ class LashMappingPainter extends CustomPainter {
     for (int i = 0; i < numLines; i++) {
       final t = i / (numLines - 1);
       final base = _pointAlong(patchLine, t);
+      final adjustedBase = Offset(base.dx, base.dy - 1.0);
 
       final rawDir = toCheek + axis * (_fanBias * (t - _fanPivotT));
       final dir = rawDir / rawDir.distance;
@@ -203,9 +231,9 @@ class LashMappingPainter extends CustomPainter {
           ? w * _maxLineLenRatio * (pattern.labels[i] / _maxMappingLabel)
           : w * _maxLineLenRatio * 0.85;
 
-      bases.add(base);
+      bases.add(adjustedBase);
       dirs.add(dir);
-      tips.add(base + dir * len);
+      tips.add(adjustedBase + dir * len);
     }
 
     // Línea de base, tenue: deja ver dónde anclan las medidas.
@@ -414,5 +442,8 @@ class LashMappingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant LashMappingPainter oldDelegate) =>
-      oldDelegate.frames != frames || oldDelegate.styleId != styleId;
+      oldDelegate.frames != frames ||
+      oldDelegate.styleId != styleId ||
+      oldDelegate.leftEyeOffset != leftEyeOffset ||
+      oldDelegate.rightEyeOffset != rightEyeOffset;
 }

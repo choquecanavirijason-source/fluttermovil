@@ -13,7 +13,9 @@ import 'package:Probador/work_assistant_args.dart';
 
 import '../core/error/api_exception.dart';
 import '../core/recommendation/eye_shape_analyzer.dart';
+import '../eye_tracking_mapping_painter.dart';
 import '../eye_tracking_model.dart';
+import '../eye_tracking_photo_pipeline.dart';
 import '../features/tracking/data/tracking_repository_impl.dart';
 import '../native_eye_tracking_service.dart';
 import 'widgets/hybrid_camera_preview.dart';
@@ -108,6 +110,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _mappingFrames.value = widget.args?.mappingFrame;
     final pref = widget.args?.panelPngBytes;
     final pending = widget.args?.panelBytesFuture;
     if (pending != null) {
@@ -138,6 +141,12 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       _runAiCycleNow();
     });
   }
+  final ValueNotifier<TrackingFrame?> _mappingFrames =
+      ValueNotifier<TrackingFrame?>(null);
+  TrackingFrame? _latestMappableFrame;
+  Offset _leftEyeOffset = Offset.zero;
+  Offset _rightEyeOffset = Offset.zero;
+  bool _showManualControls = true;
 
   /// Busca entre las voces instaladas en el celular una en español marcada
   /// como femenina y la fija para el TTS. La disponibilidad y el formato del
@@ -201,11 +210,19 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   Future<void> _loadAsset(String path) async {
     final data = await rootBundle.load(path);
     if (!mounted) return;
-    setState(() => _referenceBytes = data.buffer.asUint8List());
+    setState(() {
+      _referenceBytes = data.buffer.asUint8List();
+      _mappingFrames.value = null;
+    });
   }
 
   void _onFrame(TrackingFrame frame) {
     if (!mounted) return;
+    if (frame.faceDetected &&
+        frame.leftEye.length >= 4 &&
+        frame.rightEye.length >= 4) {
+      _latestMappableFrame = frame;
+    }
     final holdUntil = _aiMessageHoldUntil;
     if (holdUntil != null && DateTime.now().isBefore(holdUntil)) {
       return; // no pisar un consejo de IA reciente.
@@ -256,8 +273,32 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       return;
     }
     if (!mounted) return;
+    final cropOverlay = widget.args?.cropOverlayBytes;
+    final previewSize = widget.args?.mappingPreviewSize;
+    Uint8List reference = jpeg;
+    var cropSucceeded = false;
+    if (cropOverlay != null) {
+      try {
+        reference = await EyeTrackingPhotoPipeline.compositeAndCropInBackground(
+          jpeg,
+          cropOverlay,
+          mirror: widget.args?.mirrorPhoto ?? false,
+        );
+        cropSucceeded = true;
+      } catch (e) {
+        debugPrint('[WorkAssistant] recorte manual falló: $e');
+      }
+    }
+    if (!mounted) return;
+    final mappingFrame = !cropSucceeded || previewSize == null
+        ? null
+        : EyeTrackingPhotoPipeline.frameForCapturedBand(
+            _latestMappableFrame,
+            previewSize,
+          );
     setState(() {
-      _referenceBytes = jpeg;
+      _referenceBytes = reference;
+      _mappingFrames.value = mappingFrame;
       // Una referencia manual gana sobre la que se estaba componiendo.
       _referenceLoading = false;
     });
@@ -480,6 +521,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     _aiCycleTimer?.cancel();
     unawaited(_tts.stop());
     _trackingSub?.cancel();
+    _mappingFrames.dispose();
     if (_isRecording) {
       unawaited(_service.stopRecording());
     }
@@ -572,6 +614,12 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
                 ),
               ),
             ),
+            if (_referenceBytes != null && _mappingFrames.value != null)
+              Positioned(
+                right: c.maxWidth / 2 + 16,
+                bottom: 98,
+                child: _manualControlsToggle(),
+              ),
           ],
         );
       },
@@ -615,6 +663,12 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
             child: _assistantFloatingBar(),
           ),
         ),
+        if (_referenceBytes != null && _mappingFrames.value != null)
+          Positioned(
+            right: 16,
+            bottom: h / 2 + 98,
+            child: _manualControlsToggle(),
+          ),
       ],
     );
   }
@@ -658,6 +712,45 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
               ),
             ),
           ),
+        if (prefBytes != null && _mappingFrames.value != null)
+          Positioned.fill(
+            child: CustomPaint(
+              isComplex: true,
+              painter: LashMappingPainter(
+                frames: _mappingFrames,
+                styleId: widget.args?.mappingStyleId ?? 'cateye',
+                leftEyeOffset: _leftEyeOffset,
+                rightEyeOffset: _rightEyeOffset,
+              ),
+            ),
+          ),
+        if (prefBytes != null &&
+            _mappingFrames.value != null &&
+            _showManualControls)
+          Positioned(
+            left: 0,
+            right: 56,
+            bottom: 98,
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _eyeOffsetPad(
+                    label: 'Ojo izq.',
+                    offset: _leftEyeOffset,
+                    isLeftEye: true,
+                  ),
+                  const SizedBox(width: 8),
+                  _eyeOffsetPad(
+                    label: 'Ojo der.',
+                    offset: _rightEyeOffset,
+                    isLeftEye: false,
+                  ),
+                ],
+              ),
+            ),
+          ),
         Positioned(
           top: topInset + 8,
           left: 10,
@@ -687,6 +780,64 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           ),
         ),
       ],
+    );
+  }
+
+  void _stepEyeOffset(bool isLeftEye, Offset delta) {
+    setState(() {
+      if (isLeftEye) {
+        _leftEyeOffset += delta;
+      } else {
+        _rightEyeOffset += delta;
+      }
+    });
+  }
+
+  Widget _eyeOffsetPad({
+    required String label,
+    required Offset offset,
+    required bool isLeftEye,
+  }) {
+    Widget arrow(IconData icon, String direction, Offset delta) => IconButton(
+      tooltip: 'Mover $label 1 px $direction',
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      padding: EdgeInsets.zero,
+      splashRadius: 15,
+      onPressed: () => _stepEyeOffset(isLeftEye, delta),
+      icon: Icon(icon, color: Colors.white, size: 19),
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white30),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label  ${offset.dx.toStringAsFixed(0)}, ${offset.dy.toStringAsFixed(0)} px',
+            style: const TextStyle(color: Colors.white, fontSize: 10),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              arrow(Icons.chevron_left, 'a la izquierda', const Offset(-1, 0)),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  arrow(Icons.keyboard_arrow_up, 'arriba', const Offset(0, -1)),
+                  arrow(Icons.keyboard_arrow_down, 'abajo', const Offset(0, 1)),
+                ],
+              ),
+              arrow(Icons.chevron_right, 'a la derecha', const Offset(1, 0)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -754,134 +905,151 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     );
   }
 
-Widget _assistantFloatingBar() {
-  return ClipRRect(
-    borderRadius: BorderRadius.circular(22),
-    child: BackdropFilter(
-      filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.18),
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.3),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: AppColors.actionGreen.withValues(alpha: 0.85),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.remove_red_eye_outlined,
-                color: Colors.white,
-                size: 18,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                _assistantMessage,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  height: 1.3,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            GestureDetector(
-              onTap: () => unawaited(_speak(_assistantMessage)),
-              child: Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: const Icon(
-                  Icons.volume_up_rounded,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            // "Evaluar ahora": pide un consejo nuevo de inmediato, sin
-            // esperar al ciclo automático ni tener que apagarlo/prenderlo.
-            GestureDetector(
-              onTap: _analyzing ? null : () => unawaited(_runAiReview()),
-              child: Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: _analyzing
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : Colors.white.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: Icon(
-                  Icons.camera_alt_outlined,
-                  color: _analyzing ? Colors.white30 : Colors.white,
-                  size: 17,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            GestureDetector(
-              onTap: _toggleAiGuidance,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: _aiGuidanceActive
-                      ? const Color(0xFFE53935)
-                      : AppColors.actionGreen,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: _analyzing
-                    ? const Padding(
-                        padding: EdgeInsets.all(11),
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Icon(
-                        _aiGuidanceActive
-                            ? Icons.stop_rounded
-                            : Icons.play_arrow_rounded,
-                        color: Colors.white,
-                        size: 22,
-                      ),
-              ),
-            ),
-          ],
-        ),
-      ),
+  Widget _manualControlsToggle() => IconButton(
+    tooltip: _showManualControls
+        ? 'Ocultar controles de ajuste'
+        : 'Mostrar controles de ajuste',
+    onPressed: () => setState(
+      () => _showManualControls = !_showManualControls,
+    ),
+    style: IconButton.styleFrom(
+      backgroundColor: Colors.black.withValues(alpha: 0.55),
+      foregroundColor: Colors.white,
+      minimumSize: const Size(42, 42),
+      padding: const EdgeInsets.all(9),
+    ),
+    icon: Icon(
+      _showManualControls ? Icons.visibility_off : Icons.tune,
+      size: 21,
     ),
   );
-}
+
+  Widget _assistantFloatingBar() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.18),
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.actionGreen.withValues(alpha: 0.85),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.remove_red_eye_outlined,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _assistantMessage,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    height: 1.3,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: () => unawaited(_speak(_assistantMessage)),
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: const Icon(
+                    Icons.volume_up_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: _analyzing ? null : () => unawaited(_runAiReview()),
+                child: Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: _analyzing
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : Colors.white.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: Icon(
+                    Icons.camera_alt_outlined,
+                    color: _analyzing ? Colors.white30 : Colors.white,
+                    size: 17,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: _toggleAiGuidance,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: _aiGuidanceActive
+                        ? const Color(0xFFE53935)
+                        : AppColors.actionGreen,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: _analyzing
+                      ? const Padding(
+                          padding: EdgeInsets.all(11),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Icon(
+                          _aiGuidanceActive
+                              ? Icons.stop_rounded
+                              : Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
 
   Widget _cameraRegion(double bottomInset) {

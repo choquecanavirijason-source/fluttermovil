@@ -17,7 +17,6 @@ import 'features/clientes/presentation/providers/clientes_provider.dart';
 import 'features/tracking/data/tracking_repository_impl.dart';
 import 'eye_tracking_alignment.dart';
 import 'eye_tracking_customization_options.dart';
-import 'eye_tracking_mapping_painter.dart';
 import 'lid_landmark_debug_painter.dart';
 import 'eye_tracking_model.dart';
 import 'eye_tracking_photo_pipeline.dart';
@@ -120,14 +119,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   final ValueNotifier<TrackingFrame?> _frameNotifier =
       ValueNotifier<TrackingFrame?>(null);
 
-  /// Frame CONGELADO que dibuja el mapeo al capturar (ver
-  /// [_freezeMappingFrame]). El mapeo no puede seguir a [_frameNotifier]:
-  /// el overlay se captura en un instante puntual y, con la clienta
-  /// acostada y los ojos cerrados, MediaPipe pierde el rostro de a ratos —
-  /// si justo ese frame venía sin cara, la foto salía sin marcas.
-  final ValueNotifier<TrackingFrame?> _mappingFrameNotifier =
-      ValueNotifier<TrackingFrame?>(null);
-
   /// Último frame con rostro y los dos ojos, y cuándo llegó. Fuente de
   /// [_freezeMappingFrame].
   TrackingFrame? _lastMappableFrame;
@@ -144,8 +135,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   bool _workAssistantOpening = false;
   bool _openingRecommendation = false;
-
-  bool _showMapping = false;
 
   /// Overlay de diagnóstico de landmarks del párpado. `false` = la pantalla
   /// muestra solo la cámara y las pestañas 3D, sin nada dibujado encima
@@ -238,14 +227,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// que crea el SceneView — nunca por un MethodChannel disparado con delays.
   String? _leftModelPath;
   String? _rightModelPath;
-
-  /// `styleId` del diseño activo (ver [_lashStyleIdFor]) — lo usa
-  /// `LashMappingPainter` para dibujar el patrón de mapeo correcto (Cat Eye
-  /// tiene una secuencia de números y largos distinta a un abanico
-  /// genérico). Arranca en `'cateye'` porque el modelo por defecto
-  /// (`defaultLeftEyeModelAsset`/`defaultRightEyeModelAsset`, ver
-  /// [_resolveEyeModelPaths]) es literalmente el diseño Cat Eye.
-  String _activeLashStyleId = 'cateye';
 
   /// Espejo local de la cámara activa en el tracking — la fuente de verdad
   /// es Kotlin (`CameraXManager.lensFacing`), que sobrevive a la recreación
@@ -341,7 +322,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       await _service.loadEyeModels(leftPath: path, rightPath: path);
       final styleId = _lashStyleIdFor(design.name);
       await _service.setLashStyle(styleId);
-      if (mounted) setState(() => _activeLashStyleId = styleId);
     } catch (e) {
       debugPrint('No se pudo cargar el modelo del diseño ${design.id}: $e');
       if (mounted) {
@@ -369,7 +349,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       await _service.loadEyeModels(leftPath: leftPath, rightPath: rightPath);
       final styleId = _lashStyleIdFor(preset.name);
       await _service.setLashStyle(styleId);
-      if (mounted) setState(() => _activeLashStyleId = styleId);
     } catch (e) {
       debugPrint('No se pudo cargar el preset local ${preset.name}: $e');
       if (mounted) {
@@ -560,7 +539,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     unawaited(_service.setInvertedFaceMode(false));
     _service.stopTracking();
     _frameNotifier.dispose();
-    _mappingFrameNotifier.dispose();
     ref.read(sessionClientProvider.notifier).state = null;
     super.dispose();
   }
@@ -634,16 +612,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await Future<void>.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
 
-    // Descarta todo lo que quedó de la captura: sin esto el mapeo/los
-    // landmarks del último frame siguen pintados sobre el rostro hasta que
-    // llegue el primer frame nuevo, y se ven "congelados".
+    // Descarta los landmarks del último frame para que el diagnóstico no
+    // quede congelado sobre el preview hasta la siguiente detección.
     _frameNotifier.value = null;
-    _mappingFrameNotifier.value = null;
     _lastMappableFrame = null;
     _lastMappableAt = null;
     setState(() {
       _previewSession++;
-      _showMapping = false;
       _frame = null;
       _eyesAligned = false;
       _faceFramed = false;
@@ -687,19 +662,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (_workAssistantOpening) return;
     _workAssistantOpening = true;
     try {
-      // 1. Activa las líneas de medición y espera un frame para que se pinten.
-      _freezeMappingFrame();
-      setState(() => _showMapping = true);
-      await WidgetsBinding.instance.endOfFrame;
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      if (!mounted) return;
-
-      // 2. Captura el overlay SOLO con el mapeo — el modelo 3D de pestaña
-      // sigue oculto desde [_startAlignmentGuide] y NO se restaura antes de
-      // capturar: en este flujo la referencia es el mapeo sobre la pestaña
-      // natural de la clienta, la pestaña virtual es otra cosa y taparía
-      // justo lo que hay que ver. Se restaura al final, en el `finally`.
+      final mappingFrame = _freezeMappingFrame();
       final overlayBytes = await _photoPipeline.captureOverlay(context);
+      final previewSize = _photoPipeline.previewSize;
+      final assistantFrame = overlayBytes == null || previewSize == null
+          ? null
+          : EyeTrackingPhotoPipeline.frameForCapturedBand(
+              mappingFrame,
+              previewSize,
+            );
 
       // Qué cámara está usando el tracking AHORA, preguntándoselo a Kotlin
       // (ver [_syncCameraFacing]). Se consulta acá, sobre el final, para que
@@ -764,6 +735,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         extra: WorkAssistantArgs(
           panelPngBytes: finalPhoto,
           panelBytesFuture: pendingPhoto,
+          mappingFrame: assistantFrame,
+          mappingStyleId: 'cateye',
+          cropOverlayBytes: overlayBytes,
+          mappingPreviewSize: previewSize,
+          mirrorPhoto: _usingFrontCamera,
         ),
       );
       if (!mounted) return;
@@ -774,11 +750,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // aviso quedaría colgado en pantalla para siempre sin esto.
       _capturingPhoto = false;
       _workAssistantOpening = false;
-      // El mapeo solo se usa para hornearlo en la foto: si la captura se
-      // cortó a medias no debe quedar encima de la vista en vivo.
-      _showMapping = false;
-      // Recién acá vuelve la pestaña virtual: durante TODO el flujo del
-      // robot (guía + captura) se muestra solo el mapeo.
+      // Recién acá vuelve la pestaña virtual después de la captura.
       unawaited(_setHidingLashesForAlignmentGuide(false));
       // Y se apaga el modo clienta acostada, que fuera del asistente
       // descoloca el modelo 3D.
@@ -787,21 +759,14 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
-  /// Abre el probador con IA: mismo pipeline de captura que el asistente de
-  /// trabajo (overlay + foto real compuesta, con las líneas de medición
-  /// horneadas en la imagen), pero navega a `/recomendacion` con el análisis
-  /// de forma de ojo ya calculado.
+  /// Abre el probador con IA con la foto capturada sin la grilla del
+  /// asistente, junto con el análisis de forma de ojo.
   Future<void> _openRecommendation() async {
     if (_openingRecommendation || _workAssistantOpening) return;
     _openingRecommendation = true;
     try {
-      _freezeMappingFrame();
-      setState(() => _showMapping = true);
-      await WidgetsBinding.instance.endOfFrame;
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      if (!mounted) return;
-
       final overlayBytes = await _photoPipeline.captureOverlay(context);
+      if (!mounted) return;
       final analysis = EyeShapeAnalyzer.analyze(_frame);
 
       await _syncCameraFacing();
@@ -830,9 +795,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       await _resumeEyePreviewAfterAssistant();
     } finally {
       _openingRecommendation = false;
-      // El mapeo solo se usa para hornearlo en la foto: si la captura se
-      // cortó a medias no debe quedar encima de la vista en vivo.
-      _showMapping = false;
       if (mounted) setState(() {});
     }
   }
@@ -850,7 +812,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final activating = !_alignmentGuideActive;
     setState(() {
       _alignmentGuideActive = activating;
-      _showMapping = false;
       _eyesAligned = false;
       _faceFramed = false;
       _eyesClosedOk = false;
@@ -879,14 +840,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await _onSwitchCamera();
   }
 
-  /// Fija el frame que dibuja el mapeo en la captura: el actual si trae
-  /// rostro y ojos, si no el último válido reciente (ver
-  /// [_mappingFrameNotifier] / [_mappableFrameMaxAge]).
-  void _freezeMappingFrame() {
+  /// Selecciona el frame que recibe el asistente, usando el último frame
+  /// válido reciente si el actual perdió el rostro.
+  TrackingFrame? _freezeMappingFrame() {
     final at = _lastMappableAt;
     final recent = at != null &&
         DateTime.now().difference(at) <= _mappableFrameMaxAge;
-    _mappingFrameNotifier.value = recent ? _lastMappableFrame : _frame;
+    return recent ? _lastMappableFrame : _frame;
   }
 
   void _evaluateAlignment(TrackingFrame frame) {
@@ -955,8 +915,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
 
     // Cierra la guía y muestra el aviso de "tomando la foto" mientras corre
-    // el pipeline (ver [_capturingPhoto]); `_showMapping` sigue activo
-    // porque el mapeo tiene que salir en la captura.
+    // el pipeline (ver [_capturingPhoto]).
     setState(() {
       _alignmentGuideActive = false;
       _capturingPhoto = true;
@@ -1205,20 +1164,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       )
                     else
                       const ColoredBox(color: Colors.black),
-                    // Las pestañas ya no se dibujan como overlay PNG en Flutter:
-                    // se renderizan de forma nativa por Kotlin (CameraXManager/
-                    // SceneView-Filament) como modelos 3D (.glb) anclados a cada
-                    // ojo, dentro de HybridCameraPreview.
-                    if (_showMapping)
-                      Positioned.fill(
-                        child: CustomPaint(
-                          isComplex: true,
-                          painter: LashMappingPainter(
-                            frames: _mappingFrameNotifier,
-                            styleId: _activeLashStyleId,
-                          ),
-                        ),
-                      ),
                     // DEBUG: puntos de landmarks del párpado (verde =
                     // superior, la línea que el motor usa como pestaña; cruz
                     // amarilla = ancla; naranja = pestaña real detectada).
@@ -1371,7 +1316,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     children: [
                       CustomPaint(
                         painter: EyePositionGuidePainter(
-                          faceFramed: _faceFramed,
                           eyesClosed: _eyesClosedOk,
                         ),
                       ),
