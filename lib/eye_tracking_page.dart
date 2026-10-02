@@ -1263,7 +1263,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               ),
             if (!_showLashModal)
               EyeTrackingPremiumOjoButton(
-                onTap: () => unawaited(_openRecommendation()),
                 // Nombre del diseño de pestaña seleccionado en el carrusel
                 // — antes se mostraba debajo de cada miniatura, ahora vive
                 // acá (ver BottomCarousel más abajo, sin `labels`).

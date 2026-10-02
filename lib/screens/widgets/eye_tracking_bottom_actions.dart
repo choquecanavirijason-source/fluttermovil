@@ -2,17 +2,13 @@ import 'package:flutter/material.dart';
 
 import 'package:Probador/core/theme/app_colors.dart';
 
-/// Botón inferior de "analizar mi ojo" (estilo referencia; sin fila
-/// Cancelar). El texto ya no es fijo: muestra el nombre del diseño de
-/// pestaña seleccionado en el carrusel (antes ese nombre se mostraba debajo
-/// de cada miniatura del carrusel — se movió acá).
+/// Etiqueta inferior de solo lectura que muestra el diseño seleccionado en el
+/// carrusel.
 class EyeTrackingPremiumOjoButton extends StatelessWidget {
-  final VoidCallback onTap;
   final String label;
 
   const EyeTrackingPremiumOjoButton({
     super.key,
-    required this.onTap,
     required this.label,
   });
 
@@ -24,10 +20,9 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
       // con margen, para que no se solapen en pantallas angostas.
       right: 82,
       bottom: 24,
-      child: SafeArea(
-        top: false,
-        child: GestureDetector(
-          onTap: onTap,
+      child: IgnorePointer(
+        child: SafeArea(
+          top: false,
           child: Container(
             height: 28,
             decoration: BoxDecoration(
@@ -66,7 +61,11 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
                       color: AppColors.actionGreen,
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.bookmark, color: Colors.white, size: 16),
+                    child: const Icon(
+                      Icons.bookmark,
+                      color: Colors.white,
+                      size: 16,
+                    ),
                   ),
                 ),
               ],

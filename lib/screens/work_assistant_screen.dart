@@ -146,7 +146,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   TrackingFrame? _latestMappableFrame;
   Offset _leftEyeOffset = Offset.zero;
   Offset _rightEyeOffset = Offset.zero;
-  bool _showManualControls = true;
+  bool _showManualControls = false;
 
   /// Busca entre las voces instaladas en el celular una en español marcada
   /// como femenina y la fija para el TTS. La disponibilidad y el formato del
@@ -614,12 +614,6 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
                 ),
               ),
             ),
-            if (_referenceBytes != null && _mappingFrames.value != null)
-              Positioned(
-                right: c.maxWidth / 2 + 16,
-                bottom: 98,
-                child: _manualControlsToggle(),
-              ),
           ],
         );
       },
@@ -663,12 +657,6 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
             child: _assistantFloatingBar(),
           ),
         ),
-        if (_referenceBytes != null && _mappingFrames.value != null)
-          Positioned(
-            right: 16,
-            bottom: h / 2 + 98,
-            child: _manualControlsToggle(),
-          ),
       ],
     );
   }
@@ -728,27 +716,24 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
             _mappingFrames.value != null &&
             _showManualControls)
           Positioned(
-            left: 0,
-            right: 56,
             bottom: 98,
-            child: Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _eyeOffsetPad(
-                    label: 'Ojo izq.',
-                    offset: _leftEyeOffset,
-                    isLeftEye: true,
-                  ),
-                  const SizedBox(width: 8),
-                  _eyeOffsetPad(
-                    label: 'Ojo der.',
-                    offset: _rightEyeOffset,
-                    isLeftEye: false,
-                  ),
-                ],
-              ),
+            left: 16,
+            child: _eyeOffsetPad(
+              label: 'Ojo izq.',
+              offset: _leftEyeOffset,
+              isLeftEye: true,
+            ),
+          ),
+        if (prefBytes != null &&
+            _mappingFrames.value != null &&
+            _showManualControls)
+          Positioned(
+            bottom: 98,
+            right: 16,
+            child: _eyeOffsetPad(
+              label: 'Ojo der.',
+              offset: _rightEyeOffset,
+              isLeftEye: false,
             ),
           ),
         Positioned(
@@ -768,6 +753,13 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           right: 0,
           child: Center(child: _almendradoPill()),
         ),
+        if (prefBytes != null && _mappingFrames.value != null)
+          Positioned(
+            top: topInset + 56,
+            left: 0,
+            right: 0,
+            child: Center(child: _manualControlsToggle()),
+          ),
         Positioned(
           top: topInset + 8,
           right: 10,
@@ -801,15 +793,15 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     Widget arrow(IconData icon, String direction, Offset delta) => IconButton(
       tooltip: 'Mover $label 1 px $direction',
       visualDensity: VisualDensity.compact,
-      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      constraints: const BoxConstraints.tightFor(width: 26, height: 26),
       padding: EdgeInsets.zero,
-      splashRadius: 15,
+      splashRadius: 14,
       onPressed: () => _stepEyeOffset(isLeftEye, delta),
-      icon: Icon(icon, color: Colors.white, size: 19),
+      icon: Icon(icon, color: Colors.white, size: 18),
     );
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(8),
@@ -905,22 +897,33 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     );
   }
 
-  Widget _manualControlsToggle() => IconButton(
-    tooltip: _showManualControls
-        ? 'Ocultar controles de ajuste'
+  Widget _manualControlsToggle() => Tooltip(
+    message: _showManualControls
+        ? 'Cerrar controles de ajuste'
         : 'Mostrar controles de ajuste',
-    onPressed: () => setState(
-      () => _showManualControls = !_showManualControls,
-    ),
-    style: IconButton.styleFrom(
-      backgroundColor: Colors.black.withValues(alpha: 0.55),
-      foregroundColor: Colors.white,
-      minimumSize: const Size(42, 42),
-      padding: const EdgeInsets.all(9),
-    ),
-    icon: Icon(
-      _showManualControls ? Icons.visibility_off : Icons.tune,
-      size: 21,
+    child: ElevatedButton.icon(
+      onPressed: () =>
+          setState(() => _showManualControls = !_showManualControls),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.black.withValues(alpha: 0.8),
+        foregroundColor: Colors.white,
+        minimumSize: const Size(0, 30),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        elevation: 2,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.24)),
+        ),
+      ),
+      icon: _showManualControls
+          ? const Icon(Icons.check, size: 14)
+          : const Icon(Icons.edit, size: 14),
+      label: Text(
+        _showManualControls ? 'Listo' : 'Editar',
+        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+      ),
     ),
   );
 
