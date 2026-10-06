@@ -322,6 +322,11 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       _mappingFrames.value = EyeTrackingPhotoPipeline.rotateFrame180(
         _mappingFrames.value,
       );
+      // Los ajustes manuales son desplazamientos en el espacio de la grilla:
+      // al girarla 180° también giran (se niegan), así no se pierde lo
+      // calibrado ni queda apuntando al revés.
+      _leftEyeOffset = -_leftEyeOffset;
+      _rightEyeOffset = -_rightEyeOffset;
     });
   }
 
@@ -655,16 +660,19 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
                 ),
               ],
             ),
-            Align(
-              alignment: Alignment(alignX, 0),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: barGutter),
-                child: SizedBox(
-                  width: barTargetWidth,
-                  child: _assistantFloatingBar(),
+            // Mientras se ajustan las grillas la barra se oculta: tapaba la
+            // foto justo donde se está trabajando.
+            if (!_showManualControls)
+              Align(
+                alignment: Alignment(alignX, 0),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: barGutter),
+                  child: SizedBox(
+                    width: barTargetWidth,
+                    child: _assistantFloatingBar(),
+                  ),
                 ),
               ),
-            ),
           ],
         );
       },
@@ -693,15 +701,17 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
             Expanded(flex: _portraitCamFlex, child: _cameraRegion(bottomInset)),
           ],
         ),
-        Positioned(
-          top: seamY,
-          left: 14,
-          right: 14,
-          child: FractionalTranslation(
-            translation: const Offset(0, -1.4),
-            child: _assistantFloatingBar(),
+        // Oculta mientras se ajustan las grillas (ver [_eyeOffsetPads]).
+        if (!_showManualControls)
+          Positioned(
+            top: seamY,
+            left: 14,
+            right: 14,
+            child: FractionalTranslation(
+              translation: const Offset(0, -1.4),
+              child: _assistantFloatingBar(),
+            ),
           ),
-        ),
       ],
     );
   }
@@ -770,25 +780,10 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         if (prefBytes != null &&
             _mappingFrames.value != null &&
             _showManualControls)
-          Positioned(
-            bottom: 98,
-            left: 16,
-            child: _eyeOffsetPad(
-              label: 'Ojo izq.',
-              offset: _leftEyeOffset,
-              isLeftEye: true,
-            ),
-          ),
-        if (prefBytes != null &&
-            _mappingFrames.value != null &&
-            _showManualControls)
-          Positioned(
-            bottom: 98,
-            right: 16,
-            child: _eyeOffsetPad(
-              label: 'Ojo der.',
-              offset: _rightEyeOffset,
-              isLeftEye: false,
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, c) =>
+                  _eyeOffsetPads(Size(c.maxWidth, c.maxHeight), topInset),
             ),
           ),
         Positioned(
@@ -842,6 +837,66 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       ],
     );
   }
+
+  /// Los dos controles de ajuste manual, ubicados según la PANTALLA:
+  ///
+  ///  - El panel de la izquierda mueve la grilla que se ve a la izquierda.
+  ///    Antes cada panel iba atado a un ojo de MediaPipe ("Ojo izq." =
+  ///    `leftEye`), y con la clienta echada (cara invertida) ese ojo queda a
+  ///    la derecha: los controles salían cruzados.
+  ///  - Van arriba o abajo del panel, del lado con más espacio libre fuera
+  ///    de la grilla (líneas y números), para no taparla. Antes estaban
+  ///    fijos abajo y con la foto girada caían justo encima.
+  Widget _eyeOffsetPads(Size panel, double topInset) {
+    final frame = _mappingFrames.value;
+    if (frame == null) return const SizedBox.shrink();
+    final leftIsLeft = LashMappingPainter.leftEyeIsOnScreenLeft(frame);
+    final extent = LashMappingPainter.verticalExtentOnCanvas(
+      frame,
+      panel,
+      styleId: widget.args?.mappingStyleId ?? 'cateye',
+      leftEyeOffset: _leftEyeOffset,
+      rightEyeOffset: _rightEyeOffset,
+    );
+    // Arriba queda la fila de botones y "Editar"/"Listo"; abajo, un margen.
+    final topReserved = topInset + _padsTopReserved;
+    const bottomMargin = 12.0;
+    final onTop =
+        extent != null &&
+        (extent.top - topReserved) >
+            (panel.height - bottomMargin - extent.bottom);
+
+    Widget pad(bool screenLeft) {
+      // ¿Este panel controla el `leftEye` de MediaPipe?
+      final controlsLeftEye = screenLeft == leftIsLeft;
+      return _eyeOffsetPad(
+        label: screenLeft ? 'Ojo izq.' : 'Ojo der.',
+        offset: controlsLeftEye ? _leftEyeOffset : _rightEyeOffset,
+        isLeftEye: controlsLeftEye,
+      );
+    }
+
+    return Stack(
+      children: [
+        Positioned(
+          top: onTop ? topReserved : null,
+          bottom: onTop ? null : bottomMargin,
+          left: 16,
+          child: pad(true),
+        ),
+        Positioned(
+          top: onTop ? topReserved : null,
+          bottom: onTop ? null : bottomMargin,
+          right: 16,
+          child: pad(false),
+        ),
+      ],
+    );
+  }
+
+  /// Alto ocupado arriba del panel por los botones y "Editar"/"Listo"
+  /// (este último en `topInset + 56`).
+  static const double _padsTopReserved = 100;
 
   void _stepEyeOffset(bool isLeftEye, Offset delta) {
     setState(() {

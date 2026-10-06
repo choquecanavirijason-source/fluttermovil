@@ -194,6 +194,50 @@ class LashMappingPainter extends CustomPainter {
     canvas.restore();
   }
 
+  /// `true` si el ojo `leftEye` de MediaPipe es el que SE VE a la izquierda
+  /// de la pantalla. Con la cara derecha lo es; con la clienta echada (cara
+  /// invertida) queda a la derecha. Los controles de ajuste manual lo usan
+  /// para que el panel de cada lado mueva la grilla de ese lado.
+  static bool leftEyeIsOnScreenLeft(TrackingFrame f) {
+    if (f.leftEye.isEmpty || f.rightEye.isEmpty) return true;
+    return _centroid(f.leftEye).dx <= _centroid(f.rightEye).dx;
+  }
+
+  /// Franja vertical (`top`, `bottom`) que ocupa el mapeo dibujado —líneas,
+  /// curva y números— en un canvas de [canvasSize], con el mismo encuadre
+  /// `BoxFit.cover` que [paint]. `null` si no hay nada que dibujar. Sirve
+  /// para ubicar los controles de ajuste sin taparlo.
+  static ({double top, double bottom})? verticalExtentOnCanvas(
+    TrackingFrame f,
+    Size canvasSize, {
+    String? styleId,
+    Offset leftEyeOffset = Offset.zero,
+    Offset rightEyeOffset = Offset.zero,
+  }) {
+    final iw = f.imageWidth.toDouble();
+    final ih = f.imageHeight.toDouble();
+    if (iw <= 0 || ih <= 0) return null;
+    final layouts = layoutFor(
+      f,
+      styleId: styleId,
+      leftEyeOffset: leftEyeOffset,
+      rightEyeOffset: rightEyeOffset,
+    );
+    if (layouts.isEmpty) return null;
+    final scale = math.max(canvasSize.width / iw, canvasSize.height / ih);
+    final dy = (canvasSize.height - ih * scale) / 2;
+    var top = double.infinity, bottom = -double.infinity;
+    for (final l in layouts) {
+      // Medio alto de número de margen, para no rozar las etiquetas.
+      final margin = l.eyeWidth * _labelFontRatio * 0.6;
+      for (final p in [...l.bases, ...l.tips, ...l.labelCenters]) {
+        top = math.min(top, (p.dy - margin) * scale + dy);
+        bottom = math.max(bottom, (p.dy + margin) * scale + dy);
+      }
+    }
+    return (top: top, bottom: bottom);
+  }
+
   /// Geometría del mapeo de cada ojo, en coordenadas de la IMAGEN (las de
   /// [TrackingFrame]), sin dibujar nada. Separada de [paint] para poder
   /// probar las orientaciones del rostro sin canvas.

@@ -306,6 +306,72 @@ void main() {
     });
   });
 
+  group('Controles de ajuste manual del asistente', () {
+    test('cada panel mueve la grilla que se ve de su lado', () {
+      final upright = uprightFace();
+      final inverted = mapFrame(upright, rotation(180));
+      expect(LashMappingPainter.leftEyeIsOnScreenLeft(upright), isTrue);
+      // Clienta echada: el `leftEye` de MediaPipe queda a la derecha.
+      expect(LashMappingPainter.leftEyeIsOnScreenLeft(inverted), isFalse);
+
+      // El panel izquierdo con la cara invertida controla `rightEye`, y
+      // moverlo tiene que mover la grilla que está a la IZQUIERDA.
+      final before = LashMappingPainter.layoutFor(inverted, styleId: 'cateye');
+      final after = LashMappingPainter.layoutFor(
+        inverted,
+        styleId: 'cateye',
+        rightEyeOffset: const Offset(10, 0),
+      );
+      double minX(EyeMappingLayout l) =>
+          l.bases.map((p) => p.dx).reduce(math.min);
+      final leftGridIndex = minX(before[0]) < minX(before[1]) ? 0 : 1;
+      expect(
+        minX(after[leftGridIndex]) - minX(before[leftGridIndex]),
+        closeTo(10, 1e-6),
+      );
+    });
+
+    test('la franja de la grilla en pantalla sigue a los ojos', () {
+      const panel = Size(1000, 1000);
+      final f = uprightFace();
+      final extent = LashMappingPainter.verticalExtentOnCanvas(
+        f,
+        panel,
+        styleId: 'cateye',
+      )!;
+      // Ojos en y≈498; la grilla va hacia la mejilla (abajo).
+      expect(extent.top, lessThan(498));
+      expect(extent.bottom, greaterThan(498));
+      final moved = LashMappingPainter.verticalExtentOnCanvas(
+        f,
+        panel,
+        styleId: 'cateye',
+        leftEyeOffset: const Offset(0, 50),
+        rightEyeOffset: const Offset(0, 50),
+      )!;
+      expect(moved.top, closeTo(extent.top + 50, 1e-6));
+    });
+
+    test('al girar foto y grilla, el ajuste ya hecho gira con ellas', () {
+      final f = uprightFace();
+      const offset = Offset(7, -4);
+      final base = LashMappingPainter.layoutFor(
+        f,
+        styleId: 'cateye',
+        leftEyeOffset: offset,
+      );
+      // Lo que hace `_toggleReferenceRotation`: gira el frame y niega el
+      // ajuste. La grilla resultante tiene que ser la misma, girada.
+      final rotated = LashMappingPainter.layoutFor(
+        EyeTrackingPhotoPipeline.rotateFrame180(f)!,
+        styleId: 'cateye',
+        leftEyeOffset: -offset,
+      );
+      Offset r(Offset p) => Offset(1000 - p.dx, 1000 - p.dy);
+      expectOffsetsClose(rotated[0].bases, base[0].bases.map(r).toList());
+    });
+  });
+
   group('EyeShapeAnalyzer en rostro rotado', () {
     final upright = EyeShapeAnalyzer.analyze(uprightFace());
 
