@@ -15,9 +15,18 @@ class AlignmentStatus {
   /// pestañas — con los ojos abiertos el párpado tapa la base real).
   final bool eyesClosed;
 
-  const AlignmentStatus({required this.faceFramed, required this.eyesClosed});
+  /// Los ojos detectados están sobre la línea horizontal de la guía (que se
+  /// pinta en verde). Es requisito para capturar: sin esto la foto saldría
+  /// con los ojos fuera de la franja que se recorta.
+  final bool eyesOnLine;
 
-  bool get ready => faceFramed && eyesClosed;
+  const AlignmentStatus({
+    required this.faceFramed,
+    required this.eyesClosed,
+    this.eyesOnLine = false,
+  });
+
+  bool get ready => faceFramed && eyesClosed && eyesOnLine;
 
   static const AlignmentStatus none = AlignmentStatus(
     faceFramed: false,
@@ -66,6 +75,38 @@ class EyeAlignmentGuide {
     canvasSize.width * 0.72,
     canvasSize.height * 0.56,
   );
+
+  /// Altura de la línea de ojos dentro del óvalo, como fracción de su alto
+  /// medida desde el lado de la FRENTE. Antes era 1/3, pero en un rostro
+  /// real los ojos están cerca de la mitad del largo frente→mentón: a 1/3
+  /// la línea caía sobre las cejas (muy visible con la clienta echada).
+  static const double eyeLineRatio = 0.44;
+
+  /// Cuánto puede apartarse la altura media de los ojos de la línea, en
+  /// fracción del alto del óvalo, para pintarla en verde.
+  static const double _eyeLineTolerance = 0.06;
+
+  /// Y de la línea de ojos en el canvas (guía sin girar).
+  static double eyeLineY(Size canvasSize) {
+    final rect = guideRect(canvasSize);
+    return rect.top + rect.height * eyeLineRatio;
+  }
+
+  /// ¿La altura media de los dos ojos cae sobre la línea de la guía? Ver
+  /// [AlignmentStatus.eyesOnLine].
+  static bool isEyesOnLine(TrackingFrame frame, Size canvasSize) {
+    if (!frame.faceDetected) return false;
+    final iw = frame.imageWidth.toDouble();
+    final ih = frame.imageHeight.toDouble();
+    if (iw <= 0 || ih <= 0) return false;
+    final left = anchorFor(frame.leftEye, frame.leftIris);
+    final right = anchorFor(frame.rightEye, frame.rightIris);
+    if (left == null || right == null) return false;
+    final toCanvas = _toCanvas(frame, canvasSize);
+    final eyesY = (toCanvas(left).dy + toCanvas(right).dy) / 2;
+    final tolerance = guideRect(canvasSize).height * _eyeLineTolerance;
+    return (eyesY - eyeLineY(canvasSize)).abs() <= tolerance;
+  }
 
   /// Centro de un ojo: usa el iris (más preciso) si está disponible, si no,
   /// el centroide de los puntos de contorno del ojo.
@@ -200,6 +241,7 @@ class EyeAlignmentGuide {
     return AlignmentStatus(
       faceFramed: isFaceFramed(frame, canvasSize),
       eyesClosed: isEyesClosed(frame),
+      eyesOnLine: isEyesOnLine(frame, canvasSize),
     );
   }
 }

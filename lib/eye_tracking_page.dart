@@ -170,8 +170,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         );
       }
     } catch (e) {
-      debugPrint('[EyeTracking] no se pudo ${hide ? 'ocultar' : 'restaurar'} '
-          'el modelo para el flujo de guardado: $e');
+      debugPrint(
+        '[EyeTracking] no se pudo ${hide ? 'ocultar' : 'restaurar'} '
+        'el modelo para el flujo de guardado: $e',
+      );
       // El scrim negro sigue tapando la cámara visualmente aunque esto
       // falle, así que no hace falta propagar el error a la usuaria.
     }
@@ -240,13 +242,57 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   Future<void> _syncCameraFacing() async {
     final isFront = await _service.isUsingFrontCamera();
     if (!mounted || isFront == null || isFront == _usingFrontCamera) return;
-    setState(() => _usingFrontCamera = isFront);
+    _onCameraFacingChanged(isFront);
   }
 
   Future<void> _onSwitchCamera() async {
     final isFront = await _service.switchCamera();
     if (!mounted || isFront == null) return;
-    setState(() => _usingFrontCamera = isFront);
+    _onCameraFacingChanged(isFront);
+  }
+
+  /// Modo "clienta echada" (botón de la guía de captura, sólo con la
+  /// trasera): cambia la FORMA DE DETECTAR el rostro, no la cámara. El
+  /// análisis de MediaPipe se rota 180° en nativo (ver
+  /// `CameraXManager.analysisRotated180`) para que vea la cara derecha, y
+  /// los landmarks y la pose vuelven desrotados al espacio del preview
+  /// (`FaceLandmarkerHelper.derotated180`). La vista de cámara y la foto
+  /// NO se giran; lo único que cambia de sentido en pantalla es la guía de
+  /// encuadre (ver [EyePositionGuidePainter.inverted]).
+  ///
+  /// Dura mientras dura la sesión de cámara de esta pantalla (incluido el
+  /// ida y vuelta al asistente) y se apaga al CAMBIAR DE CÁMARA: sólo tiene
+  /// sentido con la trasera apuntando a una clienta acostada — una selfie
+  /// nunca llega cabeza abajo — y con la cámara nueva el rostro es otro.
+  bool _cameraInverted180 = false;
+
+  /// Aplica [_cameraInverted180] en nativo. `photoMode` sigue a la guía de
+  /// captura, igual que antes (ver [_toggleAlignmentGuide]).
+  Future<void> _applyInvertedFaceMode() => _service.setInvertedFaceMode(
+    _cameraInverted180,
+    photoMode: _alignmentGuideActive,
+  );
+
+  void _onCameraFacingChanged(bool isFront) {
+    final resetInverted = _cameraInverted180;
+    setState(() {
+      _usingFrontCamera = isFront;
+      if (resetInverted) _cameraInverted180 = false;
+    });
+    if (resetInverted) unawaited(_applyInvertedFaceMode());
+  }
+
+  void _toggleInvertedFaceMode() {
+    if (_usingFrontCamera || _workAssistantOpening) return;
+    setState(() {
+      _cameraInverted180 = !_cameraInverted180;
+      // El rostro cambia de lugar en la vista: el encuadre se reevalúa.
+      _eyesAligned = false;
+      _faceFramed = false;
+      _eyesClosedOk = false;
+      _eyesOnGuideLine = false;
+    });
+    unawaited(_applyInvertedFaceMode());
   }
 
   CatalogItem? _selectedEyeType;
@@ -264,6 +310,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// true cuando se cumplen LAS DOS condiciones (rostro encuadrado + ojos
   /// cerrados) — dispara la captura tras `_alignmentHoldDuration`.
   bool _eyesAligned = false;
+
+  /// Ojos sobre la línea horizontal de la guía (pinta la línea en verde).
+  /// Requisito para capturar — ver [_beginWorkAssistantFlow] y
+  /// `AlignmentStatus.eyesOnLine`.
+  bool _eyesOnGuideLine = false;
 
   /// true cuando el óvalo de `faceContour` está centrado y del tamaño
   /// esperado dentro de la guía fija (independiente de si los ojos ya están
@@ -326,7 +377,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       debugPrint('No se pudo cargar el modelo del diseño ${design.id}: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo cargar el diseño "${design.name}"')),
+          SnackBar(
+            content: Text('No se pudo cargar el diseño "${design.name}"'),
+          ),
         );
       }
     } finally {
@@ -342,7 +395,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     setState(() => _switchingDesignModel = true);
     try {
       final leftPath = await extractEyeModelAssetToFile(preset.leftModelAsset);
-      final rightPath = await extractEyeModelAssetToFile(preset.rightModelAsset);
+      final rightPath = await extractEyeModelAssetToFile(
+        preset.rightModelAsset,
+      );
       if (!mounted) return;
       _leftModelPath = leftPath;
       _rightModelPath = rightPath;
@@ -353,7 +408,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       debugPrint('No se pudo cargar el preset local ${preset.name}: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo cargar el diseño "${preset.name}"')),
+          SnackBar(
+            content: Text('No se pudo cargar el diseño "${preset.name}"'),
+          ),
         );
       }
     } finally {
@@ -520,6 +577,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
     await _service.startTracking();
     if (!mounted) return;
+    // La cámara activa vive en Kotlin y puede haber quedado en la trasera
+    // desde otra pantalla: el botón "Invertir" sólo se muestra con ella.
+    unawaited(_syncCameraFacing());
     setState(() {
       if (_status == 'Iniciando cámara…') {
         _status = 'Esperando detección…';
@@ -536,6 +596,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
+    // Fin de la sesión de cámara de esta pantalla: [_cameraInverted180]
+    // muere con el State, así que el nativo vuelve al modo normal en vez de
+    // heredarle el análisis rotado a la próxima pantalla que use la cámara.
     unawaited(_service.setInvertedFaceMode(false));
     _service.stopTracking();
     _frameNotifier.dispose();
@@ -611,6 +674,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // Espera extra para que el plugin `camera` libere el hardware completamente.
     await Future<void>.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
+    // El asistente puede haber cambiado de cámara: si cambió, se apaga
+    // "Invertir" (ver [_cameraInverted180]) antes de reaplicarlo.
+    await _syncCameraFacing();
+    if (!mounted) return;
 
     // Descarta los landmarks del último frame para que el diagnóstico no
     // quede congelado sobre el preview hasta la siguiente detección.
@@ -623,6 +690,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _eyesAligned = false;
       _faceFramed = false;
       _eyesClosedOk = false;
+      _eyesOnGuideLine = false;
     });
 
     // Tiempo para que el nuevo AndroidView llame a attachPreview().
@@ -662,6 +730,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (_workAssistantOpening) return;
     _workAssistantOpening = true;
     try {
+      // Con "Clienta echada" la cámara NO se gira: foto, overlay y landmarks
+      // (ya desrotados en nativo) quedan en la orientación en que la
+      // operaria ve a la clienta, por el mismo camino que el modo normal.
+      final inverted = _cameraInverted180;
       final mappingFrame = _freezeMappingFrame();
       final overlayBytes = await _photoPipeline.captureOverlay(context);
       final previewSize = _photoPipeline.previewSize;
@@ -670,6 +742,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           : EyeTrackingPhotoPipeline.frameForCapturedBand(
               mappingFrame,
               previewSize,
+              // Con la guía girada los ojos quedan más abajo en pantalla:
+              // franja de recorte reflejada (ver `_cropEyeBand`).
+              flipEyeBand: inverted,
             );
 
       // Qué cámara está usando el tracking AHORA, preguntándoselo a Kotlin
@@ -698,23 +773,27 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         // frío (~1 s). Durante la foto el análisis ya quedó pausado en
         // nativo (`CameraXManager.analysisPausedForCapture`).
         final mirror = _usingFrontCamera;
-        pendingPhoto = EyeTrackingPhotoPipeline.compositeAndCropInBackground(
-          nativeShot,
-          overlayBytes,
-          mirror: mirror,
-        ).then<Uint8List?>(
-          (bytes) => bytes,
-          onError: (Object e) {
-            debugPrint('[EyeTracking] compositeAndCrop falló: $e');
-            return nativeShot;
-          },
-        );
+        pendingPhoto =
+            EyeTrackingPhotoPipeline.compositeAndCropInBackground(
+              nativeShot,
+              overlayBytes,
+              mirror: mirror,
+              flipEyeBand: inverted,
+            ).then<Uint8List?>(
+              (bytes) => bytes,
+              onError: (Object e) {
+                debugPrint('[EyeTracking] compositeAndCrop falló: $e');
+                return nativeShot;
+              },
+            );
       } else {
         // Respaldo: si el caso de uso de foto no estaba disponible, se cae
         // al camino viejo (segunda sesión de cámara), que funciona igual
         // pero con el desfase de siempre.
-        debugPrint('[EyeTracking] takePhoto nativo no disponible — usando el '
-            'camino de respaldo con el plugin camera');
+        debugPrint(
+          '[EyeTracking] takePhoto nativo no disponible — usando el '
+          'camino de respaldo con el plugin camera',
+        );
         await _service.stopTracking();
         await Future<void>.delayed(const Duration(milliseconds: 450));
         if (!mounted) return;
@@ -722,6 +801,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           context,
           overlayBytes,
           preferFrontCamera: _usingFrontCamera,
+          flipEyeBand: inverted,
         );
       }
       if (!mounted) return;
@@ -740,6 +820,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           cropOverlayBytes: overlayBytes,
           mappingPreviewSize: previewSize,
           mirrorPhoto: _usingFrontCamera,
+          cameraInverted180: inverted,
         ),
       );
       if (!mounted) return;
@@ -752,9 +833,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _workAssistantOpening = false;
       // Recién acá vuelve la pestaña virtual después de la captura.
       unawaited(_setHidingLashesForAlignmentGuide(false));
-      // Y se apaga el modo clienta acostada, que fuera del asistente
-      // descoloca el modelo 3D.
-      unawaited(_service.setInvertedFaceMode(false));
+      // Se reaplica el modo de ESTA pantalla (el asistente puede haberlo
+      // cambiado) y se suelta la foto rápida, que era de la guía. El 3D ya
+      // soporta el análisis rotado, así que no hace falta forzar `false`.
+      unawaited(_applyInvertedFaceMode());
       if (mounted) setState(() {});
     }
   }
@@ -815,15 +897,14 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _eyesAligned = false;
       _faceFramed = false;
       _eyesClosedOk = false;
+      _eyesOnGuideLine = false;
     });
     // La pestaña virtual taparía el borde natural durante el encuadre; el
     // mapeo numérico queda reservado para la captura.
     unawaited(_setHidingLashesForAlignmentGuide(activating));
-    // Clienta DE FRENTE: el análisis no se rota (el modo acostada, con el
-    // análisis girado 180°, quedó fuera por ahora — ver
-    // `CameraXManager.analysisRotated180`). Solo se enlaza la foto rápida
-    // por la misma sesión mientras la guía está abierta.
-    unawaited(_service.setInvertedFaceMode(false, photoMode: activating));
+    // La rotación del análisis sigue al botón "Invertir"; además se enlaza
+    // la foto rápida por la misma sesión mientras la guía está abierta.
+    unawaited(_applyInvertedFaceMode());
   }
 
   /// Voltear cámara desde la guía: cambia frontal ↔ trasera según hacia
@@ -836,6 +917,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _eyesAligned = false;
       _faceFramed = false;
       _eyesClosedOk = false;
+      _eyesOnGuideLine = false;
     });
     await _onSwitchCamera();
   }
@@ -844,23 +926,32 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// válido reciente si el actual perdió el rostro.
   TrackingFrame? _freezeMappingFrame() {
     final at = _lastMappableAt;
-    final recent = at != null &&
-        DateTime.now().difference(at) <= _mappableFrameMaxAge;
+    final recent =
+        at != null && DateTime.now().difference(at) <= _mappableFrameMaxAge;
     return recent ? _lastMappableFrame : _frame;
   }
 
   void _evaluateAlignment(TrackingFrame frame) {
     if (!mounted || !_alignmentGuideActive) return;
     final size = MediaQuery.sizeOf(context);
-    final status = EyeAlignmentGuide.evaluate(frame, size);
+    // Con "Clienta echada" la guía se DIBUJA girada 180°; evaluar el rostro
+    // girado contra la guía sin girar es lo mismo y reusa una sola geometría.
+    final status = EyeAlignmentGuide.evaluate(
+      _cameraInverted180
+          ? EyeTrackingPhotoPipeline.rotateFrame180(frame)!
+          : frame,
+      size,
+    );
 
     if (_eyesAligned != status.ready ||
         _faceFramed != status.faceFramed ||
-        _eyesClosedOk != status.eyesClosed) {
+        _eyesClosedOk != status.eyesClosed ||
+        _eyesOnGuideLine != status.eyesOnLine) {
       setState(() {
         _eyesAligned = status.ready;
         _faceFramed = status.faceFramed;
         _eyesClosedOk = status.eyesClosed;
+        _eyesOnGuideLine = status.eyesOnLine;
       });
     }
   }
@@ -913,6 +1004,20 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         );
       return;
     }
+    // Los ojos tienen que estar sobre la línea horizontal de la guía (la que
+    // se pinta en verde): si no, la foto sale con los ojos fuera de la
+    // franja que se recorta. El aviso se va solo a los 2 s.
+    if (!_eyesOnGuideLine) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Encuadre bien la posición de los ojos'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      return;
+    }
 
     // Cierra la guía y muestra el aviso de "tomando la foto" mientras corre
     // el pipeline (ver [_capturingPhoto]).
@@ -942,6 +1047,40 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             Text(
               'Voltear cámara',
               style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Botón "Clienta echada" de la guía — ver [_cameraInverted180]. Verde =
+  /// activo (guía girada y detección ajustada a la cara cabeza abajo).
+  Widget _lyingClientButton() {
+    final active = _cameraInverted180;
+    return GestureDetector(
+      onTap: _toggleInvertedFaceMode,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: active
+              ? AppColors.actionGreen.withValues(alpha: 0.9)
+              : Colors.black.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: active ? Colors.white70 : Colors.white24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.airline_seat_flat, color: Colors.white, size: 16),
+            const SizedBox(width: 6),
+            Text(
+              active ? 'Clienta echada: activo' : 'Clienta echada',
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
@@ -1116,8 +1255,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // Solo diseños con imagen entran al carrusel — se mantiene esta MISMA
     // lista (filtrada) en _currentCarouselDesigns para que el índice tocado
     // en el carrusel siga correspondiendo al diseño correcto en _onLashSelect.
-    _currentCarouselDesigns =
-        rawDesigns.where((d) => d.hasImage).toList(growable: false);
+    _currentCarouselDesigns = rawDesigns
+        .where((d) => d.hasImage)
+        .toList(growable: false);
     final carousel = _currentCarouselDesigns;
     // Presets locales primero (siempre disponibles, no dependen del
     // catálogo remoto), después los del admin — ver _onLashSelect para el
@@ -1215,33 +1355,36 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   // Los presets locales garantizan que el carrusel nunca esté
-                // vacío, incluso si el catálogo remoto falla — pero si
-                // llegara a fallar la carga de los presets también (no
-                // debería), se ve el estado de error en vez de nada.
-                child: carouselImagePaths.isNotEmpty
-                    ? BottomCarousel(
-                        selectedLash: safeLash,
-                        onSelect: _onLashSelect,
-                        imagePaths: carouselImagePaths,
-                      )
-                    : Container(
-                        height: 70,
-                        alignment: Alignment.center,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(10),
+                  // vacío, incluso si el catálogo remoto falla — pero si
+                  // llegara a fallar la carga de los presets también (no
+                  // debería), se ve el estado de error en vez de nada.
+                  child: carouselImagePaths.isNotEmpty
+                      ? BottomCarousel(
+                          selectedLash: safeLash,
+                          onSelect: _onLashSelect,
+                          imagePaths: carouselImagePaths,
+                        )
+                      : Container(
+                          height: 70,
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            activeAsyncError != null
+                                ? 'Error: $activeAsyncError'
+                                : 'Sin diseños de pestañas en el catálogo',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
                         ),
-                        child: Text(
-                          activeAsyncError != null
-                              ? 'Error: $activeAsyncError'
-                              : 'Sin diseños de pestañas en el catálogo',
-                          style: const TextStyle(color: Colors.white, fontSize: 11),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
                 ),
               ),
             if (_activeCategory != null)
@@ -1316,6 +1459,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       CustomPaint(
                         painter: EyePositionGuidePainter(
                           eyesClosed: _eyesClosedOk,
+                          inverted: _cameraInverted180,
+                          eyesOnLine: _eyesOnGuideLine,
                         ),
                       ),
                     ],
@@ -1339,17 +1484,23 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   children: [
                     if (!_capturingPhoto) ...[
                       _flipCameraButton(),
+                      // Aparece sólo tras cambiar a la cámara trasera — ver
+                      // [_cameraInverted180].
+                      if (!_usingFrontCamera) ...[
+                        const SizedBox(height: 8),
+                        _lyingClientButton(),
+                      ],
                       const SizedBox(height: 12),
                     ],
                     if (!_capturingPhoto)
                       GestureDetector(
                         onTap: _beginWorkAssistantFlow,
-                        // Atenuado hasta que se detectan los ojos cerrados:
-                        // antes de eso [_beginWorkAssistantFlow] no deja
-                        // capturar.
+                        // Atenuado hasta que los ojos están cerrados Y sobre
+                        // la línea de la guía: antes de eso
+                        // [_beginWorkAssistantFlow] no deja capturar.
                         child: AnimatedOpacity(
                           duration: const Duration(milliseconds: 200),
-                          opacity: _eyesClosedOk ? 1 : 0.4,
+                          opacity: _eyesClosedOk && _eyesOnGuideLine ? 1 : 0.4,
                           child: Container(
                             width: 68,
                             height: 68,
@@ -1360,7 +1511,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                               shape: BoxShape.circle,
                               border: Border.all(color: Colors.white, width: 4),
                               boxShadow: const [
-                                BoxShadow(color: Colors.black45, blurRadius: 10),
+                                BoxShadow(
+                                  color: Colors.black45,
+                                  blurRadius: 10,
+                                ),
                               ],
                             ),
                             child: Icon(
@@ -1396,6 +1550,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                                   ? Icons.check_circle
                                   : (!_faceFramed
                                         ? Icons.crop_free
+                                        : !_eyesOnGuideLine
+                                        ? Icons.horizontal_rule
                                         : Icons.remove_red_eye_outlined),
                               color: Colors.white,
                               size: 14,
@@ -1407,6 +1563,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                                     ? 'Listo para capturar'
                                     : (!_faceFramed
                                           ? 'Encuadra el rostro dentro de la guía'
+                                          : !_eyesOnGuideLine
+                                          ? 'Encuadre bien la posición de los ojos'
                                           : 'Ojos cerrados para ver la línea de pestañas'),
                                 textAlign: TextAlign.center,
                                 style: const TextStyle(

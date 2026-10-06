@@ -61,6 +61,8 @@ class OpennessTracker {
     private var baseline = 0f
     private var samples = 0
     private var shapeTrusted = true
+    /** Estado con histéresis de [updateFromBlendshape]. */
+    private var blinkClosed = false
 
     /**
      * Apertura NORMALIZADA del último [update]: `0` = cerrado, `1` =
@@ -132,6 +134,36 @@ class OpennessTracker {
     }
 
     /**
+     * Variante de [update] para la apertura que viene de los blendshapes
+     * ([EyeBlinkBlendshapes], `1 − eyeBlink`): umbrales ABSOLUTOS con
+     * histéresis en vez de la línea base relativa — ver
+     * [RendererConfiguration.EYE_BLINK_CLOSED_ABOVE] para por qué la base
+     * falla justo con la clienta de ojos cerrados.
+     *
+     * El estado es binario (abierto/cerrado) y [normalizedOpenness] queda en
+     * `1`/`0`; el giro de la pestaña no salta porque [PoseFollower] lo
+     * suaviza. Cada ojo tiene su propio tracker, así que un ojo puede estar
+     * cerrado y el otro abierto.
+     *
+     * Misma regla que [update]: una vez por frame y por ojo.
+     */
+    fun updateFromBlendshape(openness: Float): Boolean {
+        if (!openness.isFinite()) {
+            shapeTrusted = false
+            return false
+        }
+        val blink = 1f - openness.coerceIn(0f, 1f)
+        blinkClosed = if (blinkClosed) {
+            blink > RendererConfiguration.EYE_BLINK_OPEN_BELOW
+        } else {
+            blink > RendererConfiguration.EYE_BLINK_CLOSED_ABOVE
+        }
+        normalizedOpenness = if (blinkClosed) 0f else 1f
+        shapeTrusted = !blinkClosed
+        return shapeTrusted
+    }
+
+    /**
      * Al perder el rostro: la próxima persona (o la misma a otra distancia)
      * no debe heredar esta línea base.
      *
@@ -150,5 +182,6 @@ class OpennessTracker {
         samples = 0
         shapeTrusted = true
         normalizedOpenness = 1f
+        blinkClosed = false
     }
 }

@@ -137,6 +137,12 @@ class CameraXManager(
             //
             // El mapper es el único dueño de esas claves ahora.
             val augmentedData: Map<String, Any?> = data
+            // TEMPORAL — ver OrientDebug.
+            com.example.test_face.render.OrientDebug.logResult(
+                rawResult,
+                lensFront = lensFacing == CameraSelector.LENS_FACING_FRONT,
+                analysisRotated180 = analysisRotated180,
+            )
             dumpAnnotatedAnalysisFrame(resultBitmap, data)
             onTrackingResult(augmentedData)
             val imageWidth = (augmentedData["imageWidth"] as? Int) ?: 0
@@ -182,15 +188,10 @@ class CameraXManager(
      *
      * Solo afecta al bitmap de ANÁLISIS: el preview se deja como está, así
      * la operaria sigue viendo el rostro tal cual lo tiene delante. Las
-     * coordenadas que devuelve MediaPipe quedan en el espacio rotado y las
-     * desrota el mapper (ver `EyeTrackingResultMapper.map(rotated180 = ...)`),
-     * para que el overlay de Flutter siga coincidiendo con el preview.
-     *
-     * No puede quedar encendido fuera del robot: el paquete `render/`
-     * (modelo 3D de pestañas) lee los landmarks CRUDOS por otro camino y con
-     * el análisis rotado el .glb se ubica mal. En el robot no molesta porque
-     * el modelo 3D está oculto a propósito (ver
-     * `_setHidingLashesForAlignmentGuide` en Flutter).
+     * coordenadas que devuelve MediaPipe quedan en el espacio rotado y
+     * `FaceLandmarkerHelper.derotated180` las devuelve al del preview (junto
+     * con la pose) ANTES de entregarlas, así que Flutter y el render 3D
+     * reciben lo mismo y ninguno depende de este flag.
      */
     @Volatile private var analysisRotated180 = false
 

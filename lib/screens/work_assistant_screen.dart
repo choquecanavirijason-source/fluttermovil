@@ -1,5 +1,6 @@
 import 'dart:async' show StreamSubscription, Timer, unawaited;
 import 'dart:io' show Platform;
+import 'dart:math' show pi;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -53,6 +54,8 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
 
   Uint8List? _referenceBytes;
   bool _mirrorTopPanel = false;
+  bool _referenceRotated180 = false;
+  bool _cameraInverted180 = false;
 
   /// `true` mientras la foto de referencia se compone en segundo plano —
   /// ver [WorkAssistantArgs.panelBytesFuture].
@@ -86,8 +89,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   bool _aiGuidanceActive = false;
   Timer? _aiCycleTimer;
 
-  String _assistantMessage =
-      'Iniciando evaluación de pestañas en tiempo real…';
+  String _assistantMessage = 'Iniciando evaluación de pestañas en tiempo real…';
   DateTime? _aiMessageHoldUntil;
   DateTime? _lastMessageUpdate;
 
@@ -104,7 +106,6 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
 
   /// Evita doble atrás mientras se detiene una grabación en curso.
   bool _exitInProgress = false;
-
 
   @override
   void initState() {
@@ -127,6 +128,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       unawaited(_loadAsset(_defaultRefAsset));
     }
     unawaited(_service.startTracking());
+    unawaited(_service.setInvertedFaceMode(false, photoMode: true));
     _trackingSub = _service.trackingStream.listen(_onFrame);
     unawaited(_tts.setLanguage('es-MX'));
     unawaited(_tts.setSpeechRate(0.46));
@@ -141,6 +143,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       _runAiCycleNow();
     });
   }
+
   final ValueNotifier<TrackingFrame?> _mappingFrames =
       ValueNotifier<TrackingFrame?>(null);
   TrackingFrame? _latestMappableFrame;
@@ -163,16 +166,13 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           return locale.startsWith('es');
         }).toList();
 
-        final female = esVoices.cast<Map?>().firstWhere(
-          (v) {
-            final name = (v?['name'] ?? '').toString().toLowerCase();
-            return name.contains('female') ||
-                name.contains('#female') ||
-                name.contains('-f-') ||
-                name.contains('_f_');
-          },
-          orElse: () => null,
-        );
+        final female = esVoices.cast<Map?>().firstWhere((v) {
+          final name = (v?['name'] ?? '').toString().toLowerCase();
+          return name.contains('female') ||
+              name.contains('#female') ||
+              name.contains('-f-') ||
+              name.contains('_f_');
+        }, orElse: () => null);
 
         if (female != null) {
           await _tts.setVoice({
@@ -233,7 +233,8 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
 
     final now = DateTime.now();
     final last = _lastMessageUpdate;
-    if (last != null && now.difference(last) < const Duration(milliseconds: 1200)) {
+    if (last != null &&
+        now.difference(last) < const Duration(milliseconds: 1200)) {
       return;
     }
     _lastMessageUpdate = now;
@@ -263,11 +264,19 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   /// ÚNICA acción que reemplaza la imagen de arriba — deliberada, cada vez
   /// que se toca. El guiado automático de IA ([_runAiReview]) nunca la toca.
   Future<void> _captureReferenceNow() async {
+    final capturedInverted = _cameraInverted180;
+    // TEMPORAL — ver OrientDebug.
+    debugPrint(
+      'OrientDebug captura capturedInverted=$capturedInverted '
+      'referenciaRotada180=$_referenceRotated180',
+    );
     final jpeg = await _service.captureLastCameraFrame();
     if (jpeg == null || jpeg.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo capturar la cámara. Reintenta.')),
+          const SnackBar(
+            content: Text('No se pudo capturar la cámara. Reintenta.'),
+          ),
         );
       }
       return;
@@ -283,6 +292,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           jpeg,
           cropOverlay,
           mirror: widget.args?.mirrorPhoto ?? false,
+          rotate180: capturedInverted,
         );
         cropSucceeded = true;
       } catch (e) {
@@ -295,13 +305,42 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         : EyeTrackingPhotoPipeline.frameForCapturedBand(
             _latestMappableFrame,
             previewSize,
+            rotate180: capturedInverted,
           );
     setState(() {
       _referenceBytes = reference;
       _mappingFrames.value = mappingFrame;
+      _referenceRotated180 = false;
       // Una referencia manual gana sobre la que se estaba componiendo.
       _referenceLoading = false;
     });
+  }
+
+  void _toggleReferenceRotation() {
+    setState(() {
+      _referenceRotated180 = !_referenceRotated180;
+      _mappingFrames.value = EyeTrackingPhotoPipeline.rotateFrame180(
+        _mappingFrames.value,
+      );
+    });
+  }
+
+  Future<void> _toggleCameraInversion() async {
+    final inverted = !_cameraInverted180;
+    setState(() => _cameraInverted180 = inverted);
+    await _service.setInvertedFaceMode(inverted, photoMode: true);
+  }
+
+  /// `true` si se cambió de cámara en esta pantalla: al salir ya no se
+  /// devuelve el "Invertir" del probador (ver [dispose]).
+  bool _switchedCamera = false;
+
+  Future<void> _switchCamera() async {
+    await _service.switchCamera();
+    _switchedCamera = true;
+    // Mismo criterio que el probador: con otra cámara el rostro es otro y
+    // el modo "clienta acostada" deja de corresponder.
+    if (_cameraInverted180 && mounted) await _toggleCameraInversion();
   }
 
   Future<void> _pickReferenceSheet() async {
@@ -313,8 +352,10 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading:
-                  const Icon(Icons.auto_awesome, color: Colors.amberAccent),
+              leading: const Icon(
+                Icons.auto_awesome,
+                color: Colors.amberAccent,
+              ),
               title: const Text(
                 'Referencia de ejemplo',
                 style: TextStyle(color: Colors.white),
@@ -391,7 +432,10 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       final previous = _lastEvaluatedPhoto;
       final repo = ref.read(trackingRepositoryProvider);
       final feedback = previous != null
-          ? await repo.aiCompare(beforeJpegBytes: previous, afterJpegBytes: jpeg)
+          ? await repo.aiCompare(
+              beforeJpegBytes: previous,
+              afterJpegBytes: jpeg,
+            )
           : await repo.aiReview(jpeg);
       _lastEvaluatedPhoto = jpeg;
 
@@ -452,9 +496,9 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         setState(() => _isRecording = false);
         if (path != null && mounted) {
           final name = path.split(Platform.pathSeparator).last;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Grabación guardada: $name')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Grabación guardada: $name')));
         }
       } else {
         try {
@@ -476,8 +520,9 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
           if (!mounted) return;
           setState(() {
-            _elapsedSeconds =
-                DateTime.now().difference(_recordingStart).inSeconds;
+            _elapsedSeconds = DateTime.now()
+                .difference(_recordingStart)
+                .inSeconds;
           });
         });
         if (!mounted) return;
@@ -525,6 +570,16 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     if (_isRecording) {
       unawaited(_service.stopRecording());
     }
+    // Devuelve el modo con el que vino del probador (o `false` si se cambió
+    // de cámara acá), y suelta la foto rápida. El probador reaplica el suyo
+    // al volver; los dos escriben el mismo valor, así que no importa cuál
+    // de las dos llamadas llegue última.
+    unawaited(
+      _service.setInvertedFaceMode(
+        !_switchedCamera && (widget.args?.cameraInverted180 ?? false),
+        photoMode: false,
+      ),
+    );
     // Esta pantalla arranca el tracking en [initState], así que también
     // tiene que apagarlo: sin esto la cámara y MediaPipe quedaban corriendo
     // al salir hacia cualquier pantalla que no sea el probador. Volver al
@@ -565,11 +620,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
               return _buildTabletLandscapeBody(topInset, bottomInset);
             }
 
-            return _buildPortraitSplitBody(
-              constraints,
-              topInset,
-              bottomInset,
-            );
+            return _buildPortraitSplitBody(constraints, topInset, bottomInset);
           },
         ),
       ),
@@ -638,14 +689,8 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       children: [
         Column(
           children: [
-            Expanded(
-              flex: _portraitRefFlex,
-              child: _lashGuidePanel(topInset),
-            ),
-            Expanded(
-              flex: _portraitCamFlex,
-              child: _cameraRegion(bottomInset),
-            ),
+            Expanded(flex: _portraitRefFlex, child: _lashGuidePanel(topInset)),
+            Expanded(flex: _portraitCamFlex, child: _cameraRegion(bottomInset)),
           ],
         ),
         Positioned(
@@ -669,22 +714,44 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       children: [
         if (prefBytes != null)
           Positioned.fill(
-            child: Transform.flip(
-              flipX: _mirrorTopPanel,
-              child: Image.memory(
-                prefBytes,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-                gaplessPlayback: true,
-                errorBuilder: (context, error, stackTrace) => const ColoredBox(
-                  color: Colors.black,
-                  child: Center(
-                    child: Icon(Icons.broken_image_outlined,
-                        color: Colors.white54, size: 48),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Transform.rotate(
+                  angle: _referenceRotated180 ? pi : 0,
+                  child: Transform.flip(
+                    flipX: _mirrorTopPanel,
+                    child: Image.memory(
+                      prefBytes,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                      gaplessPlayback: true,
+                      errorBuilder: (context, error, stackTrace) =>
+                          const ColoredBox(
+                            color: Colors.black,
+                            child: Center(
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                color: Colors.white54,
+                                size: 48,
+                              ),
+                            ),
+                          ),
+                    ),
                   ),
                 ),
-              ),
+                if (_mappingFrames.value != null)
+                  CustomPaint(
+                    isComplex: true,
+                    painter: LashMappingPainter(
+                      frames: _mappingFrames,
+                      styleId: widget.args?.mappingStyleId ?? 'cateye',
+                      leftEyeOffset: _leftEyeOffset,
+                      rightEyeOffset: _rightEyeOffset,
+                    ),
+                  ),
+              ],
             ),
           )
         else
@@ -697,18 +764,6 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
               child: CircularProgressIndicator(
                 strokeWidth: 3,
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            ),
-          ),
-        if (prefBytes != null && _mappingFrames.value != null)
-          Positioned.fill(
-            child: CustomPaint(
-              isComplex: true,
-              painter: LashMappingPainter(
-                frames: _mappingFrames,
-                styleId: widget.args?.mappingStyleId ?? 'cateye',
-                leftEyeOffset: _leftEyeOffset,
-                rightEyeOffset: _rightEyeOffset,
               ),
             ),
           ),
@@ -765,12 +820,25 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           right: 10,
           child: _circleIconButton(
             icon: Icons.camera_alt_outlined,
+            tooltip: 'Tomar foto de referencia',
             // Toque simple = tomar foto ya. Mantener presionado = opciones
             // secundarias (foto de ejemplo, elegir de galería).
             onTap: () => unawaited(_captureReferenceNow()),
             onLongPress: _pickReferenceSheet,
           ),
         ),
+        if (prefBytes != null)
+          Positioned(
+            top: topInset + 58,
+            right: 10,
+            child: _circleIconButton(
+              icon: Icons.screen_rotation_alt,
+              tooltip: _referenceRotated180
+                  ? 'Restaurar foto y grilla'
+                  : 'Invertir foto y grilla 180°',
+              onTap: _toggleReferenceRotation,
+            ),
+          ),
       ],
     );
   }
@@ -872,8 +940,9 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     required IconData icon,
     required VoidCallback onTap,
     VoidCallback? onLongPress,
+    String? tooltip,
   }) {
-    return Material(
+    final button = Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
@@ -895,6 +964,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         ),
       ),
     );
+    return tooltip == null ? button : Tooltip(message: tooltip, child: button);
   }
 
   Widget _manualControlsToggle() => Tooltip(
@@ -1054,7 +1124,6 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     );
   }
 
-
   Widget _cameraRegion(double bottomInset) {
     return Stack(
       fit: StackFit.expand,
@@ -1067,17 +1136,15 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           // CameraXManager nativo con EyeTrackingPage), pero Kotlin no
           // carga ningún modelo de pestaña, así que no se dibuja overlay
           // 3D encima del rostro en esta pantalla.
-          child: const HybridCameraPreview(),
+          child: Transform.rotate(
+            angle: _cameraInverted180 ? pi : 0,
+            child: const HybridCameraPreview(),
+          ),
         ),
         // Sin mapeo sobre la cámara en vivo: la guía de la operaria es la
         // FOTO de arriba, que ya lo trae horneado. Acá encima taparía el
         // trabajo real sin aportar nada.
-        if (_isRecording)
-          Positioned(
-            top: 8,
-            left: 8,
-            child: _recordingPill(),
-          ),
+        if (_isRecording) Positioned(top: 8, left: 8, child: _recordingPill()),
         Positioned(
           right: 8,
           top: 64,
@@ -1085,22 +1152,31 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _railIconButton(
-                asset: 'assets/rotar.png',
-                onTap: () => unawaited(_service.switchCamera()),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _railIconButton(
+                    icon: Icons.flip_camera_android,
+                    tooltip: 'Cambiar cámara',
+                    isHighlighted: true,
+                    onTap: () => unawaited(_switchCamera()),
+                  ),
+                  const SizedBox(height: 6),
+                  _cameraInvertPill(),
+                ],
               ),
               _railIconButton(
                 asset: 'assets/flash.png',
+                tooltip: 'Flash',
                 onTap: () {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Flash: próxima versión.'),
-                    ),
+                    const SnackBar(content: Text('Flash: próxima versión.')),
                   );
                 },
               ),
               _railIconButton(
                 icon: Icons.crop_square_outlined,
+                tooltip: 'Marco y galería',
                 onTap: () {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -1151,9 +1227,11 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
   Widget _railIconButton({
     String? asset,
     IconData? icon,
+    String? tooltip,
+    bool isHighlighted = false,
     required VoidCallback onTap,
   }) {
-    return Material(
+    final button = Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
@@ -1161,9 +1239,23 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.14),
+            color: isHighlighted
+                ? AppColors.actionGreen.withValues(alpha: 0.9)
+                : Colors.white.withValues(alpha: 0.14),
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white24),
+            border: Border.all(
+              color: isHighlighted ? Colors.white70 : Colors.white24,
+              width: isHighlighted ? 1.5 : 1,
+            ),
+            boxShadow: isHighlighted
+                ? const [
+                    BoxShadow(
+                      color: Colors.black38,
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
           ),
           child: asset != null
               ? Image.asset(asset, width: 22, height: 22)
@@ -1171,6 +1263,48 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         ),
       ),
     );
+    return tooltip == null ? button : Tooltip(message: tooltip, child: button);
   }
 
+  Widget _cameraInvertPill() {
+    return Tooltip(
+      message: _cameraInverted180
+          ? 'Restaurar orientación'
+          : 'Invertir vista 180°',
+      child: Material(
+        color: _cameraInverted180
+            ? AppColors.actionGreen.withValues(alpha: 0.92)
+            : Colors.black.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          onTap: () => unawaited(_toggleCameraInversion()),
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: _cameraInverted180 ? Colors.white70 : Colors.white38,
+              ),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.screen_rotation_alt, color: Colors.white, size: 14),
+                SizedBox(width: 4),
+                Text(
+                  'Invertir',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -117,6 +117,9 @@ object EyeAnchorCalculator {
          * cálculo de `lift` más abajo. `1` (default) = comportamiento de
          * ojo abierto. */
         openAmount: Float = 1f,
+        /** Cuánto baja el ancla con el ojo CERRADO, en píxeles de la imagen
+         * de análisis. `0` (default) = comportamiento anterior. */
+        closedDownShiftPx: Float = 0f,
     ): EyeAnchor? {
         if (eye.upperLid.size < 2) return null
 
@@ -228,7 +231,13 @@ object EyeAnchorCalculator {
         val closedLift = RendererConfiguration.LASH_CLOSED_ANCHOR_LIFT_FRACTION
         val lift = styleConfig.heightOffset *
             (closedLift + (1f - closedLift) * openAmount.coerceIn(0f, 1f))
-        val anchorY = meanY - effectiveHeight * lift
+        // Con el ojo cerrado (pestaña volcada) el ancla además BAJA
+        // [closedDownShiftPx] — ver [RendererConfiguration.LASH_CLOSED_DOWN_SHIFT_DP].
+        // +y es "hacia la mejilla": este cálculo corre en el marco donde el
+        // rostro queda derecho (ver [FaceQuarterTurn]), así que vale igual con
+        // la clienta acostada.
+        val closedAmount = 1f - openAmount.coerceIn(0f, 1f)
+        val anchorY = meanY - effectiveHeight * lift + closedDownShiftPx * closedAmount
 
         // CORRECCIÓN 2026-08-08 (LATERAL_LASH_OFFSET, ver
         // RendererConfiguration): reportado en dispositivo real que el

@@ -115,13 +115,34 @@ class EyeShapeAnalyzer {
       return EyeAnalysis.none;
     }
 
-    // Centro aproximado del rostro: punto medio entre los centroides de ambos ojos.
+    // Las métricas de abajo (ancho = x, alto = y, "arriba" = y menor) asumen
+    // el rostro derecho. Con la clienta acostada llega de costado o dado
+    // vuelta, así que primero se pasan los puntos a ejes del ROSTRO: x a lo
+    // largo del vector entre ojos (identidad anatómica de MediaPipe, no
+    // posición en pantalla) e y hacia el mentón, con origen entre los ojos.
     final lc = _centroid(frame.leftEye);
     final rc = _centroid(frame.rightEye);
-    final faceMidX = (lc.dx + rc.dx) / 2.0;
+    final acrossX = rc.dx - lc.dx;
+    final acrossY = rc.dy - lc.dy;
+    final across = math.sqrt(acrossX * acrossX + acrossY * acrossY);
+    if (across < 1.0) return EyeAnalysis.none;
+    // Eje derecha del rostro (ux, uy); el de abajo es su perpendicular
+    // (−uy, ux), que con la cara derecha da (0, 1).
+    final ux = acrossX / across;
+    final uy = acrossY / across;
+    final midX = (lc.dx + rc.dx) / 2.0;
+    final midY = (lc.dy + rc.dy) / 2.0;
+    List<EyePoint> toFace(List<EyePoint> eye) => [
+      for (final p in eye)
+        EyePoint(
+          x: (p.x - midX) * ux + (p.y - midY) * uy,
+          y: -(p.x - midX) * uy + (p.y - midY) * ux,
+        ),
+    ];
+    const faceMidX = 0.0;
 
-    final left = _metricsFor(frame.leftEye, faceMidX);
-    final right = _metricsFor(frame.rightEye, faceMidX);
+    final left = _metricsFor(toFace(frame.leftEye), faceMidX);
+    final right = _metricsFor(toFace(frame.rightEye), faceMidX);
     if (left == null || right == null) return EyeAnalysis.none;
 
     final aspect = (left.aspectRatio + right.aspectRatio) / 2.0;

@@ -22,6 +22,12 @@ class EyeTrackingPhotoPipeline {
   static const double _eyeBandStartRatio = 0.22;
   static const double _eyeBandHeightRatio = 0.42;
 
+  /// Inicio de la franja de ojos: la normal, o reflejada respecto del centro
+  /// con la clienta echada (ver [_cropEyeBand]).
+  static double _bandStart(bool flip) => flip
+      ? 1 - _eyeBandStartRatio - _eyeBandHeightRatio
+      : _eyeBandStartRatio;
+
   final GlobalKey previewCaptureKey;
 
   const EyeTrackingPhotoPipeline({required this.previewCaptureKey});
@@ -38,8 +44,10 @@ class EyeTrackingPhotoPipeline {
   /// preview y la misma banda vertical aplicada a la foto capturada.
   static TrackingFrame? frameForCapturedBand(
     TrackingFrame? frame,
-    Size previewSize,
-  ) {
+    Size previewSize, {
+    bool rotate180 = false,
+    bool flipEyeBand = false,
+  }) {
     if (frame == null ||
         !frame.faceDetected ||
         frame.imageWidth <= 0 ||
@@ -59,15 +67,20 @@ class EyeTrackingPhotoPipeline {
     final dy = (previewSize.height - sourceHeight * scale) / 2;
     final overlayWidth = (previewSize.width * _overlayPixelRatio).round();
     final overlayHeight = (previewSize.height * _overlayPixelRatio).round();
-    final cropTop = (overlayHeight * _eyeBandStartRatio).round();
-    final bandHeight = (overlayHeight * _eyeBandHeightRatio)
-        .round()
-        .clamp(1, overlayHeight - cropTop);
-
-    EyePoint project(EyePoint point) => EyePoint(
-      x: (point.x * scale + dx) * _overlayPixelRatio,
-      y: (point.y * scale + dy) * _overlayPixelRatio - cropTop,
+    final cropTop = (overlayHeight * _bandStart(flipEyeBand)).round();
+    final bandHeight = (overlayHeight * _eyeBandHeightRatio).round().clamp(
+      1,
+      overlayHeight - cropTop,
     );
+
+    EyePoint project(EyePoint point) {
+      final x = (point.x * scale + dx) * _overlayPixelRatio;
+      final y = (point.y * scale + dy) * _overlayPixelRatio - cropTop;
+      return EyePoint(
+        x: rotate180 ? overlayWidth - 1 - x : x,
+        y: rotate180 ? bandHeight - 1 - y : y,
+      );
+    }
 
     List<EyePoint> projectAll(List<EyePoint> points) =>
         points.map(project).toList(growable: false);
@@ -89,6 +102,35 @@ class EyeTrackingPhotoPipeline {
       rightLowerLid: projectAll(frame.rightLowerLid),
       leftLashLine: projectAll(frame.leftLashLine),
       rightLashLine: projectAll(frame.rightLashLine),
+    );
+  }
+
+  /// Rota los landmarks de una banda ya proyectada para que sigan coincidiendo
+  /// con la imagen cuando el usuario la gira manualmente en resultados.
+  static TrackingFrame? rotateFrame180(TrackingFrame? frame) {
+    if (frame == null) return null;
+    EyePoint rotate(EyePoint point) =>
+        EyePoint(x: frame.imageWidth - point.x, y: frame.imageHeight - point.y);
+    List<EyePoint> rotateAll(List<EyePoint> points) =>
+        points.map(rotate).toList(growable: false);
+
+    return TrackingFrame(
+      faceDetected: frame.faceDetected,
+      imageWidth: frame.imageWidth,
+      imageHeight: frame.imageHeight,
+      faceContour: rotateAll(frame.faceContour),
+      leftEye: rotateAll(frame.leftEye),
+      rightEye: rotateAll(frame.rightEye),
+      leftIris: frame.leftIris == null ? null : rotate(frame.leftIris!),
+      rightIris: frame.rightIris == null ? null : rotate(frame.rightIris!),
+      leftOpenRatio: frame.leftOpenRatio,
+      rightOpenRatio: frame.rightOpenRatio,
+      leftUpperLid: rotateAll(frame.leftUpperLid),
+      leftLowerLid: rotateAll(frame.leftLowerLid),
+      rightUpperLid: rotateAll(frame.rightUpperLid),
+      rightLowerLid: rotateAll(frame.rightLowerLid),
+      leftLashLine: rotateAll(frame.leftLashLine),
+      rightLashLine: rotateAll(frame.rightLashLine),
     );
   }
 
@@ -136,6 +178,7 @@ class EyeTrackingPhotoPipeline {
     BuildContext context,
     Uint8List? overlayBytes, {
     bool preferFrontCamera = true,
+    bool flipEyeBand = false,
   }) async {
     CameraController? ctrl;
     try {
@@ -178,6 +221,7 @@ class EyeTrackingPhotoPipeline {
         faceBytes,
         overlayBytes,
         mirror: preferFrontCamera,
+        flipEyeBand: flipEyeBand,
       );
     } catch (e) {
       debugPrint('captureAndComposite: $e');
@@ -195,9 +239,17 @@ class EyeTrackingPhotoPipeline {
     Uint8List faceRaw,
     Uint8List? overlayRaw, {
     bool mirror = true,
+    bool rotate180 = false,
+    bool flipEyeBand = false,
   }) {
     return Isolate.run(
-      () => compositeAndCrop(faceRaw, overlayRaw, mirror: mirror),
+      () => compositeAndCrop(
+        faceRaw,
+        overlayRaw,
+        mirror: mirror,
+        rotate180: rotate180,
+        flipEyeBand: flipEyeBand,
+      ),
     );
   }
 
@@ -215,6 +267,8 @@ class EyeTrackingPhotoPipeline {
     Uint8List faceRaw,
     Uint8List? overlayRaw, {
     bool mirror = true,
+    bool rotate180 = false,
+    bool flipEyeBand = false,
   }) {
     var faceImg = img.decodeImage(faceRaw);
     if (faceImg == null) return faceRaw;
@@ -250,8 +304,14 @@ class EyeTrackingPhotoPipeline {
         // memoria en píxeles que se iban a tirar, y ese pico (con Filament
         // y MediaPipe cargados) dejaba al proceso al borde — en logcat se
         // veían objetos grandes de 16-27 MB, GC constante y frames de 3 s.
-        canvas = _cropEyeBand(canvas);
-        final overlayBand = _cropEyeBand(overlayImg);
+        canvas = _cropEyeBand(canvas, flipEyeBand);
+        var overlayBand = _cropEyeBand(overlayImg, flipEyeBand);
+        if (rotate180) {
+          // Girar después del recorte mantiene la foto, el overlay y los
+          // landmarks en el mismo sistema de coordenadas de la banda.
+          canvas = img.copyRotate(canvas, angle: 180);
+          overlayBand = img.copyRotate(overlayBand, angle: 180);
+        }
 
         // Se compone a la resolución del OVERLAY y no a la de la foto: el
         // mapeo son líneas finas y números, y encogerlos a ~480p (lo que
@@ -283,12 +343,8 @@ class EyeTrackingPhotoPipeline {
       }
     }
 
-    final cropped = _cropEyeBand(canvas);
-    // Sin girar 180° al final. Antes se enderezaba la foto, pero esta
-    // imagen es la GUÍA que la operaria mira mientras trabaja: tiene que
-    // quedar en la misma orientación en que ve a la clienta, que está
-    // acostada. Enderezarla obligaba a traducir mentalmente izquierda y
-    // derecha contra lo que tiene delante.
+    var cropped = _cropEyeBand(canvas, flipEyeBand);
+    if (rotate180) cropped = img.copyRotate(cropped, angle: 180);
     return _encode(cropped);
   }
 
@@ -305,11 +361,19 @@ class EyeTrackingPhotoPipeline {
   /// cabeza en cualquier orientación; en dispositivo quedaba demasiado
   /// cerrado y centrado en las cejas, y el mapeo terminaba fuera del cuadro.
   /// La franja fija encuadra bien en la práctica.
-  static img.Image _cropEyeBand(img.Image src) {
-    final y = (src.height * _eyeBandStartRatio).round().clamp(0, src.height - 1);
-    final h = (src.height * _eyeBandHeightRatio)
-      .round()
-      .clamp(1, src.height - y);
+  ///
+  /// [flip] = clienta echada: la guía de encuadre se dibuja girada 180°, así
+  /// que los ojos quedan reflejados respecto del centro (~60 % del alto en
+  /// vez de ~40 %) y la franja se refleja igual: y=36%–78%.
+  static img.Image _cropEyeBand(img.Image src, [bool flip = false]) {
+    final y = (src.height * _bandStart(flip)).round().clamp(
+      0,
+      src.height - 1,
+    );
+    final h = (src.height * _eyeBandHeightRatio).round().clamp(
+      1,
+      src.height - y,
+    );
     return img.copyCrop(src, x: 0, y: y, width: src.width, height: h);
   }
 }

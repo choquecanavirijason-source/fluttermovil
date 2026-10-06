@@ -356,6 +356,20 @@ class LashRenderer(
             )
         }
 
+        // dp → píxeles de pantalla → píxeles de la imagen de análisis (el
+        // preview la escala con FILL_CENTER, ver CameraProjection.fillCenter).
+        val screenPxPerImagePx = if (imageWidth > 0 && imageHeight > 0 && sv.width > 0 && sv.height > 0) {
+            maxOf(sv.width.toFloat() / imageWidth, sv.height.toFloat() / imageHeight)
+        } else {
+            0f
+        }
+        val closedDownShiftPx = if (screenPxPerImagePx > 0f) {
+            (RendererConfiguration.LASH_CLOSED_DOWN_SHIFT_DP * sv.resources.displayMetrics.density +
+                RendererConfiguration.LASH_CLOSED_DOWN_SHIFT_EXTRA_PX) / screenPxPerImagePx
+        } else {
+            0f
+        }
+
         val pipelineResult = try {
             FaceRenderPipeline.compute(
                 result = result,
@@ -374,6 +388,7 @@ class LashRenderer(
                 rightBlinkTracker = rightSlot.openness,
                 leftLidShape = leftSlot.lidShape,
                 rightLidShape = rightSlot.lidShape,
+                closedDownShiftPx = closedDownShiftPx,
             )
         } catch (e: Exception) {
             Log.e(TAG, "onFaceResult: fallo calculando la transformación", e)
@@ -384,6 +399,7 @@ class LashRenderer(
             return
         }
 
+        OrientDebug.logLash(pipelineResult.left, pipelineResult.right) // TEMPORAL
         applyTransform(leftSlot, pipelineResult.left, sv.engine)
         applyTransform(rightSlot, pipelineResult.right, sv.engine)
     }

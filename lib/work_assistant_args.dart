@@ -14,6 +14,7 @@ class WorkAssistantArgs {
     this.cropOverlayBytes,
     this.mappingPreviewSize,
     this.mirrorPhoto = false,
+    this.cameraInverted180 = false,
   });
 
   /// Captura (preview + filtro dibujado en Flutter), ya lista.
@@ -34,4 +35,9 @@ class WorkAssistantArgs {
   final Uint8List? cropOverlayBytes;
   final Size? mappingPreviewSize;
   final bool mirrorPhoto;
+
+  /// Modo "Clienta echada" (detección rotada) del probador. El asistente no
+  /// lo usa para su propia vista; sólo lo devuelve al nativo al salir, para
+  /// que el probador recupere su detección sin carreras.
+  final bool cameraInverted180;
 }

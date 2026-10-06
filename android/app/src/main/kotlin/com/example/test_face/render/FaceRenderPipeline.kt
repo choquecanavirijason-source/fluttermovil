@@ -58,6 +58,9 @@ object FaceRenderPipeline {
          * mientras dure el parpadeo. Ver [LidShapeHold]. */
         leftLidShape: LidShapeHold? = null,
         rightLidShape: LidShapeHold? = null,
+        /** Ver [RendererConfiguration.LASH_CLOSED_DOWN_SHIFT_DP], ya en
+         * píxeles de la imagen de análisis. */
+        closedDownShiftPx: Float = 0f,
     ): Result? {
         if (result.faceLandmarks().isEmpty()) return null
         val landmarks: List<NormalizedLandmark> = result.faceLandmarks()[0]
@@ -87,6 +90,9 @@ object FaceRenderPipeline {
 
         val iw = imageWidth.toFloat()
         val ih = imageHeight.toFloat()
+        // Rostro de costado o cabeza abajo (clienta acostada): el cálculo 2D
+        // del ojo se hace en un marco derecho — ver [FaceQuarterTurn].
+        val turns = FaceQuarterTurn.of(landmarks, iw, ih)
 
         val left = computeEye(
             "LEFT",
@@ -94,7 +100,8 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.LEFT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.LEFT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.LEFT_EYE_UPPER_APEX,
             headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig, cameraBitmap,
-            leftLidFilter, leftBlinkTracker, leftLidShape, blendshapeOpenness?.left,
+            leftLidFilter, leftBlinkTracker, leftLidShape, blendshapeOpenness?.left, turns,
+            closedDownShiftPx,
         )
         val right = computeEye(
             "RIGHT",
@@ -102,7 +109,8 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.RIGHT_EYE_MEDIAL_CANTHUS, FaceLandmarkIndices.RIGHT_EYE_LATERAL_CANTHUS,
             FaceLandmarkIndices.RIGHT_EYE_UPPER_APEX,
             headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY, styleConfig, cameraBitmap,
-            rightLidFilter, rightBlinkTracker, rightLidShape, blendshapeOpenness?.right,
+            rightLidFilter, rightBlinkTracker, rightLidShape, blendshapeOpenness?.right, turns,
+            closedDownShiftPx,
         )
         // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
@@ -134,9 +142,18 @@ object FaceRenderPipeline {
         /** Apertura de ESTE ojo según blendshapes, o `null` si el resultado
          * no los trae — ver [EyeBlinkBlendshapes]. */
         blendshapeOpenness: Float?,
+        /** [FaceQuarterTurn.of] del rostro. `0` = todo como siempre. */
+        turns: Int,
+        closedDownShiftPx: Float,
     ): EyeTransform? {
-        val rawEyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
+        val imageEyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
+        // Todo lo 2D de abajo (ancla, plano, curva) corre en el marco donde
+        // el rostro queda derecho; sólo el ancla vuelve a la imagen para la
+        // des-proyección. Con `turns == 0` es la identidad.
+        val cx = imageWidth / 2f
+        val cy = imageHeight / 2f
+        val rawEyeLandmarks = FaceQuarterTurn.toUpright(imageEyeLandmarks, turns, cx, cy)
         // LashEdgeDetector DESACTIVADO temporalmente: el debug overlay de Flutter
         // muestra los landmarks CRUDOS de MediaPipe (sin corregir). Para que el
         // modelo 3D se ancle en el mismo lugar que los puntos verdes, usamos
@@ -160,7 +177,14 @@ object FaceRenderPipeline {
         // [EyeBlinkBlendshapes] y [foreshorteningCorrectedOpenness].
         val openness = blendshapeOpenness
             ?: foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose)
-        val lidShapeTrusted = opennessTracker?.update(openness) ?: true
+        // Con blendshapes, umbral absoluto + histéresis; la línea base
+        // relativa queda sólo para la señal geométrica (ver
+        // [OpennessTracker.updateFromBlendshape]).
+        val lidShapeTrusted = if (blendshapeOpenness != null) {
+            opennessTracker?.updateFromBlendshape(blendshapeOpenness) ?: true
+        } else {
+            opennessTracker?.update(openness) ?: true
+        }
 
         // El ancla 2D en píxeles sigue haciendo falta en los DOS modos: la
         // usa LashLineCurve/LashMeshBender más abajo sin cambios (Fase 2 no
@@ -178,6 +202,7 @@ object FaceRenderPipeline {
             styleConfig,
             heldShape,
             openAmount,
+            closedDownShiftPx,
         )
             ?: return null
         if (lidShapeTrusted) lidShape?.latchShape(anchor.measuredShape)
@@ -185,6 +210,10 @@ object FaceRenderPipeline {
         // se calcula UNA vez acá y lo consumen los DOS caminos — el nuevo ya
         // no deriva right/up/normal de landmarks sueltos, toma esto tal cual.
         val plane = EyePlaneCalculator.compute(headPose, eyeLandmarks, anchor)
+        // El plano usa sólo el RESIDUO (tangente menos eje de comisuras),
+        // que no cambia con el giro, así que va con el ancla del marco
+        // derecho. La des-proyección necesita el punto en la imagen.
+        val imageAnchor = FaceQuarterTurn.fromUpright(anchor, turns, cx, cy)
         val transform = if (RendererConfiguration.LASH_ANCHOR_FROM_FACE_MESH) {
             MeshEyeTransformCalculator.compute(
                 landmarks, medialCanthusIndex, lateralCanthusIndex, upperApexIndex,
@@ -199,7 +228,7 @@ object FaceRenderPipeline {
             ) ?: return null
         } else {
             EyeTransformCalculator.compute(
-                headPose, plane, anchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
+                headPose, plane, imageAnchor, imageWidth, imageHeight, naturalSpan, camera, xNudgeNormalized, rootLocalY,
             )
         }
         if (RendererConfiguration.MESH_CALIBRATION_LOGGING && shouldLogCalibrationFrame()) {
@@ -213,7 +242,7 @@ object FaceRenderPipeline {
                 // medición, que es justamente para lo que existe este log.
                 ringIndices.copyOfRange(9, 16),
                 camera, headPose, plane, naturalSpan, rootLocalY, styleConfig,
-                anchor, imageWidth, imageHeight, xNudgeNormalized,
+                imageAnchor, imageWidth, imageHeight, xNudgeNormalized,
             )
         }
         // Curva del párpado superior para el doblado del mesh (ver
@@ -243,6 +272,11 @@ object FaceRenderPipeline {
         //    párpado cerrado (One Euro abre su corte con la velocidad, y un
         //    parpadeo es justamente el movimiento más rápido del párpado —
         //    o sea que es cuando MENOS suaviza).
+        //
+        // La curva se ajusta en el marco DERECHO ([FaceQuarterTurn]): queda
+        // expresada a lo largo de la tangente y su perpendicular, así que no
+        // hace falta devolverla a la imagen, y con la cara a 180° su arco ya
+        // no sale invertido respecto del modelo.
         val curve = if (lidShapeTrusted) {
             val smoothedLid = lidFilter?.apply(eyeLandmarks.upperLid, System.nanoTime())
                 ?: eyeLandmarks.upperLid

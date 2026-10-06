@@ -5,11 +5,14 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import android.util.Log
 import com.google.mediapipe.framework.image.BitmapExtractor
+import com.google.mediapipe.tasks.components.containers.Category
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import java.util.Optional
 import java.util.concurrent.atomic.AtomicBoolean
 
 class FaceLandmarkerHelper(
@@ -45,8 +48,9 @@ class FaceLandmarkerHelper(
 
     /** Lo setea `CameraXManager` cuando rota el frame de análisis 180°
      * (clienta acostada — ver `CameraXManager.analysisRotated180`). El
-     * mapper lo necesita para desrotar las coordenadas y que el overlay de
-     * Flutter siga cayendo sobre el preview, que NO rota. */
+     * resultado se desrota acá mismo ([derotated180]) antes de entregarlo,
+     * para que el overlay de Flutter y el render 3D caigan sobre el
+     * preview, que NO rota. */
     @Volatile var analysisRotated180 = false
 
     /**
@@ -54,13 +58,11 @@ class FaceLandmarkerHelper(
      * EN VUELO, congelado al enviarlo.
      *
      * No alcanza con leer [analysisRotated180] al recibir el resultado: la
-     * rotación se alterna sola mientras no hay rostro (ver
-     * `CameraXManager.maybeFlipAnalysisRotation`), así que puede cambiar
-     * entre que el frame sale y el resultado vuelve. Ahí el mapper desrotaba
-     * con el valor equivocado y los landmarks salían dados vuelta — con el
-     * rostro invertido respecto del preview, lo que daba vuelta la dirección
-     * del mapeo de pestañas de una corrida a otra. Como [inferenceInFlight]
-     * garantiza un solo frame a la vez, un único campo alcanza.
+     * rotación puede cambiar ([CameraXManager.setInvertedFaceMode]) entre que
+     * el frame sale y el resultado vuelve, y desrotar con el valor
+     * equivocado deja los landmarks dados vuelta respecto del preview. Como
+     * [inferenceInFlight] garantiza un solo frame a la vez, un único campo
+     * alcanza.
      */
     @Volatile private var rotationInFlight = false
 
@@ -152,14 +154,21 @@ class FaceLandmarkerHelper(
                         Log.w(TAG, "BitmapExtractor.extract falló — detección de pestaña real desactivada para este frame", e)
                         null
                     }
+                    // UNA sola desrotación, acá: Flutter (mapper) y el
+                    // render 3D reciben el MISMO resultado ya en el espacio
+                    // del preview, y ninguno necesita saber si el análisis
+                    // se rotó. Antes el mapper desrotaba por su cuenta y el
+                    // render recibía los landmarks y la pose CRUDOS, en el
+                    // espacio rotado — por eso el modo invertido no se podía
+                    // usar con el modelo 3D.
+                    val effective = if (rotationInFlight) derotated180(result) else result
                     val mapped = mapper.map(
-                        result,
+                        effective,
                         image.width,
                         image.height,
                         bitmap,
-                        rotated180 = rotationInFlight,
                     )
-                    onResult(mapped, result, bitmap)
+                    onResult(mapped, effective, bitmap)
                 } catch (e: Exception) {
                     Log.e(TAG, "Exception in result listener", e)
                     onError(e.message ?: "Error processing FaceLandmarker result")
@@ -261,6 +270,40 @@ class FaceLandmarkerHelper(
     }
 
     fun getLandmarker(): FaceLandmarker? = faceLandmarker
+
+    /**
+     * Devuelve [result] como si MediaPipe hubiera analizado el frame SIN la
+     * rotación de 180° (ver `CameraXManager.analysisRotated180`):
+     *
+     *  - landmarks normalizados: `(x, y) → (1−x, 1−y)`; `z` no cambia (es
+     *    profundidad, y el giro es alrededor del eje óptico);
+     *  - matriz de pose: `Rz(180°)·M`, o sea filas 0 y 1 negadas (rotación
+     *    Y traslación), leída row-major igual que
+     *    [com.example.test_face.render.EyePoseEstimator];
+     *  - blendshapes: iguales — son del rostro, no de la imagen.
+     *
+     * El bitmap NO se toca: sigue en el espacio rotado (hoy sólo lo usan
+     * [com.example.test_face.render.LashEdgeDetector], desactivado, y el
+     * volcado de debug).
+     */
+    private fun derotated180(result: FaceLandmarkerResult): FaceLandmarkerResult {
+        val faces = result.faceLandmarks().map { face ->
+            face.map { p ->
+                NormalizedLandmark.create(1f - p.x(), 1f - p.y(), p.z(), p.visibility(), p.presence())
+            }
+        }
+        val matrices = result.facialTransformationMatrixes().map { list ->
+            list.map { m -> m.copyOf().also { for (i in 0 until 8) it[i] = -it[i] } }
+        }
+        val blendshapes = result.faceBlendshapes()
+        val timestamp = result.timestampMs()
+        return object : FaceLandmarkerResult() {
+            override fun timestampMs(): Long = timestamp
+            override fun faceLandmarks(): List<List<NormalizedLandmark>> = faces
+            override fun faceBlendshapes(): Optional<List<List<Category>>> = blendshapes
+            override fun facialTransformationMatrixes(): Optional<List<FloatArray>> = matrices
+        }
+    }
 
     private companion object {
         /** Ver el vencimiento de seguridad en [detectAsync]. */

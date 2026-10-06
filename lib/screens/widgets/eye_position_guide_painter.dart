@@ -12,12 +12,30 @@ import '../../eye_tracking_alignment.dart';
 class EyePositionGuidePainter extends CustomPainter {
   final bool eyesClosed;
 
-  const EyePositionGuidePainter({required this.eyesClosed});
+  /// Clienta echada (cabeza abajo en la cámara): la guía se dibuja girada
+  /// 180° — óvalo y línea de ojos del lado en que de verdad está el rostro.
+  /// La cámara NO se gira. Debe coincidir con la evaluación del encuadre
+  /// (ver `_evaluateAlignment` en `eye_tracking_page.dart`).
+  final bool inverted;
+
+  /// Los ojos detectados están sobre la línea horizontal (ver
+  /// `EyeAlignmentGuide.isEyesOnLine`): se pinta verde y más gruesa.
+  final bool eyesOnLine;
+
+  const EyePositionGuidePainter({
+    required this.eyesClosed,
+    this.inverted = false,
+    this.eyesOnLine = false,
+  });
 
   Color get _color => eyesClosed ? Colors.greenAccent : Colors.white54;
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (inverted) {
+      canvas.translate(size.width, size.height);
+      canvas.rotate(3.141592653589793);
+    }
     final guideRect = EyeAlignmentGuide.guideRect(size);
     final facePath = _faceGuidePath(guideRect);
 
@@ -42,12 +60,19 @@ class EyePositionGuidePainter extends CustomPainter {
       ..strokeWidth = eyesClosed ? 2.2 : 1.4
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
-    final eyeLineY = guideRect.top + guideRect.height / 3;
+    // Línea de ojos a la altura anatómica (ver EyeAlignmentGuide.eyeLineRatio).
+    // Verde y gruesa con los ojos encima; si no, blanca, para que se note la
+    // diferencia aunque el resto de la guía ya esté verde por ojos cerrados.
+    final eyeLineY = EyeAlignmentGuide.eyeLineY(size);
     _drawDashedLine(
       canvas,
       Offset(guideRect.left + guideRect.width * 0.18, eyeLineY),
       Offset(guideRect.right - guideRect.width * 0.18, eyeLineY),
-      guidePaint,
+      Paint()
+        ..color = eyesOnLine ? Colors.greenAccent : Colors.white70
+        ..strokeWidth = eyesOnLine ? 3.0 : 1.4
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke,
     );
     _drawDashedLine(
       canvas,
@@ -79,5 +104,7 @@ class EyePositionGuidePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(EyePositionGuidePainter old) =>
-      old.eyesClosed != eyesClosed;
+      old.eyesClosed != eyesClosed ||
+      old.inverted != inverted ||
+      old.eyesOnLine != eyesOnLine;
 }

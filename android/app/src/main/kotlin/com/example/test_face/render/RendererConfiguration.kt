@@ -199,6 +199,30 @@ object RendererConfiguration {
      * justo al aparecer el rostro. */
     const val OPENNESS_WARMUP_SAMPLES = 15
 
+    /**
+     * Umbrales ABSOLUTOS de ojo cerrado sobre el blendshape `eyeBlink`
+     * (0 = abierto, 1 = cerrado) — ver [OpennessTracker.updateFromBlendshape].
+     *
+     * Con blendshapes NO se usa la línea base relativa de arriba: esa base se
+     * aprende de lo que se ve, y en una sesión de extensiones la clienta pasa
+     * casi todo el tiempo con los ojos CERRADOS. Si el rostro aparece ya con
+     * los ojos cerrados la base aprende el ojo cerrado como "normal", y si
+     * los abrió al principio la base decae (~1.5 %/s) hasta alcanzar el ojo
+     * cerrado en un par de minutos. En los dos casos el ojo cerrado terminaba
+     * leyéndose como abierto y la pestaña no se volcaba. `eyeBlink` ya sale
+     * normalizado por el modelo, así que un umbral fijo sirve para cualquier
+     * forma de ojo.
+     *
+     * Dos umbrales = histéresis: hace falta pasar [EYE_BLINK_CLOSED_ABOVE]
+     * para cerrar y bajar de [EYE_BLINK_OPEN_BELOW] para volver a abrir.
+     *
+     * CALIBRACIÓN EN DISPOSITIVO: si un ojo cerrado no vuelca la pestaña,
+     * BAJAR [EYE_BLINK_CLOSED_ABOVE]; si mirar hacia abajo con el ojo abierto
+     * ya la vuelca (eyeBlink sube un poco al bajar la mirada), SUBIRLO.
+     */
+    const val EYE_BLINK_CLOSED_ABOVE = 0.55f
+    const val EYE_BLINK_OPEN_BELOW = 0.35f
+
     // ── Seguimiento a tasa de pantalla (ver PoseFollower) ───────────────
 
     /**
@@ -394,6 +418,27 @@ object RendererConfiguration {
      * BAJAR si se hunde dentro del párpado.
      */
     const val LASH_CLOSED_ANCHOR_LIFT_FRACTION = 0.15f
+
+    /**
+     * Cuánto BAJA la pestaña (hacia la mejilla) cuando el ojo se cierra y se
+     * vuelca, en puntos lógicos de pantalla (dp, la misma unidad que Flutter).
+     * Se aplica en proporción al cierre, así que con el ojo abierto no mueve
+     * nada. Se convierte a píxeles de la imagen de análisis en
+     * [LashRenderer.onFaceResult] con la densidad de pantalla y el encuadre
+     * FILL_CENTER, así que mide lo mismo en cualquier equipo.
+     *
+     * SUBIR si con el ojo cerrado la pestaña sigue quedando alta; BAJAR si
+     * se despega del párpado hacia el pómulo. `0f` lo desactiva.
+     */
+    const val LASH_CLOSED_DOWN_SHIFT_DP = 2f
+
+    /**
+     * Ajuste fino que se SUMA a [LASH_CLOSED_DOWN_SHIFT_DP], en píxeles
+     * FÍSICOS de pantalla (no dp) — pedido tras probar en dispositivo:
+     * "bajarle 2 píxeles más" con el ojo cerrado. Mismo sentido y misma
+     * proporción al cierre. `0f` vuelve a sólo los dp de arriba.
+     */
+    const val LASH_CLOSED_DOWN_SHIFT_EXTRA_PX = 8f
 
     /**
      * Ganancia de la CURVA DE RESPUESTA del giro: con cuánto cierre medido

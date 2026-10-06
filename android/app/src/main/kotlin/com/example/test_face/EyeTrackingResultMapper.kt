@@ -94,17 +94,15 @@ class EyeTrackingResultMapper {
      * usado para detectar la posición real de la pestaña con [LashEdgeDetector].
      * `null` → lashLine = upperLid sin corrección.
      *
-     * [rotated180] — `true` cuando el frame se rotó 180° antes del análisis
-     * porque la clienta está acostada (ver `CameraXManager.analysisRotated180`).
-     * Las coordenadas se devuelven al espacio del PREVIEW, que no rota, así
-     * el overlay de Flutter sigue cayendo sobre el rostro.
+     * [result] llega YA en el espacio del preview aunque el análisis se haya
+     * rotado 180° (lo desrota `FaceLandmarkerHelper.derotated180`, una sola
+     * vez para todos los consumidores).
      */
     fun map(
         result: FaceLandmarkerResult,
         width: Int,
         height: Int,
         bitmap: Bitmap? = null,
-        rotated180: Boolean = false,
     ): Map<String, Any?> {
         if (result.faceLandmarks().isEmpty()) {
             reset() // rostro perdido → limpiar EMA
@@ -128,14 +126,11 @@ class EyeTrackingResultMapper {
 
         val landmarks = result.faceLandmarks()[0]
 
-        // Desrotación: el frame se giró 180° para el análisis, así que un
-        // punto (x, y) normalizado de MediaPipe cae en (1-x, 1-y) del
-        // preview. Ver [rotated180].
         fun px(p: com.google.mediapipe.tasks.components.containers.NormalizedLandmark): Double =
-            (if (rotated180) (1f - p.x()) else p.x()).toDouble() * width
+            p.x().toDouble() * width
 
         fun py(p: com.google.mediapipe.tasks.components.containers.NormalizedLandmark): Double =
-            (if (rotated180) (1f - p.y()) else p.y()).toDouble() * height
+            p.y().toDouble() * height
 
         fun point(index: Int): Map<String, Double> {
             val p = landmarks[index]
