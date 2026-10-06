@@ -726,6 +726,23 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (mounted) setState(() {});
   }
 
+  /// `true` si el overlay que captura [EyeTrackingPhotoPipeline.captureOverlay]
+  /// saldría TRANSPARENTE: dentro del RepaintBoundary sólo está la vista
+  /// nativa (cámara + pestañas 3D, que salen transparentes en la captura) y
+  /// el painter de debug, apagado. La grilla NO va horneada: la dibuja el
+  /// asistente en vivo. Si alguna de estas condiciones cambia (debug
+  /// encendido, o el recuadro negro sin modelos), se vuelve a capturar como
+  /// antes.
+  /// TEMPORAL — por qué camino se compuso la última foto ('nativo' o
+  /// 'Dart'), para el log `CaptureTiming`.
+  String _lastComposeVia = '';
+
+  bool get _captureOverlayIsEmpty =>
+      Platform.isAndroid &&
+      _leftModelPath != null &&
+      _rightModelPath != null &&
+      !_showLidLandmarkDebug;
+
   Future<void> _finishWorkAssistantOpen() async {
     if (_workAssistantOpening) return;
     _workAssistantOpening = true;
@@ -734,10 +751,24 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // (ya desrotados en nativo) quedan en la orientación en que la
       // operaria ve a la clienta, por el mismo camino que el modo normal.
       final inverted = _cameraInverted180;
+      final timing = Stopwatch()..start(); // TEMPORAL — ver CaptureTiming.
       final mappingFrame = _freezeMappingFrame();
-      final overlayBytes = await _photoPipeline.captureOverlay(context);
+      // Si el overlay saldría transparente (ver [_captureOverlayIsEmpty]) no
+      // se captura: de él sólo se usaban sus medidas, y capturarlo,
+      // codificarlo en PNG, decodificarlo y mezclarlo era buena parte de la
+      // demora. La foto final sale idéntica (ver
+      // `EyeTrackingPhotoPipeline.compositeAndCrop`, `overlaySize`).
+      final skipOverlay = _captureOverlayIsEmpty;
+      final overlayBytes = skipOverlay
+          ? null
+          : await _photoPipeline.captureOverlay(context);
       final previewSize = _photoPipeline.previewSize;
-      final assistantFrame = overlayBytes == null || previewSize == null
+      final overlaySize = skipOverlay && previewSize != null
+          ? EyeTrackingPhotoPipeline.overlayPixelSize(previewSize)
+          : null;
+      final overlayMs = timing.elapsedMilliseconds;
+      final assistantFrame =
+          (overlayBytes == null && overlaySize == null) || previewSize == null
           ? null
           : EyeTrackingPhotoPipeline.frameForCapturedBand(
               mappingFrame,
@@ -759,6 +790,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // con el pulso de la mano el mapeo quedara corrido respecto del ojo.
       final nativeShot = await _service.takePhoto();
       if (!mounted) return;
+      final photoMs = timing.elapsedMilliseconds;
 
       Uint8List? finalPhoto;
       Future<Uint8List?>? pendingPhoto;
@@ -773,19 +805,56 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         // frío (~1 s). Durante la foto el análisis ya quedó pausado en
         // nativo (`CameraXManager.analysisPausedForCapture`).
         final mirror = _usingFrontCamera;
-        pendingPhoto =
-            EyeTrackingPhotoPipeline.compositeAndCropInBackground(
-              nativeShot,
-              overlayBytes,
-              mirror: mirror,
+        // Con el overlay omitido, el recorte se hace en NATIVO (mucho más
+        // rápido que Dart puro, ver `PhotoBandCropper`), con el mismo
+        // encuadre y medidas. Si falla, el camino en Dart de siempre.
+        Future<Uint8List> compose() async {
+          final size = overlaySize;
+          if (size != null) {
+            final band = EyeTrackingPhotoPipeline.eyeBandRatios(
               flipEyeBand: inverted,
-            ).then<Uint8List?>(
-              (bytes) => bytes,
-              onError: (Object e) {
-                debugPrint('[EyeTracking] compositeAndCrop falló: $e');
-                return nativeShot;
-              },
             );
+            final native = await _service.cropPhotoBand(
+              nativeShot,
+              mirror: mirror,
+              rotate180: false,
+              bandStart: band.start,
+              bandHeight: band.height,
+              overlayWidth: size.width,
+              overlayHeight: size.height,
+            );
+            if (native != null) {
+              _lastComposeVia = 'nativo';
+              return native;
+            }
+          }
+          _lastComposeVia = 'Dart';
+          return EyeTrackingPhotoPipeline.compositeAndCropInBackground(
+            nativeShot,
+            overlayBytes,
+            mirror: mirror,
+            flipEyeBand: inverted,
+            overlaySize: overlaySize,
+          );
+        }
+
+        pendingPhoto = compose().then<Uint8List?>(
+          (bytes) {
+            debugPrint(
+              'CaptureTiming probador: overlay=${overlayMs}ms '
+              '(${skipOverlay ? 'omitido' : 'capturado'}) '
+              'foto=${photoMs - overlayMs}ms '
+              'composicion=${timing.elapsedMilliseconds - photoMs}ms '
+              '(via $_lastComposeVia) '
+              'total=${timing.elapsedMilliseconds}ms',
+            );
+            return bytes;
+          },
+          onError: (Object e) {
+            debugPrint('[EyeTracking] compositeAndCrop falló: $e');
+            return nativeShot;
+          },
+        );
       } else {
         // Respaldo: si el caso de uso de foto no estaba disponible, se cae
         // al camino viejo (segunda sesión de cámara), que funciona igual
@@ -802,6 +871,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           overlayBytes,
           preferFrontCamera: _usingFrontCamera,
           flipEyeBand: inverted,
+          overlaySize: overlaySize,
         );
       }
       if (!mounted) return;
@@ -818,6 +888,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           mappingFrame: assistantFrame,
           mappingStyleId: 'cateye',
           cropOverlayBytes: overlayBytes,
+          cropOverlaySize: overlaySize,
           mappingPreviewSize: previewSize,
           mirrorPhoto: _usingFrontCamera,
           cameraInverted180: inverted,

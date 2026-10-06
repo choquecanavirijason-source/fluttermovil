@@ -1,6 +1,11 @@
 package com.example.test_face
 
 import android.app.Activity
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
+import java.util.concurrent.Executors
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -78,6 +83,7 @@ class EyeTrackingPlugin(
                     mgr.takePhoto(result)
                 }
             }
+            "cropPhotoBand" -> cropPhotoBand(call, result)
             "refreshPreviewBind" -> {
                 cameraXManager?.refreshPreviewBind()
                 result.success(null)
@@ -118,6 +124,53 @@ class EyeTrackingPlugin(
                 result.success(null)
             }
             else -> result.notImplemented()
+        }
+    }
+
+    /** Hilo propio para [PhotoBandCropper]: decodificar y codificar en el
+     * hilo principal trabaría la UI justo mientras se abre el asistente. */
+    private val photoExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Ver [PhotoBandCropper]. Responde `null` si falla, y Dart usa entonces
+     * su camino de siempre. */
+    private fun cropPhotoBand(call: MethodCall, result: MethodChannel.Result) {
+        val jpeg = call.argument<ByteArray>("jpeg")
+        val mirror = call.argument<Boolean>("mirror") ?: false
+        val rotate180 = call.argument<Boolean>("rotate180") ?: false
+        val bandStart = call.argument<Double>("bandStart")
+        val bandHeight = call.argument<Double>("bandHeight")
+        val overlayWidth = call.argument<Int>("overlayWidth")
+        val overlayHeight = call.argument<Int>("overlayHeight")
+        if (jpeg == null || bandStart == null || bandHeight == null ||
+            overlayWidth == null || overlayHeight == null
+        ) {
+            result.success(null)
+            return
+        }
+        val queuedAt = SystemClock.uptimeMillis() // TEMPORAL — CaptureTiming.
+        photoExecutor.execute {
+            val startedAt = SystemClock.uptimeMillis()
+            val cropped = try {
+                PhotoBandCropper.crop(
+                    jpeg, mirror, rotate180, bandStart, bandHeight, overlayWidth, overlayHeight,
+                )
+            } catch (e: Throwable) {
+                Log.e("EyeTrackingPlugin", "cropPhotoBand falló", e)
+                null
+            }
+            val doneAt = SystemClock.uptimeMillis()
+            mainHandler.post {
+                // TEMPORAL — CaptureTiming: espera en cola, recorte y espera
+                // del hilo principal para devolver el resultado a Flutter.
+                Log.i(
+                    "CaptureTiming",
+                    "nativo cropPhotoBand cola=${startedAt - queuedAt}ms " +
+                        "recorte=${doneAt - startedAt}ms " +
+                        "esperaHiloPrincipal=${SystemClock.uptimeMillis() - doneAt}ms",
+                )
+                result.success(cropped)
+            }
         }
     }
 

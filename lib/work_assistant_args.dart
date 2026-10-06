@@ -12,6 +12,7 @@ class WorkAssistantArgs {
     this.mappingFrame,
     this.mappingStyleId,
     this.cropOverlayBytes,
+    this.cropOverlaySize,
     this.mappingPreviewSize,
     this.mirrorPhoto = false,
     this.cameraInverted180 = false,
@@ -33,6 +34,11 @@ class WorkAssistantArgs {
   final TrackingFrame? mappingFrame;
   final String? mappingStyleId;
   final Uint8List? cropOverlayBytes;
+
+  /// Medidas del overlay cuando no se capturó porque habría salido vacío
+  /// (ver `EyeTrackingPhotoPipeline.compositeAndCrop`, `overlaySize`): las
+  /// capturas del asistente recortan igual que con [cropOverlayBytes].
+  final ({int width, int height})? cropOverlaySize;
   final Size? mappingPreviewSize;
   final bool mirrorPhoto;
 

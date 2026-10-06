@@ -283,16 +283,20 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     }
     if (!mounted) return;
     final cropOverlay = widget.args?.cropOverlayBytes;
+    // Sin PNG, las medidas del overlay omitido recortan igual (ver
+    // [WorkAssistantArgs.cropOverlaySize]).
+    final cropOverlaySize = widget.args?.cropOverlaySize;
     final previewSize = widget.args?.mappingPreviewSize;
     Uint8List reference = jpeg;
     var cropSucceeded = false;
-    if (cropOverlay != null) {
+    if (cropOverlay != null || cropOverlaySize != null) {
       try {
         reference = await EyeTrackingPhotoPipeline.compositeAndCropInBackground(
           jpeg,
           cropOverlay,
           mirror: widget.args?.mirrorPhoto ?? false,
           rotate180: capturedInverted,
+          overlaySize: cropOverlaySize,
         );
         cropSucceeded = true;
       } catch (e) {
@@ -660,19 +664,19 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
                 ),
               ],
             ),
-            // Mientras se ajustan las grillas la barra se oculta: tapaba la
-            // foto justo donde se está trabajando.
-            if (!_showManualControls)
-              Align(
-                alignment: Alignment(alignX, 0),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: barGutter),
-                  child: SizedBox(
-                    width: barTargetWidth,
-                    child: _assistantFloatingBar(),
-                  ),
+            // Visible también al editar: acá queda centrada en la pantalla y
+            // los controles de ajuste van en las esquinas de la foto, así que
+            // no se pisan.
+            Align(
+              alignment: Alignment(alignX, 0),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: barGutter),
+                child: SizedBox(
+                  width: barTargetWidth,
+                  child: _assistantFloatingBar(),
                 ),
               ),
+            ),
           ],
         );
       },
@@ -701,17 +705,27 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
             Expanded(flex: _portraitCamFlex, child: _cameraRegion(bottomInset)),
           ],
         ),
-        // Oculta mientras se ajustan las grillas (ver [_eyeOffsetPads]).
-        if (!_showManualControls)
-          Positioned(
-            top: seamY,
-            left: 14,
-            right: 14,
-            child: FractionalTranslation(
-              translation: const Offset(0, -1.4),
-              child: _assistantFloatingBar(),
-            ),
+        // CENTRADA sobre la junta foto/cámara (−0.5 de su alto). Antes iba a
+        // −1.4, entera encima de la foto, y tapaba la parte de abajo de la
+        // grilla. Así entra ~media barra en la cámara: los controles de la
+        // derecha de la cámara arrancan a 64 px de la junta (no chocan) y la
+        // píldora de grabación se corrió abajo (ver [_recordingPillTop]).
+        //
+        // Al EDITAR no se oculta: baja lo justo para quedar debajo de los
+        // controles de ajuste, que abajo terminan a [_padsBottomMargin] de la
+        // junta (ver [_eyeOffsetPads]). Queda casi toda en la cámara y aún
+        // por encima de sus botones de la derecha (a 64 px).
+        Positioned(
+          top: _showManualControls
+              ? seamY - _padsBottomMargin + _barGapBelowPads
+              : seamY,
+          left: 14,
+          right: 14,
+          child: FractionalTranslation(
+            translation: Offset(0, _showManualControls ? 0 : -0.5),
+            child: _assistantFloatingBar(),
           ),
+        ),
       ],
     );
   }
@@ -860,7 +874,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     );
     // Arriba queda la fila de botones y "Editar"/"Listo"; abajo, un margen.
     final topReserved = topInset + _padsTopReserved;
-    const bottomMargin = 12.0;
+    const bottomMargin = _padsBottomMargin;
     final onTop =
         extent != null &&
         (extent.top - topReserved) >
@@ -1179,6 +1193,22 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
     );
   }
 
+  /// Píldora de grabación debajo de la media barra flotante que ahora entra
+  /// en la cámara (barra de ~60 px centrada en la junta → ~30 px adentro).
+  /// En tablet apaisado la barra no la tapa, pero el corrimiento es inocuo.
+  ///
+  /// 60 y no menos: al editar la barra baja y llega a ~52 px dentro de la
+  /// cámara (ver [_buildPortraitSplitBody]).
+  static const double _recordingPillTop = 60;
+
+  /// Separación entre los controles de ajuste (abajo de la foto) y el borde
+  /// del panel — la barra flotante, al editar, se acomoda debajo.
+  static const double _padsBottomMargin = 12;
+
+  /// Aire entre el borde inferior de los controles de ajuste y la barra
+  /// flotante cuando está bajada por la edición.
+  static const double _barGapBelowPads = 4;
+
   Widget _cameraRegion(double bottomInset) {
     return Stack(
       fit: StackFit.expand,
@@ -1199,7 +1229,8 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         // Sin mapeo sobre la cámara en vivo: la guía de la operaria es la
         // FOTO de arriba, que ya lo trae horneado. Acá encima taparía el
         // trabajo real sin aportar nada.
-        if (_isRecording) Positioned(top: 8, left: 8, child: _recordingPill()),
+        if (_isRecording)
+          Positioned(top: _recordingPillTop, left: 8, child: _recordingPill()),
         Positioned(
           right: 8,
           top: 64,

@@ -85,7 +85,7 @@ const _labelFontRatio = 0.16;
 
 /// TEMPORAL — log de orientación (filtrar por `OrientDebug`). Borrar junto
 /// con `OrientDebug.kt` cuando quede confirmado.
-const _kOrientDebug = true;
+const _kOrientDebug = false;
 
 _LashMappingPattern _patternForStyle(String? styleId) {
   switch (styleId) {

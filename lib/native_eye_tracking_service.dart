@@ -14,8 +14,9 @@ class NativeEyeTrackingService {
   factory NativeEyeTrackingService() => _instance;
   NativeEyeTrackingService._internal();
 
-  static const MethodChannel _methodChannel =
-      MethodChannel('eye_tracking/methods');
+  static const MethodChannel _methodChannel = MethodChannel(
+    'eye_tracking/methods',
+  );
 
   static const EventChannel _eventChannel = EventChannel('eye_tracking/events');
 
@@ -96,6 +97,36 @@ class NativeEyeTrackingService {
     }
   }
 
+  /// Recorta [jpeg] a la franja de ojos en NATIVO (ver `PhotoBandCropper`
+  /// en Kotlin): mismo encuadre y mismas medidas que
+  /// `EyeTrackingPhotoPipeline.compositeAndCrop` con el overlay vacío, pero
+  /// con el decodificador/codificador de Android en vez de Dart puro. `null`
+  /// si falla — el llamador debe usar entonces el camino en Dart.
+  Future<Uint8List?> cropPhotoBand(
+    Uint8List jpeg, {
+    required bool mirror,
+    required bool rotate180,
+    required double bandStart,
+    required double bandHeight,
+    required int overlayWidth,
+    required int overlayHeight,
+  }) async {
+    try {
+      return await _methodChannel.invokeMethod<Uint8List>('cropPhotoBand', {
+        'jpeg': jpeg,
+        'mirror': mirror,
+        'rotate180': rotate180,
+        'bandStart': bandStart,
+        'bandHeight': bandHeight,
+        'overlayWidth': overlayWidth,
+        'overlayHeight': overlayHeight,
+      });
+    } catch (e) {
+      debugPrint('[EyeTracking] cropPhotoBand error: $e');
+      return null;
+    }
+  }
+
   /// Consulta a Kotlin qué cámara está activa ahora mismo (ver
   /// [switchCamera]). `null` si el manager nativo todavía no está creado.
   Future<bool?> isUsingFrontCamera() async {
@@ -159,7 +190,9 @@ class NativeEyeTrackingService {
         <String, dynamic>{'leftPath': leftPath, 'rightPath': rightPath},
       );
     } on PlatformException catch (e) {
-      debugPrint('[EyeTracking] loadEyeModels PlatformException: ${e.code} — ${e.message}');
+      debugPrint(
+        '[EyeTracking] loadEyeModels PlatformException: ${e.code} — ${e.message}',
+      );
       rethrow;
     } catch (e) {
       // MissingPluginException u otro error inesperado del canal.
@@ -180,10 +213,9 @@ class NativeEyeTrackingService {
   /// no cargue.
   Future<void> setLashStyle(String? styleId) async {
     try {
-      await _methodChannel.invokeMethod<void>(
-        'setLashStyle',
-        <String, dynamic>{'styleId': styleId},
-      );
+      await _methodChannel.invokeMethod<void>('setLashStyle', <String, dynamic>{
+        'styleId': styleId,
+      });
     } catch (e) {
       debugPrint('[EyeTracking] setLashStyle error: $e');
     }

@@ -268,11 +268,21 @@ class CameraXManager(
             return
         }
         analysisPausedForCapture = true
+        val requestedAt = SystemClock.uptimeMillis() // TEMPORAL — CaptureTiming.
         capture.takePicture(
             mainExecutor,
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     analysisPausedForCapture = false
+                    // TEMPORAL — CaptureTiming: desde el pedido hasta que el
+                    // callback corre en el hilo principal (incluye enfoque/
+                    // exposición de la cámara y la espera de ese hilo).
+                    Log.i(
+                        "CaptureTiming",
+                        "nativo takePicture=${SystemClock.uptimeMillis() - requestedAt}ms " +
+                            "imagen=${image.width}x${image.height} " +
+                            "rotacion=${image.imageInfo.rotationDegrees}",
+                    )
                     val bytes = try {
                         // JPEG: `ImageCapture` entrega un solo plano ya
                         // comprimido, no hay que recomprimir nada.
