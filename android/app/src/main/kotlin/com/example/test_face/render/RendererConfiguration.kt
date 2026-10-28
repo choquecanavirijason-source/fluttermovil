@@ -297,7 +297,30 @@ object RendererConfiguration {
     // `false` deja el comportamiento anterior (siempre visible con rostro
     // presente) — rollback de una línea, mismo espíritu que
     // FACE_MESH_ENABLED / LASH_ANCHOR_FROM_FACE_MESH.
-    const val MOTION_GATE_ENABLED = true
+    //
+    // APAGADO (2026-10-28): era la causa directa de "las pestañas
+    // desaparecen cuando me muevo" — ocultar en movimiento es justo lo
+    // contrario de un tracking tipo TikTok, que sigue dibujando mientras la
+    // cabeza se mueve. El retraso que esta puerta tapaba lo atacan ahora el
+    // One Euro con timestamp de captura (ver [EyeTrackingFilter.apply]) y la
+    // predicción de [PoseInterpolator]. Si en dispositivo vuelve a verse la
+    // pestaña flotando, poner en `true` y subir los umbrales de abajo.
+    const val MOTION_GATE_ENABLED = false
+
+    /**
+     * Cuánto se sostiene la ÚLTIMA pose válida cuando MediaPipe deja de ver
+     * el rostro, antes de ocultar la pestaña y borrar el estado de tracking
+     * (ver [LashRenderer.onFaceLost]).
+     *
+     * MediaPipe pierde el rostro durante uno o dos frames sueltos con
+     * bastante frecuencia — desenfoque por movimiento, una mano que pasa, un
+     * ángulo extremo con la clienta acostada. Ocultar y resetear en ESE
+     * frame hacía que la pestaña parpadeara y que, al volver, tuviera que
+     * recalentar interpolador y apertura. ~200 ms (≈6 frames a 30 fps) tapa
+     * esas pérdidas sueltas y sigue siendo lo bastante corto como para que,
+     * si la cara se fue de verdad, la pestaña no quede flotando a la vista.
+     */
+    const val FACE_LOST_HOLD_NANOS = 200_000_000L
 
     /** Velocidad de traslación a la que se considera que la pestaña ya no
      * está confiablemente colocada, en ANCHOS DE MODELO por segundo (el

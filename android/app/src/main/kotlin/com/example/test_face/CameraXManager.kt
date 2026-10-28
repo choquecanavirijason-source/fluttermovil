@@ -464,7 +464,7 @@ class CameraXManager(
         stopped.set(true)
         cancelPendingBind()
         bindGeneration.incrementAndGet()
-        lashRenderer.onFaceLost()
+        lashRenderer.resetTracking()
         faceMeshRenderer.onFaceLost()
         linerRenderer.onFaceLost()
 

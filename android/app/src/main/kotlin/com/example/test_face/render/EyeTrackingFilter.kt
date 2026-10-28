@@ -62,8 +62,17 @@ class EyeTrackingFilter {
     @Volatile var groupDelayNanos = 0L
         private set
 
-    fun apply(target: EyeTransform): EyeTransform {
-        val now = System.nanoTime()
+    /**
+     * [tNanos] es el instante de CAPTURA del frame, no el de llegada del
+     * resultado. El One Euro deriva la velocidad como `Δx/Δt` y con ella
+     * abre o cierra el corte; con la hora de llegada, `Δt` arrastra el
+     * jitter de la inferencia (20-60 ms según el frame) y una cabeza que se
+     * mueve a velocidad constante parecía acelerar y frenar — el corte
+     * oscilaba y la pestaña temblaba justo en movimiento. Entre capturas el
+     * intervalo es el real de la cámara.
+     */
+    fun apply(target: EyeTransform, tNanos: Long = System.nanoTime()): EyeTransform {
+        val now = tNanos
 
         val position = Float3(
             posX.filter(target.position.x, now),

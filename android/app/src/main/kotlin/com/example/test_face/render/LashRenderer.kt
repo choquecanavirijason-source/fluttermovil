@@ -399,19 +399,57 @@ class LashRenderer(
             return
         }
 
+        lostFrames = 0
+        // Timestamp de CAPTURA del frame (el que se pasó a `detectAsync`, en
+        // `uptimeMillis`), no la hora de llegada del resultado: ver
+        // [EyeTrackingFilter.apply].
+        val frameNanos = result.timestampMs() * 1_000_000L
         OrientDebug.logLash(pipelineResult.left, pipelineResult.right) // TEMPORAL
-        applyTransform(leftSlot, pipelineResult.left, sv.engine)
-        applyTransform(rightSlot, pipelineResult.right, sv.engine)
+        applyTransform(leftSlot, pipelineResult.left, sv.engine, frameNanos)
+        applyTransform(rightSlot, pipelineResult.right, sv.engine, frameNanos)
     }
 
     /**
-     * Sin rostro detectado: oculta las pestañas (en vez de dejarlas
-     * "congeladas" flotando en la última posición conocida) y resetea el
-     * suavizado para que, cuando el rostro reaparezca, el modelo aparezca
-     * directamente en su posición correcta en vez de deslizarse desde la
-     * última posición previa a la pérdida de tracking.
+     * Resultados seguidos sin rostro y desde cuándo. Solo los toca el hilo
+     * de MediaPipe ([onFaceResult]/[onFaceLost]) salvo el reset de
+     * [resetTracking], que llega del principal — `@Volatile` alcanza: lo peor
+     * es que un frame vea el contador viejo.
+     */
+    @Volatile private var lostFrames = 0
+    @Volatile private var lostSinceNanos = 0L
+
+    /**
+     * Sin rostro en ESTE resultado. NO oculta enseguida: durante
+     * [RendererConfiguration.FACE_LOST_HOLD_NANOS] la pestaña se queda en su
+     * última pose válida (el frame loop sigue muestreando el interpolador,
+     * que deja de extrapolar pasado su `MAX_EXTRAPOLATION_NANOS`). Si el
+     * rostro vuelve antes, se continúa sin salto ni recalentado. Recién al
+     * vencer el plazo se oculta y se borra el estado (ver [releaseSlot]).
+     *
+     * Se usa tiempo y no un número fijo de frames porque la tasa de
+     * resultados depende del dispositivo (ver el cerrojo de
+     * `FaceLandmarkerHelper.detectAsync`): 6 frames son 200 ms a 30 fps pero
+     * 400 ms a 15. [lostFrames] queda para el log.
      */
     fun onFaceLost() {
+        val now = System.nanoTime()
+        if (lostFrames == 0) lostSinceNanos = now
+        lostFrames++
+        if (now - lostSinceNanos < RendererConfiguration.FACE_LOST_HOLD_NANOS) return
+        if (leftSlot.visibleRequested != false || rightSlot.visibleRequested != false) {
+            Log.i(TAG, "onFaceLost: $lostFrames frames sin rostro (${(now - lostSinceNanos) / 1_000_000} ms) -> se oculta")
+        }
+        releaseSlot(leftSlot)
+        releaseSlot(rightSlot)
+    }
+
+    /**
+     * Oculta y borra el estado YA, sin el margen de [onFaceLost]. Para cuando
+     * la cámara se detiene (`CameraXManager.stop`): ahí no hay pérdida
+     * transitoria que tapar.
+     */
+    fun resetTracking() {
+        lostFrames = 0
         releaseSlot(leftSlot)
         releaseSlot(rightSlot)
     }
@@ -530,7 +568,7 @@ class LashRenderer(
      * se aplica una vez por resultado (no por vsync): necesita los
      * landmarks crudos del frame, que solo existen acá.
      */
-    private fun applyTransform(slot: EyeModelSlot, transform: EyeTransform?, engine: Engine) {
+    private fun applyTransform(slot: EyeModelSlot, transform: EyeTransform?, engine: Engine, frameNanos: Long) {
         if (slot.node == null) return
         if (transform == null) {
             releaseSlot(slot)
@@ -551,7 +589,7 @@ class LashRenderer(
         // [OpennessTracker]/[LidShape]), o sea si la FORMA se re-mide o se
         // reusa la última buena — eso ya lo resolvió FaceRenderPipeline, acá
         // solo se consume para saber si hay que volver a doblar la malla.
-        val smoothed = slot.filter.apply(transform)
+        val smoothed = slot.filter.apply(transform, frameNanos)
         val nowNanos = System.nanoTime()
 
         // REESCRITO a buffer directo con setBufferAt in-place (ver
