@@ -71,6 +71,21 @@ object EyeBlinkBlendshapes {
      * coeficientes. El llamador debe caer al camino geométrico en ese caso
      * (ver [FaceRenderPipeline.computeEye]), no tratarlo como error.
      */
+    /** Ojos abiertos: el valor que se usa cuando MediaPipe NO calculó
+     * blendshapes (`blendshapes=false` en perf_flags). */
+    val NEUTRAL = Openness(left = 1f, right = 1f)
+
+    /**
+     * Como [openness], pero si el resultado no trae blendshapes EN ABSOLUTO
+     * (landmarker construido sin ellos) devuelve [NEUTRAL] en vez de `null`.
+     * Se decide por el CONTENIDO del resultado, no por el flag: si el flag
+     * cambia en caliente, cada resultado se trata según el landmarker que de
+     * verdad lo produjo. Si los trae pero incompletos sigue siendo `null`
+     * (camino geométrico, como siempre).
+     */
+    fun opennessOrNeutral(result: FaceLandmarkerResult): Openness? =
+        if (!result.faceBlendshapes().isPresent) NEUTRAL else openness(result)
+
     fun openness(result: FaceLandmarkerResult): Openness? {
         val optional = result.faceBlendshapes()
         if (!optional.isPresent) return null

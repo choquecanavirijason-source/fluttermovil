@@ -48,8 +48,15 @@ class OneEuroFilter(
     var lastCutoffHz = minCutoff
         private set
 
-    /** [tNanos] debe ser monótono creciente (p.ej. `System.nanoTime()`). */
-    fun filter(x: Float, tNanos: Long): Float {
+    /**
+     * [tNanos] debe ser monótono creciente (p.ej. `System.nanoTime()`).
+     *
+     * [speedScale] multiplica la velocidad ANTES de pesarla con [beta]: sirve
+     * para medirla en una unidad con sentido físico en vez de en las
+     * unidades crudas de [x] (ver [EyeTrackingFilter.apply], que la expresa
+     * en anchos de ojo por segundo). `1f` = comportamiento clásico.
+     */
+    fun filter(x: Float, tNanos: Long, speedScale: Float = 1f): Float {
         if (!initialized) {
             initialized = true
             xPrev = x
@@ -71,7 +78,7 @@ class OneEuroFilter(
 
         // 2) Corte adaptativo: a más velocidad, más alto el corte (menos
         // suavizado, menos lag). beta controla cuánto pesa la velocidad.
-        val cutoff = minCutoff + beta * abs(edx)
+        val cutoff = minCutoff + beta * abs(edx) * speedScale
         lastCutoffHz = cutoff
         val filtered = lowPass(x, xPrev, alpha(cutoff, te))
         xPrev = filtered

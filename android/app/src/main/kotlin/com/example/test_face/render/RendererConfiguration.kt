@@ -53,19 +53,72 @@ object RendererConfiguration {
 
     private const val FAST_MOTION_TARGET_CUTOFF_HZ = 20f
 
+    // ── Cómo se reparten los dos parámetros (calibración 2026-10-28) ────
+    //
+    // En One Euro cada síntoma tiene SU perilla, y no hay que mezclarlas:
+    //  - temblor en REPOSO      → minCutoff (bajarlo suaviza más en quieto);
+    //  - pestaña que se queda atrás al ARRANCAR → beta (subirlo abre antes el
+    //    corte). Beta casi no influye en reposo, porque ahí la velocidad ≈ 0.
+    //
+    // Síntoma reportado: "quieto, muevo la cabeza, la pestaña se queda
+    // congelada un instante y después salta". Era beta: la referencia de
+    // velocidad estaba en "1 m/s" de unidades de mundo, muy por encima de un
+    // giro de cabeza real, así que al arrancar el corte seguía cerca de
+    // 1.8 Hz (τ ≈ 88 ms). Ahora la velocidad se mide en ANCHOS DE OJO por
+    // segundo (ver [EyeTrackingFilter.apply]) y la referencia es la misma
+    // que [MOTION_GATE_POSITION_HIDE_SPANS_PER_SEC] ya había calibrado en
+    // dispositivo como "movimiento claro": 2 anchos/s.
+    //
+    // Con dCutoff = 6 Hz y resultados a ~30 Hz, la derivada filtrada llega a
+    // ~55% de la velocidad real en el PRIMER resultado: a 3 anchos/s el
+    // corte ya pasa de 1.8 a ~16 Hz (τ ≈ 10 ms) desde ese primer frame.
+    //
+    // CALIBRACIÓN (mirar `filtro=` en el log PRESUPUESTO_LATENCIA, que es
+    // τ = 1/(2π·fc)):
+    //  - todavía se queda atrás al arrancar → BAJAR FAST_MOTION_POSITION_SPANS_PER_SEC
+    //    (1.5, luego 1.0);
+    //  - tiembla quieta y en reposo `filtro=` cae por debajo de ~60 ms → el
+    //    ruido de MediaPipe está abriendo el corte: SUBIR esa referencia
+    //    (2.5-3) antes que tocar POSITION_MIN_CUTOFF;
+    //  - tiembla quieta con `filtro=` ~88 ms → recién ahí bajar
+    //    POSITION_MIN_CUTOFF (1.5, luego 1.2).
+
+    // ── Modo ultra-reactivo (2026-10-28, Note 10+) ──────────────────────
+    // Reporte: arrastre de ~110 ms al girar rápido. Con MediaPipe a 8-10
+    // resultados/s, cada resultado que el filtro tarda en abrirse son
+    // ~100 ms de pestaña detrás. Se BAJAN a la mitad las referencias de
+    // velocidad de posición y rotación (beta ×2): el corte llega a 20 Hz
+    // (τ ≈ 8 ms, casi transparente a 10 Hz de muestreo) con la mitad de
+    // velocidad. Los minCutoff NO cambian — en reposo la velocidad ≈ 0 y beta
+    // no actúa, así que el temblor quieto queda igual.
+    //
+    // Si aparece temblor quieto que antes no estaba: es ruido de la derivada
+    // abriendo el corte; volver hacia 1.5 / 0.55 antes de tocar minCutoff.
+
     const val POSITION_MIN_CUTOFF = 1.8f
-    private const val FAST_MOTION_POSITION_VELOCITY_MPS = 1.0f
+    /** Velocidad (en anchos de ojo por segundo) a la que el corte de
+     * posición llega a [FAST_MOTION_TARGET_CUTOFF_HZ]. Era 2.0 (beta 9.1);
+     * 1.0 → beta 18.2. */
+    private const val FAST_MOTION_POSITION_SPANS_PER_SEC = 1.0f
     const val POSITION_BETA =
-        (FAST_MOTION_TARGET_CUTOFF_HZ - POSITION_MIN_CUTOFF) / FAST_MOTION_POSITION_VELOCITY_MPS
+        (FAST_MOTION_TARGET_CUTOFF_HZ - POSITION_MIN_CUTOFF) / FAST_MOTION_POSITION_SPANS_PER_SEC
 
     const val ROTATION_MIN_CUTOFF = 1.5f
-    private const val FAST_MOTION_ROTATION_VELOCITY = 1.5f
+    /** En componentes de cuaternión por segundo (≈ medio radián por
+     * segundo). ERA 1.5 (≈170°/s para abrir del todo); 0.75 ≈ 85°/s, que es
+     * un giro de cabeza normal. Las rotaciones ya eran adimensionales, así
+     * que acá solo cambia la referencia, no la unidad. 0.4 (≈45°/s, modo
+     * ultra-reactivo de arriba) → beta 46 (era 24.7). */
+    private const val FAST_MOTION_ROTATION_VELOCITY = 0.4f
     const val ROTATION_BETA =
         (FAST_MOTION_TARGET_CUTOFF_HZ - ROTATION_MIN_CUTOFF) / FAST_MOTION_ROTATION_VELOCITY
 
     const val SCALE_MIN_CUTOFF = 1.5f
-    private const val SCALE_TO_POSITION_BETA_RATIO = 0.05f / 0.3f
-    const val SCALE_BETA = POSITION_BETA * SCALE_TO_POSITION_BETA_RATIO
+    /** En fracción de la propia escala por segundo (acercarse o alejarse de
+     * la cámara): 1.0 = el ojo cambiando de tamaño un 100% en un segundo. */
+    private const val FAST_MOTION_SCALE_FRACTION_PER_SEC = 1.0f
+    const val SCALE_BETA =
+        (FAST_MOTION_TARGET_CUTOFF_HZ - SCALE_MIN_CUTOFF) / FAST_MOTION_SCALE_FRACTION_PER_SEC
 
     // ── Profundidad ─────────────────────────────────────────────────────
     const val MIN_DEPTH = -2.2f
@@ -279,6 +332,23 @@ object RendererConfiguration {
      */
     const val EXTRA_LATENCY_TRIM_NANOS = 0L
 
+    /**
+     * Latencia del camino de PREVIEW (sensor → PreviewView → pantalla), que
+     * se RESTA del horizonte cuando se compensa la antigüedad previa al
+     * envío (ver `measuredPreSubmitNanos` en [LashRenderer]).
+     *
+     * Por qué se resta: el horizonte ahora parte del instante de captura
+     * del sensor, y adelantar hasta "ahora" pondría la pestaña donde está la
+     * cara REAL — pero en pantalla se ve la cara del preview, que va este
+     * tanto atrasada. Hay que caer sobre lo que se ve, no sobre la realidad.
+     *
+     * 30 ms es la estimación reportada en el Note 10+, NO una medición —
+     * CameraX no la expone. CALIBRACIÓN: girando la cabeza a velocidad
+     * media, si la pestaña se ADELANTA al ojo subir de a 10 ms; si va detrás,
+     * bajar (antes de tocar [EXTRA_LATENCY_TRIM_NANOS]).
+     */
+    const val PREVIEW_PATH_LATENCY_NANOS = 30_000_000L
+
     /** Hueco entre vsyncs a partir del cual el seguidor salta a la pose
      * objetivo en vez de perseguirla: pestaña oculta por la puerta de
      * movimiento, app en background o jank grande. Perseguir desde una pose
@@ -321,6 +391,28 @@ object RendererConfiguration {
      * si la cara se fue de verdad, la pestaña no quede flotando a la vista.
      */
     const val FACE_LOST_HOLD_NANOS = 200_000_000L
+
+    /**
+     * Constante de tiempo de [PoseFollower] mientras dura la RECUPERACIÓN
+     * tras una retención (ver [LashRenderer.onFaceLost]). Reemplaza a
+     * [POSE_FOLLOW_TAU_NANOS] durante [FACE_RECOVERY_BLEND_WINDOW_NANOS].
+     *
+     * Durante la retención la pestaña quedó en la última pose; si la cabeza
+     * se siguió moviendo, al volver el rostro la diferencia es de golpe todo
+     * lo recorrido en ese hueco. Con el τ normal (35 ms) eso se aplica en
+     * ~2 frames de pantalla y se lee como un salto. 90 ms lo convierte en un
+     * deslizamiento corto. Este τ extra NO se compensa con predicción (sería
+     * predecir sobre una velocidad que todavía no se conoce), así que dura
+     * solo la ventana de abajo.
+     *
+     * CALIBRACIÓN: si la recuperación todavía salta, SUBIR (120 ms); si se
+     * siente que la pestaña "persigue" al ojo al volver, BAJAR.
+     */
+    const val FACE_RECOVERY_BLEND_TAU_NANOS = 90_000_000L
+
+    /** Cuánto dura el τ de recuperación tras volver el rostro. ~2τ: para
+     * entonces la corrección ya está ~90% aplicada. */
+    const val FACE_RECOVERY_BLEND_WINDOW_NANOS = 180_000_000L
 
     /** Velocidad de traslación a la que se considera que la pestaña ya no
      * está confiablemente colocada, en ANCHOS DE MODELO por segundo (el

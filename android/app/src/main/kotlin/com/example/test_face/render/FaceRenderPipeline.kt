@@ -86,7 +86,15 @@ object FaceRenderPipeline {
         // geométrica que queda de respaldo. Se lee una sola vez por frame
         // (recorre las ~52 categorías) y se reparte a los dos ojos. Ver
         // EyeBlinkBlendshapes para por qué esto importa desde abajo.
-        val blendshapeOpenness = EyeBlinkBlendshapes.openness(result)
+        //
+        // `blendshapes=false` en perf_flags.properties (SOLO experimento de
+        // rendimiento, ver [com.example.test_face.PerfFlags]): MediaPipe no
+        // los calcula y la apertura queda fija en 1.0 (ojo abierto) en vez de
+        // caer al camino geométrico, para que la medición no incluya ese otro
+        // costo. Se decide por el resultado (ver
+        // [EyeBlinkBlendshapes.opennessOrNeutral]), no por el flag, porque
+        // el flag puede cambiar en caliente antes que el landmarker.
+        val blendshapeOpenness = EyeBlinkBlendshapes.opennessOrNeutral(result)
 
         val iw = imageWidth.toFloat()
         val ih = imageHeight.toFloat()
@@ -278,7 +286,7 @@ object FaceRenderPipeline {
         // hace falta devolverla a la imagen, y con la cara a 180° su arco ya
         // no sale invertido respecto del modelo.
         val curve = if (lidShapeTrusted) {
-            val smoothedLid = lidFilter?.apply(eyeLandmarks.upperLid, System.nanoTime())
+            val smoothedLid = lidFilter?.apply(eyeLandmarks.upperLid, System.nanoTime(), maxOf(imageWidth, imageHeight))
                 ?: eyeLandmarks.upperLid
             LashLineCurve.fit(smoothedLid, anchor.point, anchor.upperLidTangent)
                 ?.also { lidShape?.latchCurve(it) }

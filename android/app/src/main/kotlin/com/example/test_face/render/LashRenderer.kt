@@ -74,6 +74,11 @@ class LashRenderer(
 
     @Volatile private var measuredLatencyNanos = 35_000_000L  // seed: 35ms
 
+    /** Antigüedad del frame al entregarlo a MediaPipe (sensor →
+     * `detectAsync`), ver [onFaceResult]. 0 = no medible o `forward_age=off`:
+     * el horizonte queda como antes. */
+    @Volatile private var measuredPreSubmitNanos = 0L
+
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!frameLoopRunning) return
@@ -85,8 +90,14 @@ class LashRenderer(
             // Se captura Throwable, no Exception: un Error (OOM, link) también
             // mataba el bucle.
             try {
-                writeInterpolatedPose(leftSlot, frameTimeNanos)
-                writeInterpolatedPose(rightSlot, frameTimeNanos)
+                // DIAGNÓSTICO: frames largos del hilo principal + línea
+                // TIEMPOS_ETAPAS cada 120 vsync (ver PerfStats). Corre también
+                // con overlay=off, que es justo cuando más interesa.
+                com.example.test_face.PerfStats.onVsync(frameTimeNanos)
+                if (overlayEnabled) {
+                    writeInterpolatedPose(leftSlot, frameTimeNanos)
+                    writeInterpolatedPose(rightSlot, frameTimeNanos)
+                }
             } catch (e: Throwable) {
                 if (!loggedFrameLoopFailure) {
                     loggedFrameLoopFailure = true
@@ -127,6 +138,29 @@ class LashRenderer(
         startFrameLoop()
     }
 
+    /**
+     * `false` con `overlay=off` en perf_flags.properties (ver
+     * [com.example.test_face.PerfFlags.overlay]): el frame loop deja de
+     * escribir la pose y el SceneView se oculta, para medir si Filament
+     * compite con MediaPipe por la GPU. [CameraXManager] además deja de
+     * llamar a [onFaceResult], así que tampoco se calcula ni se sube la malla.
+     * Default `true` = comportamiento de siempre.
+     */
+    @Volatile private var overlayEnabled = true
+
+    fun setOverlayEnabled(enabled: Boolean) {
+        overlayEnabled = enabled
+        mainHandler.post {
+            val sv = sceneView ?: return@post
+            val visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+            // Solo si cambia: con el default (`true`) no se toca nada.
+            if (sv.visibility != visibility) {
+                Log.i(TAG, "setOverlayEnabled($enabled): SceneView ${if (enabled) "visible" else "oculto (perf_flags)"}")
+                sv.visibility = visibility
+            }
+        }
+    }
+
     private fun startFrameLoop() {
         if (frameLoopRunning) return
         frameLoopRunning = true
@@ -164,11 +198,22 @@ class LashRenderer(
         // amplifica el ruido residual de los landmarks.
         val filterDelayNanos = slot.filter.groupDelayNanos
             .coerceIn(0L, RendererConfiguration.FILTER_DELAY_COMPENSATION_MAX_NANOS)
+        // Tramo 0 (2026-10-28): la antigüedad del frame ANTES de entregarlo
+        // a MediaPipe (measuredPreSubmitNanos, medida por frame contra el
+        // reloj del sensor) menos la latencia del propio preview — la pestaña
+        // tiene que caer sobre la cara TAL COMO SE VE en el preview, que
+        // también va atrasada. Sin este tramo la pose se dibujaba ~edad_envio
+        // en el pasado: el "arrastre" al girar rápido.
+        val previewNanos = if (measuredPreSubmitNanos > 0L) RendererConfiguration.PREVIEW_PATH_LATENCY_NANOS else 0L
         val horizonNanos = measuredLatencyNanos +
+            measuredPreSubmitNanos - previewNanos +
             filterDelayNanos +
             RendererConfiguration.POSE_FOLLOW_TAU_NANOS +
             RendererConfiguration.EXTRA_LATENCY_TRIM_NANOS
         val transform = slot.interpolator.sample(nowNanos, horizonNanos.coerceAtLeast(0L)) ?: return
+        if (slot === leftSlot) {
+            com.example.test_face.PerfStats.onExtrapolationSample(slot.interpolator.lastSampleSaturated)
+        }
         // Una pose NO FINITA (NaN/Inf) escrita en el nodo se queda ahí: el
         // modelo desaparece o se congela y ningún frame posterior lo
         // recupera, porque el valor malo ya está en la TransformManager de
@@ -194,11 +239,13 @@ class LashRenderer(
             Log.i(
                 TAG,
                 "PRESUPUESTO_LATENCIA pipeline=${measuredLatencyNanos / 1_000_000}ms " +
+                    "edad_previa=${measuredPreSubmitNanos / 1_000_000}ms " +
+                    "preview=-${previewNanos / 1_000_000}ms " +
                     "filtro=${filterDelayNanos / 1_000_000}ms " +
                     "seguidor=${RendererConfiguration.POSE_FOLLOW_TAU_NANOS / 1_000_000}ms " +
                     "trim=${RendererConfiguration.EXTRA_LATENCY_TRIM_NANOS / 1_000_000}ms " +
                     "-> horizonte=${horizonNanos / 1_000_000}ms " +
-                    "(tope=${(PoseInterpolator.MAX_EXTRAPOLATION_NANOS / 1_000_000f).toInt()}ms)",
+                    "(tope=${(slot.interpolator.lastCapNanos / 1_000_000f).toInt()}ms)",
             )
         }
         slot.follower.advance(transform, nowNanos)
@@ -325,6 +372,12 @@ class LashRenderer(
          * estimado. `null` degrada a solo landmarks (comportamiento
          * anterior). */
         cameraBitmap: android.graphics.Bitmap? = null,
+        /** Antigüedad del frame AL ENTREGARLO a MediaPipe (espera del
+         * ImageProxy + copia + Canvas), medida contra el reloj del sensor.
+         * [pipelineLatencyMs] empieza a contar recién en `detectAsync`, así
+         * que sin esto el horizonte no compensaba ese tramo. 0 = no medible
+         * (fuente de timestamp no REALTIME) o desactivado. */
+        preSubmitAgeMs: Float = 0f,
     ) {
         if (leftSlot.node == null && rightSlot.node == null) return
 
@@ -332,6 +385,7 @@ class LashRenderer(
         // en el próximo vsync. +16ms para compensar la composición de
         // SurfaceFlinger (2 superficies separadas: PreviewView + SceneView).
         measuredLatencyNanos = ((pipelineLatencyMs + 16f) * 1_000_000f).toLong()
+        measuredPreSubmitNanos = (preSubmitAgeMs.coerceAtLeast(0f) * 1_000_000f).toLong()
 
         val sv = sceneView ?: return
         // fillCenter (no el constructor directo): los landmarks vienen
@@ -399,14 +453,26 @@ class LashRenderer(
             return
         }
 
+        // Vuelve el rostro tras una retención (ver [onFaceLost]). El log es
+        // el que distingue las dos causas posibles de "se congela y salta":
+        // si al mover la cabeza aparece esta línea, MediaPipe está perdiendo
+        // el rostro por desenfoque; si no aparece, el atraso es del filtro.
+        val recovering = lostFrames > 0
+        if (recovering) {
+            Log.i(
+                TAG,
+                "rostro recuperado tras $lostFrames frames " +
+                    "(${(System.nanoTime() - lostSinceNanos) / 1_000_000} ms) — mezcla suave",
+            )
+        }
         lostFrames = 0
         // Timestamp de CAPTURA del frame (el que se pasó a `detectAsync`, en
         // `uptimeMillis`), no la hora de llegada del resultado: ver
         // [EyeTrackingFilter.apply].
         val frameNanos = result.timestampMs() * 1_000_000L
         OrientDebug.logLash(pipelineResult.left, pipelineResult.right) // TEMPORAL
-        applyTransform(leftSlot, pipelineResult.left, sv.engine, frameNanos)
-        applyTransform(rightSlot, pipelineResult.right, sv.engine, frameNanos)
+        applyTransform(leftSlot, pipelineResult.left, sv.engine, frameNanos, recovering)
+        applyTransform(rightSlot, pipelineResult.right, sv.engine, frameNanos, recovering)
     }
 
     /**
@@ -568,7 +634,14 @@ class LashRenderer(
      * se aplica una vez por resultado (no por vsync): necesita los
      * landmarks crudos del frame, que solo existen acá.
      */
-    private fun applyTransform(slot: EyeModelSlot, transform: EyeTransform?, engine: Engine, frameNanos: Long) {
+    private fun applyTransform(
+        slot: EyeModelSlot,
+        transform: EyeTransform?,
+        engine: Engine,
+        frameNanos: Long,
+        /** Primer resultado con rostro tras una retención (ver [onFaceLost]). */
+        recovering: Boolean = false,
+    ) {
         if (slot.node == null) return
         if (transform == null) {
             releaseSlot(slot)
@@ -589,7 +662,7 @@ class LashRenderer(
         // [OpennessTracker]/[LidShape]), o sea si la FORMA se re-mide o se
         // reusa la última buena — eso ya lo resolvió FaceRenderPipeline, acá
         // solo se consume para saber si hay que volver a doblar la malla.
-        val smoothed = slot.filter.apply(transform, frameNanos)
+        val smoothed = slot.filter.apply(transform, frameNanos, slot.naturalSpan)
         val nowNanos = System.nanoTime()
 
         // REESCRITO a buffer directo con setBufferAt in-place (ver
@@ -678,6 +751,15 @@ class LashRenderer(
         // de PoseInterpolator son @Volatile, así que writeInterpolatedPose (que
         // corre en el hilo principal vía Choreographer) ve el push más reciente
         // en el próximo vsync sin problemas de visibilidad de memoria.
+        // Recuperación tras retención: sin las muestras de antes del hueco
+        // (ver [PoseInterpolator.dropHistory]) y con el seguidor repartiendo
+        // la corrección en vez de aplicarla de golpe. Si la retención ya
+        // había vencido, [releaseSlot] reseteó todo y esto no cambia nada:
+        // el seguidor arranca con `snapTo` al mostrarse.
+        if (recovering) {
+            slot.interpolator.dropHistory()
+            slot.follower.softenRecovery(nowNanos)
+        }
         slot.interpolator.push(smoothed, nowNanos)
 
         // PUERTA DE MOVIMIENTO (ver [MotionGate]): con la cara moviéndose

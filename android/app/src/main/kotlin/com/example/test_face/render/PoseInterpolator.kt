@@ -39,15 +39,120 @@ class PoseInterpolator {
     fun reset() {
         s0 = null; s1 = null; s2 = null
         pushesSinceReset = 0
+        historyGeneration++
+    }
+
+    // ── Mezcla de corrección al llegar una muestra nueva (ver [blend]) ────
+    // Todo esto lo toca SOLO el hilo principal (desde [sample]), salvo
+    // [historyGeneration], que lo incrementan [reset]/[dropHistory] desde el
+    // hilo del resultado para anular una corrección en curso.
+    @Volatile private var historyGeneration = 0
+    private var seenGeneration = -1
+    private var lastOutput: EyeTransform? = null
+    private var lastOutputNanos = 0L
+    private var lastOutputLatest: Sample? = null
+    private var correctionPos = Float3()
+    private var correctionScale = Float3()
+    private var correctionRot = IDENTITY
+    private var correctionStartNanos = 0L
+
+    /**
+     * Descarta las muestras ANTERIORES a un hueco de tracking, sin volver a
+     * calentamiento. Se llama justo antes del primer [push] tras recuperar el
+     * rostro (ver [LashRenderer.onFaceResult]).
+     *
+     * Sin esto, la primera muestra nueva se combinaba con las de antes del
+     * hueco: la velocidad salía de "todo lo recorrido durante la retención"
+     * y la aceleración de compararla contra la de antes (≈ 0 si la persona
+     * estaba quieta) — y la predicción cuadrática lanzaba la pestaña más
+     * allá del ojo justo al recuperar. Con el historial vacío, [sample]
+     * devuelve la muestra tal cual y la predicción se rearma con las
+     * siguientes (lineal con 2, cuadrática con 3). A diferencia de [reset],
+     * no hace falta esperar [WARMUP_PUSHES]: el filtro aguas arriba no se
+     * reseteó, así que las muestras nuevas ya llegan limpias.
+     */
+    fun dropHistory() {
+        s0 = null
+        s1 = null
+        historyGeneration++
     }
 
     /**
      * Pose predicha para [nowNanos], compensando [latencyNanos] de pipeline.
      * Con 3 muestras usa predicción cuadrática (velocidad + aceleración);
-     * con 2 usa lineal; con 1 devuelve la muestra directa.
+     * con 2 usa lineal; con 1 devuelve la muestra directa. Al cambiar de
+     * muestra, la corrección se reparte en el tiempo — ver [blend].
      */
     fun sample(nowNanos: Long, latencyNanos: Long = 35_000_000L): EyeTransform? {
         val latest = s2 ?: return null
+        val predicted = predict(latest, nowNanos, latencyNanos)
+        return blend(predicted, latest, nowNanos)
+    }
+
+    /**
+     * MEZCLA DE CORRECCIÓN al reemplazar la muestra.
+     *
+     * Entre resultados la pose se EXTRAPOLA desde la última muestra. Cuando
+     * llega la siguiente, la predicción pasa a calcularse desde ella, y la
+     * diferencia entre las dos predicciones (el error de la vieja) aparecía
+     * de golpe en el objetivo — a 8-10 resultados/s, un escalón cada
+     * ~100-120 ms. [PoseFollower] lo suavizaba con su τ de 35 ms, pero ese τ
+     * se eligió para jitter, no para escalones de este tamaño.
+     *
+     * Acá, en el primer vsync con muestra nueva se guarda la diferencia
+     * `salida anterior − predicción nueva` (posición, rotación y escala) y se
+     * suma a la predicción nueva decayendo como `e^(−Δt/τ)`, con
+     * τ = [SAMPLE_BLEND_TAU_NANOS]. La salida arranca exactamente donde
+     * estaba y converge a la trayectoria nueva; la VELOCIDAD nueva se aplica
+     * de inmediato (la corrección es un desplazamiento que se apaga, no un
+     * filtro sobre la pose), así que no agrega atraso al movimiento.
+     *
+     * No se mezcla tras [reset]/[dropHistory] (aparición o recuperación del
+     * rostro, que ya maneja [PoseFollower.softenRecovery]) ni durante el
+     * calentamiento. `sample_blend=off` en perf_flags lo desactiva.
+     */
+    private fun blend(predicted: EyeTransform, latest: Sample, nowNanos: Long): EyeTransform {
+        val generation = historyGeneration
+        val enabled = com.example.test_face.PerfFlags.config.sampleBlend &&
+            pushesSinceReset >= WARMUP_PUSHES && generation == seenGeneration
+        seenGeneration = generation
+        // Una salida de hace más de [STALE_OUTPUT_NANOS] (nodo oculto, sin
+        // vsync que pidiera pose) no es "donde estaba" la pestaña en pantalla:
+        // mezclar desde ahí traería una pose vieja.
+        val previous = lastOutput?.takeIf { nowNanos - lastOutputNanos <= STALE_OUTPUT_NANOS }
+        lastOutputNanos = nowNanos
+        if (latest !== lastOutputLatest) {
+            lastOutputLatest = latest
+            if (enabled && previous != null) {
+                correctionPos = previous.position - predicted.position
+                correctionScale = previous.scale - predicted.scale
+                correctionRot = multiply(previous.rotation, conjugate(alignTo(predicted.rotation, previous.rotation)))
+                correctionStartNanos = nowNanos
+            } else {
+                correctionPos = Float3()
+                correctionScale = Float3()
+                correctionRot = IDENTITY
+            }
+        }
+        if (!enabled) {
+            lastOutput = predicted
+            return predicted
+        }
+        val decay = kotlin.math.exp(-(nowNanos - correctionStartNanos).toFloat() / SAMPLE_BLEND_TAU_NANOS)
+        val out = if (decay < 1e-3f) {
+            predicted
+        } else {
+            predicted.copy(
+                position = predicted.position + correctionPos * decay,
+                scale = predicted.scale + correctionScale * decay,
+                rotation = multiply(lerpQuaternion(IDENTITY, correctionRot, decay), predicted.rotation),
+            )
+        }
+        lastOutput = out
+        return out
+    }
+
+    private fun predict(latest: Sample, nowNanos: Long, latencyNanos: Long): EyeTransform {
         if (pushesSinceReset < WARMUP_PUSHES) return latest.transform
 
         val mid = s1 ?: return latest.transform
@@ -66,8 +171,11 @@ class PoseInterpolator {
         // limita cuánto se puede predecir es el TIEMPO — a partir de cierto
         // horizonte la suposición de velocidad constante deja de valer, y eso
         // no depende de a qué ritmo entregue resultados el dispositivo.
-        val maxT = MAX_EXTRAPOLATION_NANOS / dt1
-        val t = (elapsed / dt1).coerceIn(0f, maxT)
+        val flags = com.example.test_face.PerfFlags.config
+        val cap = capFor(latencyNanos, flags.forwardAge)
+        lastCapNanos = cap
+        lastSampleSaturated = elapsed > cap
+        val t = effectiveElapsed(elapsed, cap, flags.softExtrapolation) / dt1
 
         val prev = s0
         return if (prev != null) {
@@ -80,6 +188,69 @@ class PoseInterpolator {
         } else {
             lerpTransform(mid.transform, latest.transform, 1f + t)
         }
+    }
+
+    /** `true` si el último [sample] pidió más allá del tope vigente
+     * ([lastCapNanos]) — DIAGNÓSTICO (`extrap_saturada` en
+     * `TIEMPOS_ETAPAS`). Solo lo usa el hilo principal. */
+    var lastSampleSaturated = false
+        private set
+
+    /** Tope usado en el último [sample] (ver [capFor]), para el log
+     * `PRESUPUESTO_LATENCIA`. Solo el hilo principal. */
+    var lastCapNanos = MAX_EXTRAPOLATION_NANOS
+        private set
+
+    /**
+     * TOPE DINÁMICO de extrapolación para un horizonte base [horizonNanos].
+     *
+     * Lo que se pide extrapolar es `horizonte + (ahora − última muestra)`:
+     * arranca en H cuando llega un resultado y crece durante el intervalo
+     * hasta el siguiente (~110 ms a 8-10 resultados/s). Con `forward_age=on`
+     * H ya incluye la antigüedad previa al envío (~220-230 ms medidos), así
+     * que un tope FIJO de 250 ms se alcanzaba a los ~30 ms de cada
+     * intervalo (`extrap_saturada=116/120`) y el resto del intervalo la
+     * pose quedaba frenada: el delay volvía.
+     *
+     * Por eso el tope sigue al horizonte: `H + `[INTERVAL_MARGIN_NANOS],
+     * nunca menos que [MAX_EXTRAPOLATION_NANOS] (el piso de siempre) ni más
+     * que [ABSOLUTE_MAX_EXTRAPOLATION_NANOS]. Ese techo existe porque H
+     * viene de mediciones: un pico de latencia (GC, frame retenido) no debe
+     * habilitar extrapolaciones de medio segundo, que con una cabeza que
+     * frena serían un sobrepaso grande. Con `forward_age=off` el tope es el
+     * fijo de antes.
+     */
+    private fun capFor(horizonNanos: Long, forwardAge: Boolean): Float {
+        if (!forwardAge) return MAX_EXTRAPOLATION_NANOS
+        return (horizonNanos.toFloat() + INTERVAL_MARGIN_NANOS)
+            .coerceIn(MAX_EXTRAPOLATION_NANOS, ABSOLUTE_MAX_EXTRAPOLATION_NANOS)
+    }
+
+    /**
+     * Cuánto se extrapola de verdad para un pedido de [elapsed] ns.
+     *
+     * [cap] es el tope vigente ([capFor]).
+     *
+     * `hard`: tope duro en [cap]. Medido en el Note 10+
+     * el horizonte (168-221 ms) ya supera el tope apenas llega un resultado,
+     * así que `t` quedaba fijo en el tope durante TODO el intervalo hasta el
+     * siguiente (145-290 ms): la pose no avanzaba entre resultados aunque
+     * se escribía en cada vsync — se congelaba y saltaba.
+     *
+     * `soft` (default): hasta el tope es igual; pasado el tope el avance
+     * sigue con velocidad que decae exponencialmente,
+     * `tope + τ·(1 − e^(−exceso/τ))`, con τ = [SOFT_EXTRAPOLATION_TAIL_NANOS].
+     * La pose se sigue moviendo a tasa de pantalla y frena suave, sin
+     * esquina; lo máximo que puede pasarse del tope es τ — el sobrepaso al
+     * frenar la cabeza queda acotado a `velocidad·τ`.
+     */
+    private fun effectiveElapsed(elapsed: Float, cap: Float, soft: Boolean): Float {
+        if (elapsed <= 0f) return 0f
+        if (elapsed <= cap) return elapsed
+        if (!soft) return cap
+        val excess = elapsed - cap
+        return cap +
+            SOFT_EXTRAPOLATION_TAIL_NANOS * (1f - kotlin.math.exp(-excess / SOFT_EXTRAPOLATION_TAIL_NANOS))
     }
 
     /**
@@ -186,6 +357,23 @@ class PoseInterpolator {
 
     private fun length(v: Float3): Float = sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
 
+    /** Hamilton `a·b` (aplica `b` y después `a`). */
+    private fun multiply(a: Quaternion, b: Quaternion): Quaternion = Quaternion(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    )
+
+    private fun conjugate(q: Quaternion): Quaternion = Quaternion(-q.x, -q.y, -q.z, q.w)
+
+    /** [q] o `−q` (misma rotación), el que esté en el hemisferio de [ref]:
+     * así la diferencia es el giro CORTO entre las dos. */
+    private fun alignTo(q: Quaternion, ref: Quaternion): Quaternion {
+        val dot = q.x * ref.x + q.y * ref.y + q.z * ref.z + q.w * ref.w
+        return if (dot < 0f) Quaternion(-q.x, -q.y, -q.z, -q.w) else q
+    }
+
     /** Público (no `private`) para que [LashRenderer] pueda incluir el tope
      * en el log del presupuesto de latencia — ver PRESUPUESTO_LATENCIA. */
     companion object {
@@ -205,7 +393,19 @@ class PoseInterpolator {
          * constante deja de valer y la predicción se pasa. Eso es una
          * propiedad de cómo se mueve una cabeza, no del ritmo del dispositivo.
          *
-         * ## Por qué 150 ms
+         * ## 250 ms (2026-10-28)
+         *
+         * Con 150 ms el Note 10+ marcó `extrap_saturada=120/120`: el
+         * horizonte medido (pipeline ~85-100 ms + One Euro + lead del
+         * seguidor) más el tiempo desde la última muestra (hasta 100-120 ms,
+         * con MediaPipe a 8-10 resultados/s) supera el tope en TODOS los
+         * vsync, y la pose rígida quedaba frenada antes de la muestra
+         * siguiente. 250 cubre ese rango; lo que se pase sigue por la cola
+         * suave ([SOFT_EXTRAPOLATION_TAIL_NANOS]). El sobrepaso al frenar
+         * crece con el tope — lo reparte la mezcla de [blend] al llegar la
+         * muestra siguiente.
+         *
+         * ## Por qué era 150 ms
          *
          * Este tope tiene que dar lugar al PRESUPUESTO DE LATENCIA COMPLETO
          * que arma [LashRenderer.writeInterpolatedPose], si no recorta
@@ -231,7 +431,44 @@ class PoseInterpolator {
          * forma visible, bajar de a 20 ms. Es el primer valor a tocar si
          * aparece sobrepaso.
          */
-        const val MAX_EXTRAPOLATION_NANOS = 150_000_000f
+        const val MAX_EXTRAPOLATION_NANOS = 250_000_000f
+
+        /** Margen del tope dinámico sobre el horizonte ([capFor]): cubre el
+         * intervalo entre resultados medido (~110 ms) con algo de holgura.
+         * Si `extrap_saturada` sigue alto en giros continuos y los
+         * resultados llegan más espaciados, subirlo hacia ese intervalo. */
+        const val INTERVAL_MARGIN_NANOS = 120_000_000f
+
+        /** Techo absoluto del tope dinámico ([capFor]). Con H ≈ 220-230 ms
+         * el tope queda en ~340-350 ms, por debajo; esto solo frena picos
+         * de latencia medida. CALIBRACIÓN: si al frenar de golpe la pestaña
+         * se pasa de largo, bajar este techo de a 25 ms. */
+        const val ABSOLUTE_MAX_EXTRAPOLATION_NANOS = 400_000_000f
+
+        /** τ de la cola de `extrapolation=soft` (ver [effectiveElapsed]):
+         * cuánto más allá del tope puede llegar a avanzar la pose, como
+         * máximo. Más alto = más movimiento entre resultados y más sobrepaso
+         * al frenar; más bajo = se parece más al tope duro.
+         *
+         * La velocidad pasado el tope cae como `e^(−exceso/τ)`. Historia:
+         * 80 → 120 ms (que la inercia durara todo el intervalo entre
+         * resultados) → 80 ms (2026-10-28): con 120 la predicción seguía
+         * empujando de más al frenar la cabeza de golpe. Con el horizonte
+         * ahora compensando la antigüedad previa al envío, se satura más y
+         * esta cola pesa más — por eso conviene la corta. */
+        const val SOFT_EXTRAPOLATION_TAIL_NANOS = 80_000_000f
+
+        /** τ de la mezcla de corrección de [blend]. 30 ms (era 40): el
+         * escalón queda en ~2 % a los 120 ms, antes de la muestra
+         * siguiente, y sigue siendo ~2 vsync, así que el reemplazo no se ve
+         * como salto. Más alto = más suave pero la pose tarda más en
+         * alinearse con el dato nuevo. SIN CALIBRAR en dispositivo. */
+        const val SAMPLE_BLEND_TAU_NANOS = 30_000_000f
+
+        /** Ver la guarda de salida vieja en [blend]: ~6 vsync a 60 Hz. */
+        private const val STALE_OUTPUT_NANOS = 100_000_000L
+
+        private val IDENTITY = Quaternion(0f, 0f, 0f, 1f)
 
         /** Cuánto puede aportar como máximo el término cuadrático respecto al
          * lineal, en [quadraticPredict]. Adimensional a propósito — ver la

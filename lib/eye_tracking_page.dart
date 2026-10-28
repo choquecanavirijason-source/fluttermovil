@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'core/network/dio_client.dart';
+import 'core/perf/flutter_timings_diag.dart';
 import 'core/recommendation/eye_shape_analyzer.dart';
 import 'core/theme/app_colors.dart';
 import 'features/catalogo/domain/entities/catalog_item.dart';
@@ -143,6 +144,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// único que hace falta cambiar; el painter sigue enchufado al
   /// `_frameNotifier` y se repinta a la cadencia real del tracking).
   static const bool _showLidLandmarkDebug = false;
+
+  /// DIAGNÓSTICO: `flutter_overlays` de `perf_flags.properties`. `false`
+  /// saca los painters que van encima de la cámara (guía de ojos y puntos de
+  /// landmarks) para medir su costo; la lógica de la guía sigue igual.
+  /// Default `true`: se pintan como siempre.
+  bool _perfFlutterOverlays = true;
+
+  /// Ver [FlutterTimingsDiag] — no hace nada con `PERF_DIAG = false`.
+  final FlutterTimingsDiag _timingsDiag = FlutterTimingsDiag();
 
   /// true mientras alguna de las hojas del flujo "Guardar diseño" (opciones,
   /// selector de cliente) está abierta. Solo se usa para que
@@ -452,6 +462,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     WidgetsBinding.instance.addObserver(this);
     unawaited(_resolveEyeModelPaths());
     _start();
+    _timingsDiag.start();
+    unawaited(_loadPerfFlags());
 
     // Pre-carga tipos de ojo en segundo plano
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -592,8 +604,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // adjunta el SceneView nuevo.
   }
 
+  /// Ver [_perfFlutterOverlays].
+  Future<void> _loadPerfFlags() async {
+    final overlays = await _service.perfFlutterOverlaysEnabled();
+    _timingsDiag.label = 'overlays=${overlays ? 'on' : 'off'}';
+    if (!mounted || overlays == _perfFlutterOverlays) return;
+    setState(() => _perfFlutterOverlays = overlays);
+  }
+
   @override
   void dispose() {
+    _timingsDiag.stop();
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     // Fin de la sesión de cámara de esta pantalla: [_cameraInverted180]
@@ -1380,7 +1401,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     // amarilla = ancla; naranja = pestaña real detectada).
                     // Apagado con [_showLidLandmarkDebug] para poder juzgar
                     // el render de las pestañas sin nada encima.
-                    if (_showLidLandmarkDebug)
+                    if (_showLidLandmarkDebug && _perfFlutterOverlays)
                       Positioned.fill(
                         child: CustomPaint(
                           isComplex: true,
@@ -1521,7 +1542,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               ),
 
             // ── Guía de posición de ojos: espera alineación antes de capturar ──
-            if (_alignmentGuideActive)
+            if (_alignmentGuideActive && _perfFlutterOverlays)
               Positioned.fill(
                 child: IgnorePointer(
                   child: Stack(

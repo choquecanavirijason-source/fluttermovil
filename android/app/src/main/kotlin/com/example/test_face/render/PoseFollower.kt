@@ -92,6 +92,21 @@ class PoseFollower {
      */
     var closedAmount = 0f; private set
 
+    /**
+     * Hasta cuándo (`System.nanoTime`) usar
+     * [RendererConfiguration.FACE_RECOVERY_BLEND_TAU_NANOS] en vez del τ
+     * normal. Lo escribe el hilo de MediaPipe ([softenRecovery]) y lo lee el
+     * principal ([advance]) — de ahí el `@Volatile`, a diferencia del resto
+     * del estado.
+     */
+    @Volatile private var recoveryBlendUntilNanos = 0L
+
+    /** Reparte en el tiempo el salto de pose al recuperar el rostro tras una
+     * retención — ver [RendererConfiguration.FACE_RECOVERY_BLEND_TAU_NANOS]. */
+    fun softenRecovery(nowNanos: Long) {
+        recoveryBlendUntilNanos = nowNanos + RendererConfiguration.FACE_RECOVERY_BLEND_WINDOW_NANOS
+    }
+
     /** Descarta el estado: el próximo [advance] salta directo a la pose
      * objetivo en vez de acercarse a ella. Se llama al mostrar la pestaña
      * tras haber estado oculta y al perder el rostro — en los dos casos, ir
@@ -119,7 +134,11 @@ class PoseFollower {
             return
         }
 
-        val tau = RendererConfiguration.POSE_FOLLOW_TAU_NANOS.toFloat()
+        val tau = if (nowNanos < recoveryBlendUntilNanos) {
+            RendererConfiguration.FACE_RECOVERY_BLEND_TAU_NANOS.toFloat()
+        } else {
+            RendererConfiguration.POSE_FOLLOW_TAU_NANOS.toFloat()
+        }
         val a = if (tau <= 0f) 1f else 1f - exp(-dtNanos.toFloat() / tau)
         lastNanos = nowNanos
 

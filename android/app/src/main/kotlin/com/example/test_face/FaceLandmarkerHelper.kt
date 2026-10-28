@@ -13,7 +13,9 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 import java.util.Optional
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class FaceLandmarkerHelper(
     private val context: Context,
@@ -67,6 +69,100 @@ class FaceLandmarkerHelper(
     @Volatile private var rotationInFlight = false
 
     /**
+     * Con qué se construyó DE VERDAD el landmarker vigente — el delegado
+     * después del fallback GPU→CPU y las opciones de [PerfFlags] que estaban
+     * al construirlo (si el landmarker sobrevive a un `start()`, los flags
+     * nuevos no se le aplican). `null` sin landmarker. Lo loguea
+     * [CameraXManager] en `PERF_CONFIG` y en el `cfg=` de cada
+     * `TIEMPOS_ETAPAS`.
+     */
+    data class BuildInfo(
+        val delegate: String,
+        val blendshapes: Boolean,
+        val detectConf: Float,
+        val presenceConf: Float,
+        val trackConf: Float,
+        val lockReleaseAtStart: Boolean,
+    )
+
+    @Volatile var buildInfo: BuildInfo? = null
+        private set
+
+    // ── `lock_release=start` (ver [PerfFlags.Config.lockReleaseAtStart]) ──
+    //
+    // Un resultado ya desrotado esperando al hilo de cómputo. Uno solo: si
+    // llega otro antes de que el hilo lo tome, el viejo se descarta ("gana el
+    // último"). Ver [enqueueCompute].
+    private class PendingResult(
+        val result: FaceLandmarkerResult,
+        val imageWidth: Int,
+        val imageHeight: Int,
+        val bitmap: Bitmap?,
+        val enqueuedNanos: Long,
+    )
+
+    private val pendingCompute = AtomicReference<PendingResult?>(null)
+
+    /** UN hilo: el estado de [mapper] y de los renderers (filtros,
+     * interpolador, seguidor) no es thread-safe, y un único consumidor
+     * mantiene el orden de las muestras sin más sincronización. Se crea
+     * recién si se usa el modo `start`. */
+    private val computeExecutor by lazy {
+        Executors.newSingleThreadExecutor { r -> Thread(r, "lash-compute") }
+    }
+
+    /** Timestamp del último resultado computado — solo lo toca el hilo de
+     * cómputo. Red de seguridad del orden: MediaPipe ya entrega en orden. */
+    private var lastComputedTimestampMs = Long.MIN_VALUE
+
+    private val drainCompute = Runnable {
+        val p = pendingCompute.getAndSet(null) ?: return@Runnable
+        // Landmarker cerrado ([close]) mientras el resultado esperaba.
+        if (faceLandmarker == null) return@Runnable
+        val ts = p.result.timestampMs()
+        if (ts <= lastComputedTimestampMs) {
+            PerfStats.onComputeDropped()
+            return@Runnable
+        }
+        lastComputedTimestampMs = ts
+        val startNanos = System.nanoTime()
+        try {
+            deliver(p.result, p.imageWidth, p.imageHeight, p.bitmap)
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in compute thread", e)
+            onError(e.message ?: "Error processing FaceLandmarker result")
+        } finally {
+            PerfStats.recordCompute(
+                queueNanos = startNanos - p.enqueuedNanos,
+                computeNanos = System.nanoTime() - startNanos,
+                thread = Thread.currentThread().name,
+            )
+        }
+    }
+
+    /**
+     * Deja [p] como el resultado pendiente. Si había otro todavía sin tomar,
+     * lo reemplaza (y ya hay un drenado encolado, así que no se encola otro);
+     * si no había, encola un drenado. Así nunca hay más de un drenado en
+     * cola, y el hilo siempre toma el MÁS NUEVO.
+     */
+    private fun enqueueCompute(p: PendingResult) {
+        if (pendingCompute.getAndSet(p) == null) {
+            computeExecutor.execute(drainCompute)
+        } else {
+            PerfStats.onComputeDropped()
+        }
+    }
+
+    /** Mapper para Flutter + [onResult]: el trabajo que sigue a la
+     * inferencia. En el modo de siempre corre en el hilo del callback de
+     * MediaPipe; con `lock_release=start`, en el hilo de cómputo. */
+    private fun deliver(effective: FaceLandmarkerResult, imageWidth: Int, imageHeight: Int, bitmap: Bitmap?) {
+        val mapped = mapper.map(effective, imageWidth, imageHeight, bitmap)
+        onResult(mapped, effective, bitmap)
+    }
+
+    /**
      * Intenta GPU primero: la inferencia de FaceLandmarker con
      * `outputFacialTransformationMatrixes(true)` en CPU agrega decenas de ms
      * de latencia por frame antes de que el resultado llegue al motor de
@@ -87,12 +183,44 @@ class FaceLandmarkerHelper(
             return
         }
 
+        // Una sola instantánea para todo el armado: delegado, blendshapes,
+        // umbrales y modo del cerrojo salen de la misma lectura.
+        val cfg = PerfFlags.config
+        fun info(delegate: String) = BuildInfo(
+            delegate = delegate,
+            blendshapes = cfg.blendshapes,
+            detectConf = cfg.detectConf,
+            presenceConf = cfg.presenceConf,
+            trackConf = cfg.trackConf,
+            lockReleaseAtStart = cfg.lockReleaseAtStart,
+        )
+        buildInfo = null
+
+        // `delegate=cpu` en perf_flags.properties (ver [PerfFlags]): solo para
+        // medir si la GPU está compitiendo con Filament/la composición.
+        if (cfg.forceCpu) {
+            faceLandmarker = try {
+                buildLandmarker(Delegate.CPU, cfg).also {
+                    Log.i(TAG, "Delegado CPU FORZADO por perf_flags")
+                    buildInfo = info("CPU_forzado")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "FaceLandmarker init failed (CPU forzado)", e)
+                onError(e.message ?: "No se pudo inicializar FaceLandmarker")
+                null
+            }
+            return
+        }
+
         faceLandmarker = try {
-            buildLandmarker(Delegate.GPU).also { Log.i(TAG, "Delegado GPU activo (diagnóstico flote)") }
+            buildLandmarker(Delegate.GPU, cfg).also {
+                Log.i(TAG, "Delegado GPU activo (diagnóstico flote)")
+                buildInfo = info("GPU")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Delegado GPU no disponible en este dispositivo, fallback a CPU", e)
             try {
-                buildLandmarker(Delegate.CPU)
+                buildLandmarker(Delegate.CPU, cfg).also { buildInfo = info("CPU_fallback") }
             } catch (e2: Exception) {
                 Log.e(TAG, "FaceLandmarker init failed (CPU fallback)", e2)
                 onError(e2.message ?: "No se pudo inicializar FaceLandmarker")
@@ -101,7 +229,7 @@ class FaceLandmarkerHelper(
         }
     }
 
-    private fun buildLandmarker(delegate: Delegate): FaceLandmarker {
+    private fun buildLandmarker(delegate: Delegate, cfg: PerfFlags.Config): FaceLandmarker {
         val baseOptions = BaseOptions.builder()
             .setDelegate(delegate)
             .setModelAssetPath(MODEL_ASSET)
@@ -110,9 +238,11 @@ class FaceLandmarkerHelper(
         val options = FaceLandmarker.FaceLandmarkerOptions.builder()
             .setBaseOptions(baseOptions)
             .setNumFaces(1)
-            .setMinFaceDetectionConfidence(0.5f)
-            .setMinFacePresenceConfidence(0.5f)
-            .setMinTrackingConfidence(0.5f)
+            // `detect_conf`/`presence_conf`/`track_conf` en perf_flags
+            // (default 0.5, los valores de siempre).
+            .setMinFaceDetectionConfidence(cfg.detectConf)
+            .setMinFacePresenceConfidence(cfg.presenceConf)
+            .setMinTrackingConfidence(cfg.trackConf)
             .setRunningMode(RunningMode.LIVE_STREAM)
             // Necesario para el motor de render 3D (paquete `render`): MediaPipe
             // resuelve la pose 3D completa de la cabeza (rotación + profundidad)
@@ -137,8 +267,20 @@ class FaceLandmarkerHelper(
             // que no tiene nada que ver con el ángulo de cabeza. El camino
             // geométrico sigue existiendo como respaldo si por lo que sea el
             // resultado no trae blendshapes.
-            .setOutputFaceBlendshapes(true)
+            //
+            // `blendshapes=false` en perf_flags.properties lo apaga para medir
+            // cuánto cuesta (ver [PerfFlags.blendshapes]); default `true`.
+            .setOutputFaceBlendshapes(cfg.blendshapes)
             .setResultListener { result, image ->
+                // DIAGNÓSTICO (ver [PerfStats]): inferencia = de `detectAsync`
+                // (timestamp del resultado) al inicio de ESTE callback, sin
+                // los 16 ms fijos que suma LashRenderer.
+                val callbackStartNanos = System.nanoTime()
+                val submitMs = result.timestampMs()
+                if (submitMs > 0L) {
+                    PerfStats.recordInference((SystemClock.uptimeMillis() - submitMs).toFloat())
+                }
+                PerfStats.onResult(result.faceLandmarks().isNotEmpty())
                 try {
                     // BitmapExtractor.extract() sobre el MISMO `image` que
                     // MediaPipe acaba de analizar para `result` — garantiza
@@ -162,13 +304,18 @@ class FaceLandmarkerHelper(
                     // espacio rotado — por eso el modo invertido no se podía
                     // usar con el modelo 3D.
                     val effective = if (rotationInFlight) derotated180(result) else result
-                    val mapped = mapper.map(
-                        effective,
-                        image.width,
-                        image.height,
-                        bitmap,
-                    )
-                    onResult(mapped, effective, bitmap)
+                    if (cfg.lockReleaseAtStart) {
+                        // `lock_release=start`: la desrotación ya se hizo
+                        // ARRIBA, con el [rotationInFlight] de ESTE frame —
+                        // tiene que ser antes de liberar el cerrojo, porque
+                        // el próximo [detectAsync] lo sobrescribe. El resto
+                        // (mapper + render) va al hilo de cómputo y el
+                        // cerrojo se libera en el `finally` de abajo sin
+                        // esperarlo.
+                        enqueueCompute(PendingResult(effective, image.width, image.height, bitmap, System.nanoTime()))
+                    } else {
+                        deliver(effective, image.width, image.height, bitmap)
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Exception in result listener", e)
                     onError(e.message ?: "Error processing FaceLandmarker result")
@@ -178,6 +325,14 @@ class FaceLandmarkerHelper(
                     // liberarse igual. Si no, [detectAsync] rechazaría todos
                     // los frames siguientes y el tracking se congelaría para
                     // siempre por una única excepción.
+                    //
+                    // DIAGNÓSTICO: duración del callback completo (bitmap,
+                    // desrotación, mapper y todo `onResult`, incluido
+                    // FaceRenderPipeline.compute) — es el tramo que retiene el
+                    // cerrojo después de que la inferencia ya terminó. Con
+                    // `lock_release=start` solo bitmap + desrotación + encolar;
+                    // el cómputo se mide aparte ([PerfStats.recordCompute]).
+                    PerfStats.recordCallback(System.nanoTime() - callbackStartNanos, Thread.currentThread().name)
                     inferenceInFlight.set(false)
                 }
             }
@@ -223,6 +378,7 @@ class FaceLandmarkerHelper(
         val landmarker = faceLandmarker ?: return false
         val now = SystemClock.uptimeMillis()
         if (!inferenceInFlight.compareAndSet(false, true)) {
+            PerfStats.onDiscarded()
             // VENCIMIENTO DE SEGURIDAD. El cerrojo se libera en el `finally`
             // del result listener y en el error listener, o sea en todos los
             // caminos que MediaPipe documenta. Pero si alguna vez no llamara a
@@ -264,6 +420,10 @@ class FaceLandmarkerHelper(
     fun close() {
         faceLandmarker?.close()
         faceLandmarker = null
+        buildInfo = null
+        // Un resultado del ciclo de vida que termina no debe computarse en
+        // el siguiente (`lock_release=start`).
+        pendingCompute.set(null)
         // Que un ciclo de vida nuevo (volver a entrar a la pantalla) no
         // herede un cerrojo tomado por el anterior.
         inferenceInFlight.set(false)

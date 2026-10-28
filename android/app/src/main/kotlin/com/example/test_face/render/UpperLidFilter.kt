@@ -54,17 +54,30 @@ class UpperLidFilter {
      * historial de un punto del párpado con el de otro distinto. Pasa al
      * detectar el rostro por primera vez y en el camino de respaldo de
      * [EyeLandmarks.from] (anillo incompleto), no en operación normal.
+     *
+     * [imageLongSide] es el lado largo de la imagen de análisis en píxeles.
+     * `LID_POINT_BETA` se calibró en píxeles de una imagen de
+     * [REFERENCE_LONG_SIDE_PX]; con `analysis_size` más chico el mismo
+     * movimiento de cabeza da menos px/s, y sin corregir el filtro abriría
+     * menos su corte (más arrastre al parpadear). La velocidad se lleva a
+     * la escala de referencia, así el comportamiento no depende de la
+     * resolución. A 640 el factor es exactamente 1 (como siempre).
      */
-    fun apply(points: List<ImagePoint>, tNanos: Long): List<ImagePoint> {
+    fun apply(
+        points: List<ImagePoint>,
+        tNanos: Long,
+        imageLongSide: Float = REFERENCE_LONG_SIDE_PX,
+    ): List<ImagePoint> {
         if (points.isEmpty()) return points
         if (filtersX.size != points.size) {
             reset(points.size)
             return points
         }
+        val speedScale = if (imageLongSide > 0f) REFERENCE_LONG_SIDE_PX / imageLongSide else 1f
         return List(points.size) { i ->
             ImagePoint(
-                x = filtersX[i].filter(points[i].x, tNanos),
-                y = filtersY[i].filter(points[i].y, tNanos),
+                x = filtersX[i].filter(points[i].x, tNanos, speedScale),
+                y = filtersY[i].filter(points[i].y, tNanos, speedScale),
             )
         }
     }
@@ -91,5 +104,11 @@ class UpperLidFilter {
                 RendererConfiguration.ONE_EURO_D_CUTOFF,
             )
         }
+    }
+
+    companion object {
+        /** Lado largo de la imagen de análisis con que se calibraron
+         * `LID_POINT_MIN_CUTOFF`/`LID_POINT_BETA` (640x480). */
+        const val REFERENCE_LONG_SIDE_PX = 640f
     }
 }

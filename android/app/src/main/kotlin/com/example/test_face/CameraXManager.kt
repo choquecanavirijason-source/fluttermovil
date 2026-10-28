@@ -7,21 +7,33 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import android.util.Range
 import android.util.Size
 import android.view.Surface
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCase
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -84,6 +96,29 @@ class CameraXManager(
      * fijo adivinado. */
     @Volatile private var smoothedLatencyMs = 35f  // seed razonable
 
+    /**
+     * Media móvil de la antigüedad del frame AL ENTREGARLO a MediaPipe
+     * (sensor → `detectAsync`: espera del ImageProxy + copia + Canvas), en
+     * ms; `NaN` hasta la primera medición o si la fuente de timestamp del
+     * sensor no es REALTIME (no hay base de tiempo contra la cual medir).
+     *
+     * [smoothedLatencyMs] arranca a contar en `detectAsync`, así que este
+     * tramo nunca entraba en el horizonte de predicción del render: la
+     * pestaña se dibujaba ~edad_envio en el pasado. Ver
+     * [LashRenderer.onFaceResult] (`preSubmitAgeMs`).
+     */
+    @Volatile private var smoothedPreSubmitAgeMs = Float.NaN
+
+    /** Hilo de análisis, justo antes de `detectAsync`. Mismo α que
+     * [smoothedLatencyMs]: se adapta en 3-4 frames. */
+    private fun recordPreSubmitAge(sensorTimestampNanos: Long) {
+        if (PerfStats.sensorTimestampRealtime != true || sensorTimestampNanos <= 0L) return
+        val ageMs = (SystemClock.elapsedRealtimeNanos() - sensorTimestampNanos) / 1_000_000f
+        if (ageMs < 0f || ageMs > MAX_PLAUSIBLE_PRE_SUBMIT_AGE_MS) return
+        val prev = smoothedPreSubmitAgeMs
+        smoothedPreSubmitAgeMs = if (prev.isNaN()) ageMs else prev * 0.7f + ageMs * 0.3f
+    }
+
     // ── LOG DE DIAGNÓSTICO TEMPORAL (ronda "flote") ──────────────────────
     @Volatile private var debugFrameCount = 0
     @Volatile private var debugLastResultMs = 0L
@@ -144,11 +179,21 @@ class CameraXManager(
                 analysisRotated180 = analysisRotated180,
             )
             dumpAnnotatedAnalysisFrame(resultBitmap, data)
-            onTrackingResult(augmentedData)
+            sendTrackingResult(augmentedData, nowMs)
             val imageWidth = (augmentedData["imageWidth"] as? Int) ?: 0
             val imageHeight = (augmentedData["imageHeight"] as? Int) ?: 0
-            if (augmentedData["faceDetected"] == true && imageWidth > 0 && imageHeight > 0) {
-                lashRenderer.onFaceResult(rawResult, imageWidth, imageHeight, smoothedLatencyMs, resultBitmap)
+            if (!PerfFlags.overlay) {
+                // overlay=off (perf_flags): solo cámara + detección — ni
+                // compute, ni doblado de malla, ni subida a GPU.
+            } else if (augmentedData["faceDetected"] == true && imageWidth > 0 && imageHeight > 0) {
+                // `forward_age=off` (perf_flags) deja el horizonte de antes,
+                // que no incluía la antigüedad previa al envío.
+                val preSubmitMs = smoothedPreSubmitAgeMs
+                    .takeIf { PerfFlags.config.forwardAge && !it.isNaN() } ?: 0f
+                lashRenderer.onFaceResult(
+                    rawResult, imageWidth, imageHeight, smoothedLatencyMs, resultBitmap,
+                    preSubmitAgeMs = preSubmitMs,
+                )
                 faceMeshRenderer.onFaceResult(rawResult)
                 linerRenderer.onFaceResult(rawResult, imageWidth, imageHeight)
             } else {
@@ -159,6 +204,44 @@ class CameraXManager(
         },
         onError = onError,
     )
+
+    /** Ver [sendTrackingResult] — solo los usa el hilo del callback de
+     * MediaPipe. */
+    private var lastEventSentMs = 0L
+    private var lastEventFaceDetected: Boolean? = null
+
+    /**
+     * Envía el resultado a Flutter según `flutter_events` de
+     * perf_flags.properties ([PerfFlags.flutterEvents]):
+     *  - `on` (default): cada resultado, igual que siempre;
+     *  - `off`: nada — mide cuánto le cuesta al hilo principal serializar el
+     *    mapa del EventChannel;
+     *  - `throttled`: como mucho cada [THROTTLED_EVENT_INTERVAL_MS] (20 Hz),
+     *    salvo que cambie `faceDetected`, que se manda siempre para que
+     *    Flutter no se quede con un estado de rostro viejo.
+     *
+     * El mapa ya se arma FUERA del hilo principal en todos los modos (lo
+     * arma `EyeTrackingResultMapper` en el hilo del callback de MediaPipe);
+     * lo único que corre en el principal es `eventSink.success`, que
+     * serializa el mapa — eso no se puede sacar de ahí, el EventChannel
+     * exige el hilo principal.
+     */
+    private fun sendTrackingResult(data: Map<String, Any?>, nowMs: Long) {
+        when (PerfFlags.flutterEvents) {
+            PerfFlags.FlutterEvents.ON -> onTrackingResult(data)
+            PerfFlags.FlutterEvents.OFF -> Unit
+            PerfFlags.FlutterEvents.THROTTLED -> {
+                val faceDetected = data["faceDetected"] == true
+                if (faceDetected != lastEventFaceDetected ||
+                    nowMs - lastEventSentMs >= THROTTLED_EVENT_INTERVAL_MS
+                ) {
+                    lastEventSentMs = nowMs
+                    lastEventFaceDetected = faceDetected
+                    onTrackingResult(data)
+                }
+            }
+        }
+    }
 
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val mainExecutor by lazy { ContextCompat.getMainExecutor(activity) }
@@ -314,6 +397,11 @@ class CameraXManager(
     private var imageAnalysisUseCase: ImageAnalysis? = null
 
     private var videoCapture: VideoCapture<Recorder>? = null
+
+    /** `false` si el último enlace no incluyó [videoCapture] (asistente con
+     * foto, o `use_cases=minimal` de perf_flags): grabar con un VideoCapture
+     * desenlazado fallaría recién al finalizar, sin archivo. */
+    @Volatile private var videoCaptureBound = false
     @Volatile private var activeRecording: Recording? = null
     @Volatile private var pendingStopResult: MethodChannel.Result? = null
 
@@ -352,7 +440,7 @@ class CameraXManager(
      * frame. Ver el bloque de padding en [processFrame]. */
     /** Ver el bloque del POOL en [processFrame]. Round-robin de bitmaps de
      * salida, para no alojar ~1,2 MB por frame. */
-    private val orientedPool = arrayOfNulls<Bitmap>(ORIENTED_POOL_SIZE)
+    private val orientedPool = arrayOfNulls<Bitmap>(ORIENTED_POOL_SIZE_LOCK_START)
     private var orientedPoolIndex = 0
     /**
      * SIN `FILTER_BITMAP_FLAG` (2026-09-04). La matriz que se le aplica a
@@ -366,7 +454,13 @@ class CameraXManager(
      * calidad. Sale del camino crítico que decide cada cuánto puede correr
      * MediaPipe.
      */
-    private val orientedPaint = Paint()
+    /**
+     * Modo SRC: escribe el píxel de origen sin mezclar con lo que había en
+     * el buffer reusado (los frames de cámara son opacos, así que el
+     * resultado es idéntico a SRC_OVER) — Skia se ahorra leer el destino, y
+     * permite no limpiar `out` antes de dibujar (ver [processFrame]).
+     */
+    private val orientedPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
 
     private var loggedBufferWidth = -1
 
@@ -419,6 +513,8 @@ class CameraXManager(
         lashRenderer.attachSceneView(view)
         faceMeshRenderer.attachSceneView(view)
         linerRenderer.attachSceneView(view)
+        // Con el default (overlay=on) no cambia nada; ver [PerfFlags.overlay].
+        lashRenderer.setOverlayEnabled(PerfFlags.overlay)
     }
 
     /** Ver la nota de [detachPreview] — misma protección para el SceneView. */
@@ -446,22 +542,97 @@ class CameraXManager(
         // [lifecycleGeneration].
         lifecycleGeneration.incrementAndGet()
         analysisExecutor.execute {
+            // DIAGNÓSTICO: flags de perf_flags.properties e info del equipo,
+            // antes de construir el landmarker (el delegado y los blendshapes
+            // se fijan al construirlo).
+            PerfFlags.load(activity)
+            PerfStats.init(activity)
+            PerfStats.logDeviceInfo()
+            lashRenderer.setOverlayEnabled(PerfFlags.overlay)
             if (helper.getLandmarker() == null) {
                 helper.setup()
+            } else if (landmarkerNeedsRebuild()) {
+                // El landmarker sobrevivió a un stop/start pero se construyó
+                // con otros flags: se rehace, igual que en caliente.
+                rebuildLandmarker()
             }
+            perfFlagsContent = PerfFlags.rawContent(activity)
             if (helper.getLandmarker() == null) {
                 return@execute
             }
             mainHandler.post {
                 stopped.set(false)
                 scheduleRebind()
+                mainHandler.removeCallbacks(perfFlagsPoll)
+                mainHandler.postDelayed(perfFlagsPoll, PERF_FLAGS_POLL_MS)
             }
         }
+    }
+
+    // ── Recarga en caliente de perf_flags.properties ──────────────────────
+    //
+    // Cada [PERF_FLAGS_POLL_MS] se compara el contenido del archivo con el
+    // último leído (lectura de unos bytes en [analysisExecutor]). Si cambió:
+    // se recargan los flags, se reconstruye el landmarker si cambió algo que
+    // se fija al construirlo (delegado, blendshapes, umbrales, cerrojo) y se
+    // reenlaza la cámara — eso aplica los flags de enlace (resoluciones,
+    // casos de uso, FPS, rotación) y vuelve a emitir `PERF_CONFIG`, así cada
+    // línea de `TIEMPOS_ETAPAS` posterior lleva el `cfg=` nuevo. El reenlace
+    // corta el preview unos cientos de ms: es una herramienta de medición.
+
+    /** Contenido de perf_flags.properties al último chequeo; solo
+     * [analysisExecutor]. */
+    private var perfFlagsContent: String? = null
+
+    private val perfFlagsPoll = object : Runnable {
+        override fun run() {
+            if (stopped.get()) return
+            analysisExecutor.execute { reloadPerfFlagsIfChanged() }
+            mainHandler.postDelayed(this, PERF_FLAGS_POLL_MS)
+        }
+    }
+
+    /** Solo en [analysisExecutor] — el mismo hilo que llama a `detectAsync`
+     * desde [processFrame], así que cerrar y rehacer el landmarker acá no
+     * corre en paralelo con una entrega de frame. */
+    private fun reloadPerfFlagsIfChanged() {
+        if (stopped.get()) return
+        val content = PerfFlags.rawContent(activity)
+        if (content == perfFlagsContent) return
+        perfFlagsContent = content
+        Log.i(TAG, "PERF_FLAGS el archivo cambió: recarga en caliente")
+        PerfFlags.load(activity)
+        lashRenderer.setOverlayEnabled(PerfFlags.overlay)
+        if (landmarkerNeedsRebuild()) rebuildLandmarker()
+        if (helper.getLandmarker() == null) return
+        mainHandler.post { if (!stopped.get()) scheduleRebind() }
+    }
+
+    /** `true` si el landmarker vigente se construyó con otros valores de
+     * los flags que solo se aplican al construirlo. */
+    private fun landmarkerNeedsRebuild(): Boolean {
+        val built = helper.buildInfo ?: return true
+        val cfg = PerfFlags.config
+        return (built.delegate == "CPU_forzado") != cfg.forceCpu ||
+            built.blendshapes != cfg.blendshapes ||
+            built.detectConf != cfg.detectConf ||
+            built.presenceConf != cfg.presenceConf ||
+            built.trackConf != cfg.trackConf ||
+            built.lockReleaseAtStart != cfg.lockReleaseAtStart
+    }
+
+    /** Solo en [analysisExecutor]. */
+    private fun rebuildLandmarker() {
+        val before = helper.buildInfo
+        helper.close()
+        helper.setup()
+        Log.i(TAG, "PERF_FLAGS landmarker reconstruido: antes=$before ahora=${helper.buildInfo}")
     }
 
     fun stop(result: MethodChannel.Result? = null) {
         val generation = lifecycleGeneration.incrementAndGet()
         stopped.set(true)
+        mainHandler.removeCallbacks(perfFlagsPoll)
         cancelPendingBind()
         bindGeneration.incrementAndGet()
         lashRenderer.resetTracking()
@@ -576,6 +747,14 @@ class CameraXManager(
      * almacenamiento privado de la app (no requiere permisos en runtime).
      */
     fun startRecording(result: MethodChannel.Result) {
+        if (!videoCaptureBound && PerfFlags.config.useCasesMinimal) {
+            result.error(
+                "USE_CASES_MINIMAL",
+                "Grabación desactivada por use_cases=minimal en perf_flags.properties",
+                null,
+            )
+            return
+        }
         val vc = videoCapture
         if (vc == null) {
             result.error("NO_CAMERA", "La cámara aún no está lista", null)
@@ -678,6 +857,7 @@ class CameraXManager(
         )
     }
 
+    @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
     private fun applyBinding(
         provider: ProcessCameraProvider,
         lifecycleOwner: LifecycleOwner,
@@ -685,74 +865,108 @@ class CameraXManager(
         if (stopped.get()) return
         try {
             provider.unbindAll()
+            videoCaptureBound = false
 
             val rotation = displayRotation(activity)
-
-            val imageAnalysis =
-                ImageAnalysis.Builder()
-                    .setTargetRotation(rotation)
-                    .setResolutionSelector(analysisResolutionSelector)
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .build()
-
-            imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                processFrame(imageProxy)
-            }
-            imageAnalysisUseCase = imageAnalysis
-
-            // El Recorder/VideoCapture se crea una única vez y se reenlaza en cada
-            // rebind (misma instancia) para no perder la referencia usada por
-            // startRecording/stopRecording.
-            val vc = videoCapture ?: VideoCapture.withOutput(
-                Recorder.Builder()
-                    .setQualitySelector(QualitySelector.from(Quality.HD))
-                    .build(),
-            ).also { videoCapture = it }
-
-            // Cuarto caso de uso: en el asistente se enlaza ImageCapture EN
-            // LUGAR de VideoCapture, no además. Preview + análisis + foto es
-            // una combinación que CameraX garantiza en cualquier equipo;
-            // sumarle grabación son cuatro usos simultáneos y no todos los
-            // dispositivos los soportan. En el asistente no se graba, así
-            // que el cambio no le quita nada.
-            val photoMode = photoModeEnabled
-            val ic = if (photoMode) {
-                (imageCaptureUseCase ?: ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    // Explícito: con flash AUTO/ON CameraX corre un ciclo de
-                    // pre-captura (AE/AF + pre-flash) antes del disparo.
-                    .setFlashMode(ImageCapture.FLASH_MODE_OFF)
-                    .setResolutionSelector(captureResolutionSelector)
-                    .build()
-                    .also { imageCaptureUseCase = it })
-                    .apply { targetRotation = rotation }
-            } else {
-                imageCaptureUseCase = null
-                null
-            }
-            val extraUseCase = ic ?: vc
+            val cfg = PerfFlags.config
 
             val selector =
                 CameraSelector.Builder()
                     .requireLensFacing(lensFacing)
                     .build()
 
+            // DIAGNÓSTICO (ver [PerfConfigReporter]): `fps_range` solo se
+            // pide si la cámara lo anuncia; con el default no se pide nada.
+            val (fpsRequest, fpsRequestLabel) = resolveFpsRange(provider, selector, cfg.fpsRange)
+            val reporter = PerfConfigReporter()
+
+            val analysisBuilder =
+                ImageAnalysis.Builder()
+                    .setTargetRotation(rotation)
+                    .setResolutionSelector(analysisResolutionSelector(cfg.analysisSize))
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    // `analysis_rotation=camerax` (default): CameraX gira el
+                    // frame en nativo (libyuv) durante la conversión a RGBA y
+                    // entrega `rotationDegrees = 0`; [processFrame] solo
+                    // espeja. Mismo bitmap final que la rotación por Canvas,
+                    // así que landmarks, matriz y modo invertido no cambian.
+                    .setOutputImageRotationEnabled(cfg.analysisRotationCameraX)
+            Camera2Interop.Extender(analysisBuilder).apply {
+                // Solo OBSERVA: lee del primer TotalCaptureResult el rango de
+                // FPS que el HAL aplicó de verdad, para `PERF_CONFIG`.
+                setSessionCaptureCallback(reporter.captureCallback)
+                fpsRequest?.let { setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+            }
+            val imageAnalysis = analysisBuilder.build()
+
+            imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
+                processFrame(imageProxy)
+            }
+            imageAnalysisUseCase = imageAnalysis
+
+            // `use_cases=minimal` (perf_flags): solo Preview + ImageAnalysis,
+            // para medir cuánto le cuesta al HAL el tercer stream. Sin
+            // VideoCapture [startRecording] responde error, y sin
+            // ImageCapture [takePhoto] devuelve `null` (Dart ya tiene un
+            // camino de respaldo para eso).
+            val extraUseCase: UseCase? = if (cfg.useCasesMinimal) {
+                imageCaptureUseCase = null
+                null
+            } else {
+                // El Recorder/VideoCapture se crea una única vez y se reenlaza en cada
+                // rebind (misma instancia) para no perder la referencia usada por
+                // startRecording/stopRecording.
+                val vc = videoCapture ?: VideoCapture.withOutput(
+                    Recorder.Builder()
+                        .setQualitySelector(QualitySelector.from(Quality.HD))
+                        .build(),
+                ).also { videoCapture = it }
+    
+                // Cuarto caso de uso: en el asistente se enlaza ImageCapture EN
+                // LUGAR de VideoCapture, no además. Preview + análisis + foto es
+                // una combinación que CameraX garantiza en cualquier equipo;
+                // sumarle grabación son cuatro usos simultáneos y no todos los
+                // dispositivos los soportan. En el asistente no se graba, así
+                // que el cambio no le quita nada.
+                val photoMode = photoModeEnabled
+                val ic = if (photoMode) {
+                    (imageCaptureUseCase ?: ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        // Explícito: con flash AUTO/ON CameraX corre un ciclo de
+                        // pre-captura (AE/AF + pre-flash) antes del disparo.
+                        .setFlashMode(ImageCapture.FLASH_MODE_OFF)
+                        .setResolutionSelector(captureResolutionSelector)
+                        .build()
+                        .also { imageCaptureUseCase = it })
+                        .apply { targetRotation = rotation }
+                } else {
+                    imageCaptureUseCase = null
+                    null
+                }
+                ic ?: vc
+            }
+
             val pv = previewView
+            var preview: Preview? = null
+            val timestampSource: String
             if (pv != null) {
-                val preview =
+                val previewBuilder =
                     Preview.Builder()
                         .setTargetRotation(rotation)
-                        .setResolutionSelector(previewResolutionSelector)
-                        .build()
+                        .setResolutionSelector(previewResolutionSelectorFor(cfg.previewSize))
+                fpsRequest?.let {
+                    Camera2Interop.Extender(previewBuilder)
+                        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                }
+                preview = previewBuilder.build()
                 preview.setSurfaceProvider(pv.surfaceProvider)
-                provider.bindToLifecycle(
+                val camera = provider.bindToLifecycle(
                     lifecycleOwner,
                     selector,
-                    preview,
-                    imageAnalysis,
-                    extraUseCase,
+                    *listOfNotNull(preview, imageAnalysis, extraUseCase).toTypedArray(),
                 )
+                timestampSource = logCameraCharacteristics(camera)
                 // DIAGNÓSTICO alineación overlay: el overlay de Flutter asume
                 // que preview y análisis comparten encuadre (mismo aspect +
                 // mismo cropRect). Si CameraX resolvió resoluciones de aspect
@@ -765,20 +979,192 @@ class CameraXManager(
                         "targetRotation=$rotation previewViewSize=${pv.width}x${pv.height}",
                 )
             } else {
-                provider.bindToLifecycle(
+                val camera = provider.bindToLifecycle(
                     lifecycleOwner,
                     selector,
-                    imageAnalysis,
-                    extraUseCase,
+                    *listOfNotNull(imageAnalysis, extraUseCase).toTypedArray(),
                 )
+                timestampSource = logCameraCharacteristics(camera)
             }
+            videoCaptureBound = extraUseCase != null && extraUseCase === videoCapture
+
+            val useCases = listOfNotNull(
+                preview?.let { "Preview" },
+                "ImageAnalysis",
+                when {
+                    extraUseCase == null -> null
+                    extraUseCase === videoCapture -> "VideoCapture"
+                    else -> "ImageCapture"
+                },
+            )
+            val build = helper.buildInfo
+            val analysisRes = imageAnalysis.resolutionInfo?.resolution
+            val previewRes = preview?.resolutionInfo?.resolution
+            fun Size?.label() = this?.let { "${it.width}x${it.height}" } ?: "n/d"
+            val info = PerfFlags.fileInfo
+            PerfStats.configSummary = listOf(
+                when (build?.delegate) {
+                    "GPU" -> "gpu"
+                    "CPU_forzado" -> "cpu"
+                    "CPU_fallback" -> "cpuFB"
+                    else -> "?"
+                },
+                "bs${if (build?.blendshapes == false) 0 else 1}",
+                analysisRes.label(),
+                "ov${if (cfg.overlay) 1 else 0}",
+                "uc${useCases.size}",
+                "fps-${cfg.fpsRange?.let { if (fpsRequest != null) "$it" else "${it}ign" } ?: "def"}",
+                "lk-${if (build?.lockReleaseAtStart == true) "start" else "end"}",
+                "pv-${previewRes.label()}",
+                "c${build?.detectConf}/${build?.presenceConf}/${build?.trackConf}",
+                "fe-${cfg.flutterEvents.name.lowercase(Locale.US).take(3)}",
+                "fo${if (cfg.flutterOverlays) 1 else 0}",
+                "rot-${if (cfg.analysisRotationCameraX) "cx" else "cv"}",
+                "ex-${if (cfg.softExtrapolation) "soft" else "hard"}",
+                "sb${if (cfg.sampleBlend) 1 else 0}",
+                "fa${if (cfg.forwardAge) 1 else 0}",
+            ).joinToString("|")
+            // El mapeo imagen→pantalla (Flutter y el render 3D) trabaja en
+            // coordenadas NORMALIZADAS, así que cualquier `analysis_size`
+            // cae bien sobre el preview SIEMPRE que análisis y preview tengan
+            // el mismo aspecto (mismo encuadre). Si CameraX resolvió
+            // aspectos distintos, el overlay se corre — se avisa acá.
+            val aspectMismatch = if (analysisRes != null && previewRes != null) {
+                val a = maxOf(analysisRes.width, analysisRes.height).toFloat() / minOf(analysisRes.width, analysisRes.height)
+                val p = maxOf(previewRes.width, previewRes.height).toFloat() / minOf(previewRes.width, previewRes.height)
+                if (kotlin.math.abs(a - p) > 0.01f) {
+                    Log.w(TAG, "PERF_CONFIG ASPECTO DISTINTO analysis=${analysisRes.label()} preview=${previewRes.label()}: el overlay no va a calzar")
+                    "SI"
+                } else {
+                    "no"
+                }
+            } else {
+                "n/d"
+            }
+            reporter.base =
+                "archivo=${info.path} existe=${info.exists} claves={${info.entries}} " +
+                    "delegado_real=${build?.delegate ?: "sin_landmarker"} " +
+                    "construido_con=bs:${build?.blendshapes} conf:${build?.detectConf}/${build?.presenceConf}/${build?.trackConf} " +
+                    "lock:${if (build?.lockReleaseAtStart == true) "start" else "end"} " +
+                    "analysis=${analysisRes.label()}(pedido ${cfg.analysisSize.width}x${cfg.analysisSize.height}) " +
+                    "preview=${if (pv == null) "sin_preview" else previewRes.label()}" +
+                    "(pedido ${cfg.previewSize.label().takeIf { cfg.previewSize != null } ?: "default"}) " +
+                    "aspecto_distinto=$aspectMismatch " +
+                    "casos_de_uso=${useCases.joinToString("+")} timestampSource=$timestampSource " +
+                    "fps_pedido=$fpsRequestLabel " +
+                    "efectivos{${PerfFlags.describe(cfg)}} cfg=${PerfStats.configSummary}"
+            reporter.maybeEmit()
+            mainHandler.postDelayed({ reporter.maybeEmit(force = true) }, PERF_CONFIG_TIMEOUT_MS)
         } catch (e: Exception) {
             onError(e.message ?: "No se pudo enlazar la cámara")
         }
     }
 
+    /**
+     * `fps_range` (perf_flags) → el `Range` a pedir y su etiqueta para el
+     * log. Solo se pide `[n, n]` si la cámara lo anuncia en
+     * `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES`; si no, se loguea que se
+     * ignoró y CameraX queda con su rango de siempre.
+     */
+    @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
+    private fun resolveFpsRange(
+        provider: ProcessCameraProvider,
+        selector: CameraSelector,
+        fps: Int?,
+    ): Pair<Range<Int>?, String> {
+        if (fps == null) return null to "default"
+        val wanted = Range(fps, fps)
+        val ranges = try {
+            selector.filter(provider.availableCameraInfos).firstOrNull()?.let {
+                Camera2CameraInfo.from(it).getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "PERF_FLAGS fps_range: no se pudieron leer los rangos de la cámara", e)
+            null
+        }
+        if (ranges != null && wanted in ranges) return wanted to wanted.toString()
+        Log.w(
+            TAG,
+            "PERF_FLAGS fps_range=$fps IGNORADO: $wanted no está en " +
+                "CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES=${ranges?.joinToString() ?: "null"}",
+        )
+        return null to "ignorado($wanted no disponible)"
+    }
+
+    /**
+     * DIAGNÓSTICO: arma la línea `PERF_CONFIG` de un enlace. Necesita dos
+     * cosas que llegan por caminos distintos: [base] (lo que se sabe al
+     * terminar `bindToLifecycle`) y el rango de FPS EFECTIVO, que solo se
+     * conoce cuando el HAL entrega el primer `TotalCaptureResult`. Se emite
+     * una sola vez, cuando están las dos, o al vencer
+     * [PERF_CONFIG_TIMEOUT_MS] con `n/d`.
+     */
+    private class PerfConfigReporter {
+        @Volatile var base: String? = null
+        @Volatile private var effectiveFps: String? = null
+        private val emitted = AtomicBoolean(false)
+
+        val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureCompleted(
+                session: CameraCaptureSession,
+                request: CaptureRequest,
+                result: TotalCaptureResult,
+            ) {
+                if (effectiveFps != null) return
+                effectiveFps = result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)?.toString() ?: "null"
+                maybeEmit()
+            }
+        }
+
+        fun maybeEmit(force: Boolean = false) {
+            val b = base ?: return
+            val fps = effectiveFps
+                ?: if (force) "n/d(sin TotalCaptureResult en ${PERF_CONFIG_TIMEOUT_MS}ms)" else return
+            if (emitted.compareAndSet(false, true)) Log.i(TAG, "PERF_CONFIG $b fps_efectivo=$fps")
+        }
+    }
+
+    /**
+     * DIAGNÓSTICO: base de tiempo del sensor y rangos de FPS de la cámara
+     * enlazada. Se loguea en cada enlace (no solo al iniciar) porque cambiar
+     * de cámara cambia ambos datos. También decide si [PerfStats] puede
+     * medir `espera_proxy`: solo con fuente REALTIME el timestamp del frame
+     * está en la base de `SystemClock.elapsedRealtimeNanos()`.
+     */
+    @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
+    private fun logCameraCharacteristics(camera: Camera): String {
+        return try {
+            val info = Camera2CameraInfo.from(camera.cameraInfo)
+            val source = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+            val fpsRanges = info.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            PerfStats.sensorTimestampRealtime =
+                source == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+            val sourceName = when (source) {
+                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME -> "REALTIME"
+                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN -> "UNKNOWN"
+                null -> "null"
+                else -> source.toString()
+            }
+            Log.i(
+                TAG,
+                "CAMARA id=${info.cameraId} lensFacing=$lensFacing timestampSource=$sourceName " +
+                    "fpsRangos=${fpsRanges?.joinToString() ?: "null"} " +
+                    "(rango pedido: ver fps_pedido en PERF_CONFIG)",
+            )
+            sourceName
+        } catch (e: Exception) {
+            PerfStats.sensorTimestampRealtime = null
+            Log.w(TAG, "CAMARA no se pudieron leer las características", e)
+            "n/d"
+        }
+    }
+
 
     private fun processFrame(imageProxy: ImageProxy) {
+        // DIAGNÓSTICO (ver PerfStats): todo frame que entrega ImageAnalysis,
+        // y su edad respecto del sensor al llegar acá.
+        PerfStats.onCameraFrame()
+        PerfStats.recordProxyAge(imageProxy.imageInfo.timestamp)
         val landmarker = helper.getLandmarker()
         if (landmarker == null || stopped.get() || analysisPausedForCapture) {
             imageProxy.close()
@@ -792,6 +1178,7 @@ class CameraXManager(
         // [FaceLandmarkerHelper.detectAsync], que es donde vive el cerrojo
         // real. Este chequeo es sólo la optimización de saltear el trabajo.
         if (helper.isInferenceInFlight()) {
+            PerfStats.onDiscarded()
             imageProxy.close()
             return
         }
@@ -835,18 +1222,16 @@ class CameraXManager(
                 )
             }
 
-            var raw = rawFrameBitmap
-            if (raw == null || raw.isRecycled || raw.width != rawWidth || raw.height != height) {
-                raw?.recycle()
-                raw = Bitmap.createBitmap(rawWidth, height, Bitmap.Config.ARGB_8888)
-                rawFrameBitmap = raw
-            }
-            plane.buffer.rewind()
-            raw.copyPixelsFromBuffer(plane.buffer)
-
+            // Con `analysis_rotation=camerax` (default, ver [applyBinding])
+            // CameraX ya entrega el frame rotado y este valor llega en 0: la
+            // matriz de abajo queda en espejo (+180 en modo invertido), que
+            // son transformaciones de escala ±1 — Skia las recorre por filas,
+            // no por columnas como un giro de 90/270. Con `canvas` llega la
+            // rotación de siempre y todo es como antes.
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
             val matrix =
                 Matrix().apply {
-                    postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                    postRotate(rotationDegrees.toFloat())
                     if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
                         // Reflexión en x tras la rotación. El pivote es
                         // irrelevante: `Bitmap.createBitmap` mapea el rect de
@@ -890,8 +1275,15 @@ class CameraXManager(
             val outWidth = dstRect.width().roundToInt().coerceAtLeast(1)
             val outHeight = dstRect.height().roundToInt().coerceAtLeast(1)
 
-            val slot = orientedPoolIndex
-            orientedPoolIndex = (orientedPoolIndex + 1) % ORIENTED_POOL_SIZE
+            // `lock_release=start` (perf_flags): con el cerrojo liberado al
+            // empezar el callback, el hilo de cómputo puede seguir leyendo
+            // el bitmap de un resultado mientras ya hay otro frame en
+            // MediaPipe y otro convirtiéndose acá — hacen falta más buffers
+            // para no pisarlo. En el modo de siempre, 3 como siempre.
+            val poolSize =
+                if (helper.buildInfo?.lockReleaseAtStart == true) ORIENTED_POOL_SIZE_LOCK_START else ORIENTED_POOL_SIZE
+            val slot = orientedPoolIndex % poolSize
+            orientedPoolIndex = (slot + 1) % poolSize
             var out = orientedPool[slot]
             if (out == null || out.isRecycled || out.width != outWidth || out.height != outHeight) {
                 out?.recycle()
@@ -906,25 +1298,54 @@ class CameraXManager(
             val drawMatrix = Matrix(matrix)
             drawMatrix.postTranslate(-dstRect.left, -dstRect.top)
 
-            val canvas = Canvas(out)
-            canvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC)
-            // Tras cambiar la rotación se mandan unos frames EN NEGRO: el
-            // canvas ya quedó negro, así que alcanza con no dibujar encima.
-            // Le corta el tracking a MediaPipe para que vuelva a detectar de
+            // Tras cambiar la rotación se mandan unos frames EN NEGRO: le
+            // corta el tracking a MediaPipe para que vuelva a detectar de
             // cero en la orientación nueva — ver [setInvertedFaceMode].
-            if (blankFramesRemaining > 0) {
-                blankFramesRemaining--
+            val blank = blankFramesRemaining > 0
+            if (blank) blankFramesRemaining--
+
+            val copyStartNanos = System.nanoTime()
+            plane.buffer.rewind()
+            if (matrix.isIdentity && rawWidth == width) {
+                // RUTA DIRECTA: sin transformación (cámara trasera, CameraX
+                // ya rotó, sin modo invertido) ni padding de fila, el buffer
+                // ya ES el bitmap final — se copia directo al del pool, sin
+                // `raw` intermedio ni Canvas.
+                if (blank) out.eraseColor(Color.BLACK) else out.copyPixelsFromBuffer(plane.buffer)
+                PerfStats.recordCopyRaw(System.nanoTime() - copyStartNanos)
+                PerfStats.recordCanvasRot(0L)
             } else {
-                canvas.save()
-                canvas.concat(drawMatrix)
-                // Recorta el padding de fila: `raw` puede ser más ancho que
-                // `width` (ver el bloque de rowStride arriba) y `drawBitmap`
-                // dibujaría también esas columnas de relleno. El clip se
-                // aplica en el espacio de coordenadas de `raw`, ya con la
-                // matriz puesta.
-                canvas.clipRect(srcRect)
-                canvas.drawBitmap(raw, 0f, 0f, orientedPaint)
-                canvas.restore()
+                var raw = rawFrameBitmap
+                if (raw == null || raw.isRecycled || raw.width != rawWidth || raw.height != height) {
+                    raw?.recycle()
+                    raw = Bitmap.createBitmap(rawWidth, height, Bitmap.Config.ARGB_8888)
+                    rawFrameBitmap = raw
+                }
+                raw.copyPixelsFromBuffer(plane.buffer)
+                PerfStats.recordCopyRaw(System.nanoTime() - copyStartNanos)
+
+                val canvasStartNanos = System.nanoTime()
+                val canvas = Canvas(out)
+                if (blank) {
+                    canvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC)
+                } else {
+                    // Sin `drawColor` previo: el bitmap transformado cubre
+                    // `out` entero (giros de 90° y espejos, escala 1:1, mismas
+                    // dimensiones) y [orientedPaint] escribe en modo SRC, así
+                    // que no queda nada del frame anterior. Era una pasada
+                    // completa de ~1,2 MB por frame que no aportaba nada.
+                    canvas.save()
+                    canvas.concat(drawMatrix)
+                    // Recorta el padding de fila: `raw` puede ser más ancho que
+                    // `width` (ver el bloque de rowStride arriba) y `drawBitmap`
+                    // dibujaría también esas columnas de relleno. El clip se
+                    // aplica en el espacio de coordenadas de `raw`, ya con la
+                    // matriz puesta.
+                    canvas.clipRect(srcRect)
+                    canvas.drawBitmap(raw, 0f, 0f, orientedPaint)
+                    canvas.restore()
+                }
+                PerfStats.recordCanvasRot(System.nanoTime() - canvasStartNanos)
             }
 
             val finalOriented = out
@@ -933,13 +1354,19 @@ class CameraXManager(
                 loggedOrientedDims = true
                 Log.i(
                     TAG,
-                    "ORIENTED rotationDegrees=${imageProxy.imageInfo.rotationDegrees} " +
+                    "ORIENTED rotationDegrees=$rotationDegrees " +
+                        "rotacionCameraX=${PerfFlags.config.analysisRotationCameraX} " +
+                        "rutaDirecta=${matrix.isIdentity && rawWidth == width} " +
                         "raw=${width}x$height → oriented=${finalOriented.width}x${finalOriented.height} " +
                         "cropRect=${imageProxy.cropRect} lensFacing=$lensFacing",
                 )
             }
 
             val mpImage = BitmapImageBuilder(finalOriented).build()
+            // DIAGNÓSTICO: antigüedad real del frame al entregarlo (incluye
+            // copia y Canvas, que el timestamp de abajo ya no ve).
+            PerfStats.recordSubmitAge(imageProxy.imageInfo.timestamp)
+            recordPreSubmitAge(imageProxy.imageInfo.timestamp)
             helper.detectAsync(mpImage, SystemClock.uptimeMillis())
         } catch (e: Throwable) {
             // Throwable, NO Exception: un OutOfMemoryError es un Error, se
@@ -1052,6 +1479,24 @@ class CameraXManager(
          * frames (~100 ms) después. */
         private const val ORIENTED_POOL_SIZE = 3
 
+        /** Con `lock_release=start`: frame en conversión + en MediaPipe +
+         * pendiente + en cómputo = 4 a la vez como máximo esperable, más
+         * uno de margen. */
+        private const val ORIENTED_POOL_SIZE_LOCK_START = 5
+
+        /** Ver [PerfConfigReporter]: cuánto esperar el primer
+         * `TotalCaptureResult` antes de loguear `PERF_CONFIG` con `n/d`. */
+        private const val PERF_CONFIG_TIMEOUT_MS = 3_000L
+
+        /** Cada cuánto se mira si cambió perf_flags.properties (recarga en
+         * caliente, ver [reloadPerfFlagsIfChanged]). */
+        private const val PERF_FLAGS_POLL_MS = 1_000L
+
+        /** Ver [recordPreSubmitAge]: una medición fuera de rango (reloj
+         * raro, frame retenido por una pausa) no debe arrastrar la media ni
+         * mandar el horizonte lejos. */
+        private const val MAX_PLAUSIBLE_PRE_SUBMIT_AGE_MS = 500f
+
         /** Frames negros que se le mandan al detector al cambiar la
          * rotación del análisis (ver [setInvertedFaceMode]), para cortarle
          * el tracking y forzar una detección de cero. 3 alcanzan: MediaPipe
@@ -1101,20 +1546,39 @@ class CameraXManager(
                 )
                 .build()
 
+        /** `preview_size` de perf_flags: `null` (default) = el selector de
+         * siempre; si no, la misma estrategia con otro tamaño objetivo. */
+        private fun previewResolutionSelectorFor(size: Size?): ResolutionSelector =
+            if (size == null) {
+                previewResolutionSelector
+            } else {
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(
+                        ResolutionStrategy(size, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER),
+                    )
+                    .build()
+            }
+
         /** Análisis ML acotado a 640x480: libera ancho de banda para que el
          * preview no quede pixelado, y reduce la latencia de inferencia de
          * MediaPipe ~40-60% vs 960x720 (menos píxeles → resultado más rápido
          * → menos delay entre movimiento real y reacción del modelo 3D). */
-        private val analysisResolutionSelector: ResolutionSelector =
+        /** [size] sale de `analysis_size` en perf_flags.properties (ver
+         * [PerfFlags]); default 640x480, el valor de siempre. */
+        private fun analysisResolutionSelector(size: Size): ResolutionSelector =
             ResolutionSelector.Builder()
                 .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                 .setResolutionStrategy(
                     ResolutionStrategy(
-                        Size(640, 480),
+                        size,
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
                     ),
                 )
                 .build()
+
+        /** `flutter_events=throttled` (ver [sendTrackingResult]): 20 Hz. */
+        private const val THROTTLED_EVENT_INTERVAL_MS = 50L
 
         /** Foto del asistente (ImageCapture): 4:3 como preview y análisis
          * (mismo encuadre), acotada a ~1440x1080. Sin selector CameraX

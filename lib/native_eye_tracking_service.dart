@@ -156,6 +156,21 @@ class NativeEyeTrackingService {
     }
   }
 
+  /// DIAGNÓSTICO: `flutter_overlays` de `perf_flags.properties` (ver
+  /// `PerfFlags.kt`). `true` (pintar los overlays, lo de siempre) si no hay
+  /// archivo, la clave falta o el canal falla.
+  Future<bool> perfFlutterOverlaysEnabled() async {
+    try {
+      final flags = await _methodChannel.invokeMapMethod<String, dynamic>(
+        'getPerfFlags',
+      );
+      return flags?['flutterOverlays'] as bool? ?? true;
+    } catch (e) {
+      debugPrint('[EyeTracking] getPerfFlags error: $e');
+      return true;
+    }
+  }
+
   /// Arranca la grabación de video local (sin audio) sobre la misma sesión
   /// de cámara nativa. El archivo se guarda en almacenamiento privado de la app.
   Future<void> startRecording() async {

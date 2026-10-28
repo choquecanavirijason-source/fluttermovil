@@ -70,14 +70,29 @@ class EyeTrackingFilter {
      * mueve a velocidad constante parecía acelerar y frenar — el corte
      * oscilaba y la pestaña temblaba justo en movimiento. Entre capturas el
      * intervalo es el real de la cámara.
+     *
+     * [naturalSpan] es el ancho del modelo en su espacio local (ver
+     * [EyeModelSlot.naturalSpan]); con él, `scale.x·naturalSpan` es el ancho
+     * del modelo en MUNDO, proporcional al ancho real del ojo. La velocidad
+     * de posición se mide en esa unidad — anchos de ojo por segundo — y la
+     * de escala en fracción de sí misma por segundo. Antes se medía en
+     * unidades crudas de mundo y `beta` estaba calibrado para "1 m/s": las
+     * unidades de Filament acá no son metros fiables (la profundidad sale
+     * acotada de la matriz de MediaPipe), y un giro de cabeza normal quedaba
+     * muy por debajo de esa referencia. El corte casi no se abría al ARRANCAR
+     * el movimiento, la pestaña se quedaba atrás y después alcanzaba de
+     * golpe. `0f` o un valor no válido = velocidad cruda (comportamiento
+     * anterior).
      */
-    fun apply(target: EyeTransform, tNanos: Long = System.nanoTime()): EyeTransform {
+    fun apply(target: EyeTransform, tNanos: Long = System.nanoTime(), naturalSpan: Float = 0f): EyeTransform {
         val now = tNanos
 
+        val widthWorld = target.scale.x * naturalSpan
+        val positionSpeedScale = if (widthWorld > 1e-6f && widthWorld.isFinite()) 1f / widthWorld else 1f
         val position = Float3(
-            posX.filter(target.position.x, now),
-            posY.filter(target.position.y, now),
-            posZ.filter(target.position.z, now),
+            posX.filter(target.position.x, now, positionSpeedScale),
+            posY.filter(target.position.y, now, positionSpeedScale),
+            posZ.filter(target.position.z, now, positionSpeedScale),
         )
 
         // Alineación antipodal: q y -q son la misma rotación.
@@ -93,10 +108,12 @@ class EyeTrackingFilter {
         val rotation = normalizedQuaternion(qx, qy, qz, qw)
         lastAlignedQ = rotation
 
+        val sx = target.scale.x
+        val scaleSpeedScale = if (naturalSpan > 0f && sx > 1e-6f && sx.isFinite()) 1f / sx else 1f
         val scale = Float3(
-            scaleX.filter(target.scale.x, now),
-            scaleY.filter(target.scale.y, now),
-            scaleZ.filter(target.scale.z, now),
+            scaleX.filter(target.scale.x, now, scaleSpeedScale),
+            scaleY.filter(target.scale.y, now, scaleSpeedScale),
+            scaleZ.filter(target.scale.z, now, scaleSpeedScale),
         )
 
         // Retardo introducido por los tres filtros de posición en ESTE frame

@@ -187,7 +187,7 @@ class LinerRenderer(private val mainHandler: Handler) {
             hideSlot(slot)
             return
         }
-        val smoothed = slot.filter.apply(transform)
+        val smoothed = slot.filter.apply(transform, naturalSpan = slot.naturalSpan)
         val damped = smoothed.copy(scale = smoothed.scale * damping)
         val nowNanos = System.nanoTime()
 
