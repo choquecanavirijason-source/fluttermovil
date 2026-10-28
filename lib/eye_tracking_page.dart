@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data' show Uint8List;
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1519,23 +1518,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       _showSaveDesignSheet();
                     }
                   },
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(80),
-                    child: BackdropFilter(
-                      filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                      child: Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppColors.actionGreen.withValues(alpha: 0.85),
-                          borderRadius: BorderRadius.circular(80),
-                          border: Border.all(color: Colors.white24),
-                        ),
-                        child: const Icon(
-                          Icons.save_alt_rounded,
-                          color: Colors.white,
-                          size: 26,
-                        ),
-                      ),
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.actionGreen.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(80),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: const Icon(
+                      Icons.save_alt_rounded,
+                      color: Colors.white,
+                      size: 26,
                     ),
                   ),
                 ),

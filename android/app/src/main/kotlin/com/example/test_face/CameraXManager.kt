@@ -575,10 +575,11 @@ class CameraXManager(
     // último leído (lectura de unos bytes en [analysisExecutor]). Si cambió:
     // se recargan los flags, se reconstruye el landmarker si cambió algo que
     // se fija al construirlo (delegado, blendshapes, umbrales, cerrojo) y se
-    // reenlaza la cámara — eso aplica los flags de enlace (resoluciones,
-    // casos de uso, FPS, rotación) y vuelve a emitir `PERF_CONFIG`, así cada
-    // línea de `TIEMPOS_ETAPAS` posterior lleva el `cfg=` nuevo. El reenlace
-    // corta el preview unos cientos de ms: es una herramienta de medición.
+    // reenlaza la cámara SOLO si hace falta (landmarker rehecho o flags de
+    // enlace: resoluciones, casos de uso, FPS, rotación) — eso vuelve a
+    // emitir `PERF_CONFIG` y corta el preview unos cientos de ms. Los flags
+    // de filtro y predicción se leen en cada frame y se aplican sin cortar
+    // nada; en ese caso solo se actualiza el `cfg=`.
 
     /** Contenido de perf_flags.properties al último chequeo; solo
      * [analysisExecutor]. */
@@ -601,12 +602,30 @@ class CameraXManager(
         if (content == perfFlagsContent) return
         perfFlagsContent = content
         Log.i(TAG, "PERF_FLAGS el archivo cambió: recarga en caliente")
+        val before = PerfFlags.config
         PerfFlags.load(activity)
-        lashRenderer.setOverlayEnabled(PerfFlags.overlay)
-        if (landmarkerNeedsRebuild()) rebuildLandmarker()
+        val after = PerfFlags.config
+        lashRenderer.setOverlayEnabled(after.overlay)
+        val rebuilt = landmarkerNeedsRebuild().also { if (it) rebuildLandmarker() }
         if (helper.getLandmarker() == null) return
-        mainHandler.post { if (!stopped.get()) scheduleRebind() }
+        if (rebuilt || bindFlagsChanged(before, after)) {
+            mainHandler.post { if (!stopped.get()) scheduleRebind() }
+        } else {
+            // Flags que se leen en cada frame (filtro, predicción, eventos):
+            // ya están aplicados, sin cortar la cámara. Solo se actualiza el
+            // `cfg=` para que las próximas líneas lo reflejen.
+            refreshConfigSummary()
+            Log.i(TAG, "PERF_CONFIG en caliente (sin reenlazar) cfg=${PerfStats.configSummary}")
+        }
     }
+
+    /** Flags que solo se aplican al enlazar la cámara. */
+    private fun bindFlagsChanged(a: PerfFlags.Config, b: PerfFlags.Config): Boolean =
+        a.analysisSize != b.analysisSize ||
+            a.useCasesMinimal != b.useCasesMinimal ||
+            a.previewSize != b.previewSize ||
+            a.fpsRange != b.fpsRange ||
+            a.analysisRotationCameraX != b.analysisRotationCameraX
 
     /** `true` si el landmarker vigente se construyó con otros valores de
      * los flags que solo se aplican al construirlo. */
@@ -1002,28 +1021,13 @@ class CameraXManager(
             val previewRes = preview?.resolutionInfo?.resolution
             fun Size?.label() = this?.let { "${it.width}x${it.height}" } ?: "n/d"
             val info = PerfFlags.fileInfo
-            PerfStats.configSummary = listOf(
-                when (build?.delegate) {
-                    "GPU" -> "gpu"
-                    "CPU_forzado" -> "cpu"
-                    "CPU_fallback" -> "cpuFB"
-                    else -> "?"
-                },
-                "bs${if (build?.blendshapes == false) 0 else 1}",
-                analysisRes.label(),
-                "ov${if (cfg.overlay) 1 else 0}",
-                "uc${useCases.size}",
-                "fps-${cfg.fpsRange?.let { if (fpsRequest != null) "$it" else "${it}ign" } ?: "def"}",
-                "lk-${if (build?.lockReleaseAtStart == true) "start" else "end"}",
-                "pv-${previewRes.label()}",
-                "c${build?.detectConf}/${build?.presenceConf}/${build?.trackConf}",
-                "fe-${cfg.flutterEvents.name.lowercase(Locale.US).take(3)}",
-                "fo${if (cfg.flutterOverlays) 1 else 0}",
-                "rot-${if (cfg.analysisRotationCameraX) "cx" else "cv"}",
-                "ex-${if (cfg.softExtrapolation) "soft" else "hard"}",
-                "sb${if (cfg.sampleBlend) 1 else 0}",
-                "fa${if (cfg.forwardAge) 1 else 0}",
-            ).joinToString("|")
+            lastBindFacts = BindFacts(
+                analysis = analysisRes.label(),
+                preview = previewRes.label(),
+                useCaseCount = useCases.size,
+                fpsApplied = fpsRequest != null,
+            )
+            refreshConfigSummary()
             // El mapeo imagen→pantalla (Flutter y el render 3D) trabaja en
             // coordenadas NORMALIZADAS, así que cualquier `analysis_size`
             // cae bien sobre el preview SIEMPRE que análisis y preview tengan
@@ -1058,6 +1062,59 @@ class CameraXManager(
         } catch (e: Exception) {
             onError(e.message ?: "No se pudo enlazar la cámara")
         }
+    }
+
+    /** Lo que resolvió el último enlace y que el `cfg=` necesita; ver
+     * [refreshConfigSummary]. */
+    private data class BindFacts(
+        val analysis: String,
+        val preview: String,
+        val useCaseCount: Int,
+        val fpsApplied: Boolean,
+    )
+
+    @Volatile private var lastBindFacts = BindFacts("?", "?", 0, false)
+
+    /**
+     * Arma el `cfg=` de `TIEMPOS_ETAPAS` con los flags vigentes, lo que
+     * resolvió el último enlace ([lastBindFacts]) y lo que de verdad tiene
+     * el landmarker ([FaceLandmarkerHelper.buildInfo]). Se llama al enlazar
+     * y en cada recarga en caliente que no necesita reenlazar (flags de
+     * filtro/predicción), así cada línea dice con qué se midió.
+     */
+    private fun refreshConfigSummary() {
+        val cfg = PerfFlags.config
+        val build = helper.buildInfo
+        val bind = lastBindFacts
+        fun num(v: Float) = if (v == v.toInt().toFloat()) v.toInt().toString() else v.toString()
+        PerfStats.configSummary = listOf(
+            when (build?.delegate) {
+                "GPU" -> "gpu"
+                "CPU_forzado" -> "cpu"
+                "CPU_fallback" -> "cpuFB"
+                else -> "?"
+            },
+            "bs${if (build?.blendshapes == false) 0 else 1}",
+            bind.analysis,
+            "ov${if (cfg.overlay) 1 else 0}",
+            "uc${bind.useCaseCount}",
+            "fps-${cfg.fpsRange?.let { if (bind.fpsApplied) "$it" else "${it}ign" } ?: "def"}",
+            "lk-${if (build?.lockReleaseAtStart == true) "start" else "end"}",
+            "pv-${bind.preview}",
+            "c${build?.detectConf}/${build?.presenceConf}/${build?.trackConf}",
+            "fe-${cfg.flutterEvents.name.lowercase(Locale.US).take(3)}",
+            "fo${if (cfg.flutterOverlays) 1 else 0}",
+            "rot-${if (cfg.analysisRotationCameraX) "cx" else "cv"}",
+            "ex-${if (cfg.softExtrapolation) "soft" else "hard"}",
+            "sb${if (cfg.sampleBlend) 1 else 0}",
+            "fa${if (cfg.forwardAge) 1 else 0}",
+            "ep${num(cfg.euroPosRef)}",
+            "er${num(cfg.euroRotRef)}",
+            "im${num(cfg.intervalMarginMs)}",
+            "am${num(cfg.absMaxExtrapMs)}",
+            "pl${num(cfg.previewLatencyMs)}",
+            "cs-${if (cfg.closedShiftInFollower) "fol" else "anc"}",
+        ).joinToString("|")
     }
 
     /**

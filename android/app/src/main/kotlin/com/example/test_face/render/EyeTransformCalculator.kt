@@ -25,6 +25,12 @@ data class EyeTransform(
      * [LashMeshBender], necesario para convertir [lashLineCurve] (en
      * píxeles) a unidades locales del mesh. */
     val eyeWidthPx: Float = 0f,
+    /** Unidades de mundo por píxel de la imagen de análisis, a la
+     * profundidad del ojo en este frame (`eyeWidthWorld / widthPx`, sin el
+     * multiplicador de ancho ni la corrección por giro). `0` = no calculado
+     * (camino de malla). Lo usa [LashRenderer] para convertir el
+     * desplazamiento de ojo cerrado, que está en píxeles. */
+    val worldPerImagePx: Float = 0f,
     /** `false` cuando el ojo está lo bastante cerrado como para que la
      * geometría del párpado de este frame ya no describa un párpado abierto
      * — ver [OpennessTracker.update]/[LidShape]. NO decide si la pestaña se
@@ -170,6 +176,7 @@ object EyeTransformCalculator {
             position = rootCorrectedPosition,
             rotation = eyePlane.rotation,
             scale = Float3(scaleFactor, scaleY, scaleFactor),
+            worldPerImagePx = if (anchor.widthPx > 0f && eyeWidthWorld.isFinite()) eyeWidthWorld / anchor.widthPx else 0f,
         )
     }
 }

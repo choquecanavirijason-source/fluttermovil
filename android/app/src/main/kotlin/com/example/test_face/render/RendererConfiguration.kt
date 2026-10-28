@@ -99,7 +99,7 @@ object RendererConfiguration {
     /** Velocidad (en anchos de ojo por segundo) a la que el corte de
      * posición llega a [FAST_MOTION_TARGET_CUTOFF_HZ]. Era 2.0 (beta 9.1);
      * 1.0 → beta 18.2. */
-    private const val FAST_MOTION_POSITION_SPANS_PER_SEC = 1.0f
+    const val FAST_MOTION_POSITION_SPANS_PER_SEC = 1.0f
     const val POSITION_BETA =
         (FAST_MOTION_TARGET_CUTOFF_HZ - POSITION_MIN_CUTOFF) / FAST_MOTION_POSITION_SPANS_PER_SEC
 
@@ -109,7 +109,7 @@ object RendererConfiguration {
      * un giro de cabeza normal. Las rotaciones ya eran adimensionales, así
      * que acá solo cambia la referencia, no la unidad. 0.4 (≈45°/s, modo
      * ultra-reactivo de arriba) → beta 46 (era 24.7). */
-    private const val FAST_MOTION_ROTATION_VELOCITY = 0.4f
+    const val FAST_MOTION_ROTATION_VELOCITY = 0.4f
     const val ROTATION_BETA =
         (FAST_MOTION_TARGET_CUTOFF_HZ - ROTATION_MIN_CUTOFF) / FAST_MOTION_ROTATION_VELOCITY
 
@@ -552,8 +552,16 @@ object RendererConfiguration {
      * FÍSICOS de pantalla (no dp) — pedido tras probar en dispositivo:
      * "bajarle 2 píxeles más" con el ojo cerrado. Mismo sentido y misma
      * proporción al cierre. `0f` vuelve a sólo los dp de arriba.
+     *
+     * 8 → 9 → 11 (2026-10-28): tres píxeles más de traslape en total, para
+     * que la base de la pestaña asiente sobre la línea del párpado cerrado.
+     * Se mueve sobre el plano de la cara (hacia la mejilla), no en
+     * profundidad, así que no la mete dentro de la geometría del rostro; con
+     * el ojo abierto no cambia nada. Desde el mismo cambio se aplica en cada
+     * vsync con el cierre suavizado, no dentro del ancla — ver
+     * `LashRenderer.applyClosedDownShift` (`closed_shift` en perf_flags).
      */
-    const val LASH_CLOSED_DOWN_SHIFT_EXTRA_PX = 8f
+    const val LASH_CLOSED_DOWN_SHIFT_EXTRA_PX = 11f
 
     /**
      * Ganancia de la CURVA DE RESPUESTA del giro: con cuánto cierre medido

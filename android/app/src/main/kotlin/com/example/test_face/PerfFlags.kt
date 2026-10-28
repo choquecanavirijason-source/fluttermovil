@@ -3,6 +3,8 @@ package com.example.test_face
 import android.content.Context
 import android.util.Log
 import android.util.Size
+import com.example.test_face.render.PoseInterpolator
+import com.example.test_face.render.RendererConfiguration
 import java.io.File
 import java.util.Locale
 import java.util.Properties
@@ -94,6 +96,26 @@ object PerfFlags {
          * `off`: el horizonte de antes. Ver
          * [com.example.test_face.render.LashRenderer]. */
         val forwardAge: Boolean = true,
+        // ── Calibración en caliente (se leen en cada frame/vsync) ──────────
+        /** `euro_pos_ref`: anchos de ojo/s a los que el corte del One Euro de
+         * posición llega a 20 Hz (más bajo = más reactivo y más ruido en
+         * movimiento). Default = el valor de RendererConfiguration. */
+        val euroPosRef: Float = RendererConfiguration.FAST_MOTION_POSITION_SPANS_PER_SEC,
+        /** `euro_rot_ref`: lo mismo para rotación (componentes de cuaternión/s). */
+        val euroRotRef: Float = RendererConfiguration.FAST_MOTION_ROTATION_VELOCITY,
+        /** `interval_margin` (ms): el margen del tope dinámico `H + margen`. */
+        val intervalMarginMs: Float = PoseInterpolator.INTERVAL_MARGIN_NANOS / 1_000_000f,
+        /** `abs_max_extrap` (ms): techo absoluto del tope dinámico. */
+        val absMaxExtrapMs: Float = PoseInterpolator.ABSOLUTE_MAX_EXTRAPOLATION_NANOS / 1_000_000f,
+        /** `preview_latency` (ms): latencia del preview que se resta del
+         * horizonte con `forward_age=on`. */
+        val previewLatencyMs: Float = RendererConfiguration.PREVIEW_PATH_LATENCY_NANOS / 1_000_000f,
+        /** `closed_shift=follower` (default): la bajada de la pestaña con el
+         * ojo cerrado se aplica en cada vsync sobre la pose resuelta, con el
+         * cierre suavizado y sin extrapolar. `anchor`: dentro del ancla, como
+         * antes (pasa por One Euro y extrapolación). Ver
+         * [com.example.test_face.render.LashRenderer]. */
+        val closedShiftInFollower: Boolean = true,
     )
 
     /** Resultado de una lectura del archivo, para [CameraXManager]'s
@@ -156,6 +178,11 @@ object PerfFlags {
                 else -> default.also { invalid(key, v) }
             }
         }
+        fun number(key: String, default: Float, range: ClosedFloatingPointRange<Float>): Float {
+            val v = value(key) ?: return default
+            val f = v.toFloatOrNull()
+            return if (f != null && f in range) f else default.also { invalid(key, v) }
+        }
         fun confidence(key: String): Float {
             val v = value(key) ?: return DEFAULT_CONFIDENCE
             val f = v.toFloatOrNull()
@@ -194,6 +221,12 @@ object PerfFlags {
             softExtrapolation = onOff("extrapolation", default = true, on = "soft", off = "hard"),
             sampleBlend = onOff("sample_blend", default = true),
             forwardAge = onOff("forward_age", default = true),
+            euroPosRef = number("euro_pos_ref", Config().euroPosRef, 0.05f..20f),
+            euroRotRef = number("euro_rot_ref", Config().euroRotRef, 0.05f..20f),
+            intervalMarginMs = number("interval_margin", Config().intervalMarginMs, 0f..500f),
+            absMaxExtrapMs = number("abs_max_extrap", Config().absMaxExtrapMs, 50f..1000f),
+            previewLatencyMs = number("preview_latency", Config().previewLatencyMs, 0f..300f),
+            closedShiftInFollower = onOff("closed_shift", default = true, on = "follower", off = "anchor"),
         )
         val entries = props.stringPropertyNames().sorted()
             .joinToString(",") { "$it=${props.getProperty(it).trim()}" }
@@ -227,7 +260,11 @@ object PerfFlags {
             "analysis_rotation=${if (cfg.analysisRotationCameraX) "camerax" else "canvas"} " +
             "extrapolation=${if (cfg.softExtrapolation) "soft" else "hard"} " +
             "sample_blend=${if (cfg.sampleBlend) "on" else "off"} " +
-            "forward_age=${if (cfg.forwardAge) "on" else "off"}"
+            "forward_age=${if (cfg.forwardAge) "on" else "off"} " +
+            "euro_pos_ref=${cfg.euroPosRef} euro_rot_ref=${cfg.euroRotRef} " +
+            "interval_margin=${cfg.intervalMarginMs} abs_max_extrap=${cfg.absMaxExtrapMs} " +
+            "preview_latency=${cfg.previewLatencyMs} " +
+            "closed_shift=${if (cfg.closedShiftInFollower) "follower" else "anchor"}"
 
     private const val TAG = "CameraXManager"
 }

@@ -1,5 +1,3 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 
 import 'package:Probador/core/theme/app_colors.dart';
@@ -80,33 +78,27 @@ class _MenuItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(50),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-          child: Container(
-            padding: const EdgeInsets.all(5),
-            decoration: BoxDecoration(
-              color: isActive
-                  ? AppColors.actionGreen.withValues(alpha: 0.85)
-                  : Colors.white.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(50),
-              border: Border.all(
-                color: isActive
-                    ? AppColors.actionGreen
-                    : Colors.white24,
-              ),
-            ),
-            child: Image.asset(
-              asset,
-              width: 24,
-              height: 24,
-              errorBuilder: (_, __, ___) => const Icon(
-                Icons.circle_outlined,
-                color: Colors.white,
-                size: 24,
-              ),
-            ),
+      child: Container(
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          color: isActive
+              ? AppColors.actionGreen.withValues(alpha: 0.85)
+              : Colors.black.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(50),
+          border: Border.all(
+            color: isActive
+                ? AppColors.actionGreen
+                : Colors.white24,
+          ),
+        ),
+        child: Image.asset(
+          asset,
+          width: 24,
+          height: 24,
+          errorBuilder: (_, __, ___) => const Icon(
+            Icons.circle_outlined,
+            color: Colors.white,
+            size: 24,
           ),
         ),
       ),

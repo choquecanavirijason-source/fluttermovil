@@ -87,8 +87,19 @@ class EyeTrackingFilter {
     fun apply(target: EyeTransform, tNanos: Long = System.nanoTime(), naturalSpan: Float = 0f): EyeTransform {
         val now = tNanos
 
+        // `euro_pos_ref`/`euro_rot_ref` (perf_flags, en caliente): β se
+        // calculó para la referencia de RendererConfiguration; con otra
+        // referencia `r` el β equivalente es β·(ref_default/r). Se aplica
+        // como factor sobre la velocidad — `beta·|v|·speedScale` — que es
+        // exactamente lo mismo sin rehacer los filtros. Con los defaults el
+        // factor es 1.
+        val flags = com.example.test_face.PerfFlags.config
+        val positionRefRatio = RendererConfiguration.FAST_MOTION_POSITION_SPANS_PER_SEC / flags.euroPosRef
+        val rotationRefRatio = RendererConfiguration.FAST_MOTION_ROTATION_VELOCITY / flags.euroRotRef
+
         val widthWorld = target.scale.x * naturalSpan
-        val positionSpeedScale = if (widthWorld > 1e-6f && widthWorld.isFinite()) 1f / widthWorld else 1f
+        val positionSpeedScale =
+            (if (widthWorld > 1e-6f && widthWorld.isFinite()) 1f / widthWorld else 1f) * positionRefRatio
         val position = Float3(
             posX.filter(target.position.x, now, positionSpeedScale),
             posY.filter(target.position.y, now, positionSpeedScale),
@@ -101,10 +112,10 @@ class EyeTrackingFilter {
         val raw = target.rotation
         val aligned = alignQuaternion(raw)
 
-        val qx = rotX.filter(aligned.x, now)
-        val qy = rotY.filter(aligned.y, now)
-        val qz = rotZ.filter(aligned.z, now)
-        val qw = rotW.filter(aligned.w, now)
+        val qx = rotX.filter(aligned.x, now, rotationRefRatio)
+        val qy = rotY.filter(aligned.y, now, rotationRefRatio)
+        val qz = rotZ.filter(aligned.z, now, rotationRefRatio)
+        val qw = rotW.filter(aligned.w, now, rotationRefRatio)
         val rotation = normalizedQuaternion(qx, qy, qz, qw)
         lastAlignedQ = rotation
 

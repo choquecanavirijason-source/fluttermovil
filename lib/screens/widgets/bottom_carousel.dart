@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -75,12 +74,15 @@ class BottomCarousel extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
+          // Fondo translúcido SÓLIDO, no blur: con la cámara como
+          // PlatformView (Hybrid Composition) el raster de Flutter corre en
+          // el hilo principal de Android, y un BackdropFilter por encima del
+          // preview costaba GPU y ese hilo en cada frame.
           Positioned.fill(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 25, sigmaY: 15),
-                child: const ColoredBox(color: Colors.transparent),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(10),
               ),
             ),
           ),

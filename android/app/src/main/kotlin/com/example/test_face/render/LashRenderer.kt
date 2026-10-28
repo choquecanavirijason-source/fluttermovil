@@ -175,6 +175,134 @@ class LashRenderer(
      * [PoseInterpolator]), suavizada a tasa de pantalla por [PoseFollower] —
      * no-op si el nodo no existe o está oculto (rostro perdido o cara en
      * movimiento, ver [showSlot]/[releaseSlot]/[hideSlotWhileMoving]). */
+    /** Desplazamiento total con el ojo cerrado, en píxeles de la imagen de
+     * análisis (dp + px físicos de [RendererConfiguration], convertidos con
+     * el encuadre). Lo escribe [onFaceResult]; lo lee el vsync. */
+    @Volatile private var closedDownShiftImagePx = 0f
+
+    /**
+     * Cuánto mover la pestaña hacia la MEJILLA en este vsync, en mundo.
+     *
+     * ## Por qué acá y no en el ancla
+     *
+     * Antes este desplazamiento iba dentro del ANCLA ([EyeAnchorCalculator]),
+     * o sea dentro de la pose que se filtra y se EXTRAPOLA. Con blendshapes
+     * la apertura es binaria ([OpennessTracker.updateFromBlendshape]): al
+     * cerrar el ojo la posición pegaba un escalón entre dos resultados, el
+     * One Euro (ultra-reactivo) lo dejaba pasar como "movimiento rápido" y
+     * [PoseInterpolator] lo proyectaba cientos de ms hacia adelante: la
+     * pestaña se pasaba de largo y volvía. Es el mismo motivo por el que
+     * [LidDropRotation] se aplica al final.
+     *
+     * Ahora se aplica sobre la pose ya resuelta, escalado por
+     * [PoseFollower.closedAmount] — el MISMO cierre suavizado (τ del
+     * seguidor) que usa el volcado, así bajada y giro van juntos, en una
+     * rampa continua y sin extrapolar.
+     *
+     * Dirección: `−up` de la CARA, `up = R(q)·(0,1,0)` (el +Y local es
+     * "hacia la ceja", ver [LidDropRotation]). Va en el plano de la cara, no
+     * en profundidad: no mete la pestaña dentro del rostro, y como sigue a
+     * la pose vale igual con la clienta acostada.
+     *
+     * Escala px → mundo: [EyeModelSlot.worldPerImagePx], medida en el mismo
+     * des-proyectado con que [EyeTransformCalculator] saca el ancho real del
+     * ojo — a la profundidad del ojo, sin el multiplicador de ancho ni la
+     * corrección por giro (que llega a 2.2× y desplazaría de más con la
+     * cabeza girada). Si no hay dato (camino de malla), cae a
+     * `eyeSpanWorld / (eyeWidthPx · WIDTH_MULTIPLIER)`.
+     */
+    private fun applyClosedDownShift(
+        slot: EyeModelSlot,
+        transform: EyeTransform,
+        closedAmount: Float,
+        q: Quaternion,
+    ): Float3 {
+        if (!com.example.test_face.PerfFlags.config.closedShiftInFollower) return Float3()
+        val shiftPx = closedDownShiftImagePx
+        val widthPx = transform.eyeWidthPx
+        if (shiftPx <= 0f || !closedAmount.isFinite() || closedAmount <= 1e-3f) return Float3()
+        val measured = slot.worldPerImagePx
+        val worldPerPx = when {
+            measured > 0f -> measured
+            widthPx.isFinite() && widthPx > 1e-3f ->
+                eyeSpanWorld(slot) / (widthPx * RendererConfiguration.WIDTH_MULTIPLIER)
+            else -> return Float3()
+        }
+        val amount = shiftPx * worldPerPx * closedAmount.coerceIn(0f, 1f)
+        if (!amount.isFinite()) return Float3()
+        // up = R(q)·(0,1,0)
+        val upX = 2f * (q.x * q.y - q.w * q.z)
+        val upY = 1f - 2f * (q.x * q.x + q.z * q.z)
+        val upZ = 2f * (q.y * q.z + q.w * q.x)
+        return Float3(-upX * amount, -upY * amount, -upZ * amount)
+    }
+
+    /** Ancho del ojo en unidades de mundo (misma medida que usa
+     * [EyeTrackingFilter] para expresar velocidades en anchos de ojo). */
+    private fun eyeSpanWorld(slot: EyeModelSlot): Float = slot.naturalSpan * slot.follower.scaleX
+
+    // DIAGNÓSTICO `temblor=` (ver [PerfStats.onPoseJitter]): las dos poses
+    // anteriores del ojo izquierdo. Solo el hilo principal.
+    private var jitterPrevPos: Float3? = null
+    private var jitterPrevPrevPos: Float3? = null
+    private var jitterPrevRot: Quaternion? = null
+    private var jitterPrevStep: Float3? = null
+    private var jitterLastNanos = 0L
+
+    /**
+     * Segunda diferencia de la pose que se escribe en el nodo, por vsync: en
+     * posición `|p_t − 2p_{t−1} + p_{t−2}|` en anchos de ojo, y en rotación
+     * el cambio entre dos giros consecutivos (vector de rotación por vsync),
+     * en grados. Una pestaña que se mueve suave da ~0 aunque vaya rápido; un
+     * rebote o un temblor la disparan — es el número que compara
+     * configuraciones sin depender del ojo de quien mira.
+     */
+    private fun recordPoseJitter(position: Float3, rotation: Quaternion, span: Float, nowNanos: Long) {
+        // Tras un hueco (nodo oculto, rostro perdido) la "pose anterior" es
+        // de antes del hueco: daría un pico falso. Se rearma la historia.
+        if (nowNanos - jitterLastNanos > JITTER_MAX_GAP_NANOS) {
+            jitterPrevPos = null
+            jitterPrevPrevPos = null
+            jitterPrevRot = null
+            jitterPrevStep = null
+        }
+        jitterLastNanos = nowNanos
+        val p1 = jitterPrevPos
+        val p2 = jitterPrevPrevPos
+        val r1 = jitterPrevRot
+        val step = r1?.let { rotationVectorDegrees(rotation, it) }
+        val s1 = jitterPrevStep
+        if (p1 != null && p2 != null && step != null && s1 != null && span > 1e-6f) {
+            val d = position - p1 * 2f + p2
+            val dr = step - s1
+            com.example.test_face.PerfStats.onPoseJitter(
+                spans = kotlin.math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z) / span,
+                degrees = kotlin.math.sqrt(dr.x * dr.x + dr.y * dr.y + dr.z * dr.z),
+            )
+        }
+        jitterPrevPrevPos = p1
+        jitterPrevPos = position
+        jitterPrevRot = rotation
+        jitterPrevStep = step
+    }
+
+    /** Giro de [from] a [to] como vector de rotación (eje × ángulo), en
+     * grados — por el camino corto. */
+    private fun rotationVectorDegrees(to: Quaternion, from: Quaternion): Float3 {
+        // d = to · conj(from)
+        val fx = -from.x; val fy = -from.y; val fz = -from.z; val fw = from.w
+        var x = to.w * fx + to.x * fw + to.y * fz - to.z * fy
+        var y = to.w * fy - to.x * fz + to.y * fw + to.z * fx
+        var z = to.w * fz + to.x * fy - to.y * fx + to.z * fw
+        var w = to.w * fw - to.x * fx - to.y * fy - to.z * fz
+        if (w < 0f) { x = -x; y = -y; z = -z; w = -w }
+        val sinHalf = kotlin.math.sqrt(x * x + y * y + z * z)
+        if (sinHalf < 1e-7f) return Float3()
+        val angleDeg = Math.toDegrees(2.0 * kotlin.math.atan2(sinHalf.toDouble(), w.toDouble())).toFloat()
+        val k = angleDeg / sinHalf
+        return Float3(x * k, y * k, z * k)
+    }
+
     private fun writeInterpolatedPose(slot: EyeModelSlot, nowNanos: Long) {
         val node = slot.node ?: return
         if (!node.isVisible) return
@@ -204,13 +332,23 @@ class LashRenderer(
         // tiene que caer sobre la cara TAL COMO SE VE en el preview, que
         // también va atrasada. Sin este tramo la pose se dibujaba ~edad_envio
         // en el pasado: el "arrastre" al girar rápido.
-        val previewNanos = if (measuredPreSubmitNanos > 0L) RendererConfiguration.PREVIEW_PATH_LATENCY_NANOS else 0L
+        // `preview_latency` de perf_flags (en caliente); default =
+        // [RendererConfiguration.PREVIEW_PATH_LATENCY_NANOS].
+        val previewNanos = if (measuredPreSubmitNanos > 0L) {
+            (com.example.test_face.PerfFlags.config.previewLatencyMs * 1_000_000f).toLong()
+        } else {
+            0L
+        }
         val horizonNanos = measuredLatencyNanos +
             measuredPreSubmitNanos - previewNanos +
             filterDelayNanos +
             RendererConfiguration.POSE_FOLLOW_TAU_NANOS +
             RendererConfiguration.EXTRA_LATENCY_TRIM_NANOS
-        val transform = slot.interpolator.sample(nowNanos, horizonNanos.coerceAtLeast(0L)) ?: return
+        val transform = slot.interpolator.sample(
+            nowNanos,
+            horizonNanos.coerceAtLeast(0L),
+            statsEyeSpanWorld = if (slot === leftSlot) eyeSpanWorld(slot) else 0f,
+        ) ?: return
         if (slot === leftSlot) {
             com.example.test_face.PerfStats.onExtrapolationSample(slot.interpolator.lastSampleSaturated)
         }
@@ -253,6 +391,13 @@ class LashRenderer(
 
         var position = Float3(f.posX, f.posY, f.posZ)
         var rotation = Quaternion(f.rotX, f.rotY, f.rotZ, f.rotW)
+        if (slot === leftSlot) recordPoseJitter(position, rotation, eyeSpanWorld(slot), nowNanos)
+
+        // OJO CERRADO: la pestaña baja hacia la mejilla — ver
+        // [applyClosedDownShift]. Con la orientación de la CARA (antes del
+        // volcado de abajo), para que "abajo" sea el de la cara y no el de la
+        // pestaña ya girada.
+        position += applyClosedDownShift(slot, transform, f.closedAmount, rotation)
 
         // OJO CERRÁNDOSE: la pestaña gira hacia abajo con el párpado (ver
         // [LidDropRotation]). Va acá, al final de todo, y no en el cálculo de
@@ -423,6 +568,11 @@ class LashRenderer(
         } else {
             0f
         }
+        // `closed_shift=follower` (default, ver [applyClosedDownShift]): el
+        // desplazamiento NO entra al ancla — se aplica en cada vsync sobre la
+        // pose ya resuelta. `anchor`: el camino de antes, dentro del ancla.
+        closedDownShiftImagePx = closedDownShiftPx
+        val anchorShiftPx = if (com.example.test_face.PerfFlags.config.closedShiftInFollower) 0f else closedDownShiftPx
 
         val pipelineResult = try {
             FaceRenderPipeline.compute(
@@ -442,7 +592,7 @@ class LashRenderer(
                 rightBlinkTracker = rightSlot.openness,
                 leftLidShape = leftSlot.lidShape,
                 rightLidShape = rightSlot.lidShape,
-                closedDownShiftPx = closedDownShiftPx,
+                closedDownShiftPx = anchorShiftPx,
             )
         } catch (e: Exception) {
             Log.e(TAG, "onFaceResult: fallo calculando la transformación", e)
@@ -646,6 +796,10 @@ class LashRenderer(
         if (transform == null) {
             releaseSlot(slot)
             return
+        }
+        // Ver [applyClosedDownShift]: conversión px → mundo de ESTE frame.
+        if (transform.worldPerImagePx > 0f && transform.worldPerImagePx.isFinite()) {
+            slot.worldPerImagePx = transform.worldPerImagePx
         }
         // EL PARPADEO YA NO OCULTA NI ENCOGE LA PESTAÑA.
         //
@@ -1048,5 +1202,8 @@ class LashRenderer(
 
         /** Ver [latencyLogFrames]. */
         private const val LATENCY_LOG_EVERY_FRAMES = 120
+
+        /** Ver [recordPoseJitter]: más de ~3 vsync sin escribir pose = hueco. */
+        private const val JITTER_MAX_GAP_NANOS = 50_000_000L
     }
 }

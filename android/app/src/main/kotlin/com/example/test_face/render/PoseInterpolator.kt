@@ -83,10 +83,17 @@ class PoseInterpolator {
      * con 2 usa lineal; con 1 devuelve la muestra directa. Al cambiar de
      * muestra, la corrección se reparte en el tiempo — ver [blend].
      */
-    fun sample(nowNanos: Long, latencyNanos: Long = 35_000_000L): EyeTransform? {
+    fun sample(
+        nowNanos: Long,
+        latencyNanos: Long = 35_000_000L,
+        /** Ancho del ojo en unidades de mundo; `> 0` = registrar la
+         * corrección de cada muestra en [com.example.test_face.PerfStats]
+         * (lo pasa solo el ojo izquierdo, para no contar doble). */
+        statsEyeSpanWorld: Float = 0f,
+    ): EyeTransform? {
         val latest = s2 ?: return null
         val predicted = predict(latest, nowNanos, latencyNanos)
-        return blend(predicted, latest, nowNanos)
+        return blend(predicted, latest, nowNanos, statsEyeSpanWorld)
     }
 
     /**
@@ -111,10 +118,17 @@ class PoseInterpolator {
      * rostro, que ya maneja [PoseFollower.softenRecovery]) ni durante el
      * calentamiento. `sample_blend=off` en perf_flags lo desactiva.
      */
-    private fun blend(predicted: EyeTransform, latest: Sample, nowNanos: Long): EyeTransform {
+    private fun blend(
+        predicted: EyeTransform,
+        latest: Sample,
+        nowNanos: Long,
+        statsEyeSpanWorld: Float,
+    ): EyeTransform {
         val generation = historyGeneration
-        val enabled = com.example.test_face.PerfFlags.config.sampleBlend &&
-            pushesSinceReset >= WARMUP_PUSHES && generation == seenGeneration
+        // `valid`: hay una salida anterior comparable (sin reset/recuperación
+        // de por medio y pasado el calentamiento). `enabled`: además se mezcla.
+        val valid = pushesSinceReset >= WARMUP_PUSHES && generation == seenGeneration
+        val enabled = valid && com.example.test_face.PerfFlags.config.sampleBlend
         seenGeneration = generation
         // Una salida de hace más de [STALE_OUTPUT_NANOS] (nodo oculto, sin
         // vsync que pidiera pose) no es "donde estaba" la pestaña en pantalla:
@@ -123,11 +137,22 @@ class PoseInterpolator {
         lastOutputNanos = nowNanos
         if (latest !== lastOutputLatest) {
             lastOutputLatest = latest
-            if (enabled && previous != null) {
+            if (valid && previous != null) {
                 correctionPos = previous.position - predicted.position
                 correctionScale = previous.scale - predicted.scale
                 correctionRot = multiply(previous.rotation, conjugate(alignTo(predicted.rotation, previous.rotation)))
                 correctionStartNanos = nowNanos
+                // DIAGNÓSTICO (`correccion=` en TIEMPOS_ETAPAS): el tamaño
+                // del salto que trae la muestra nueva respecto de lo que se
+                // mostraba — el error de predicción. Se mide también con
+                // `sample_blend=off` (ahí es el salto que SÍ se ve), así las
+                // dos configuraciones se comparan con el mismo número.
+                if (statsEyeSpanWorld > 1e-6f) {
+                    com.example.test_face.PerfStats.onSampleCorrection(
+                        spans = length(correctionPos) / statsEyeSpanWorld,
+                        degrees = angleDegrees(correctionRot),
+                    )
+                }
             } else {
                 correctionPos = Float3()
                 correctionScale = Float3()
@@ -172,7 +197,7 @@ class PoseInterpolator {
         // horizonte la suposición de velocidad constante deja de valer, y eso
         // no depende de a qué ritmo entregue resultados el dispositivo.
         val flags = com.example.test_face.PerfFlags.config
-        val cap = capFor(latencyNanos, flags.forwardAge)
+        val cap = capFor(latencyNanos, flags)
         lastCapNanos = cap
         lastSampleSaturated = elapsed > cap
         val t = effectiveElapsed(elapsed, cap, flags.softExtrapolation) / dt1
@@ -220,10 +245,13 @@ class PoseInterpolator {
      * frena serían un sobrepaso grande. Con `forward_age=off` el tope es el
      * fijo de antes.
      */
-    private fun capFor(horizonNanos: Long, forwardAge: Boolean): Float {
-        if (!forwardAge) return MAX_EXTRAPOLATION_NANOS
-        return (horizonNanos.toFloat() + INTERVAL_MARGIN_NANOS)
-            .coerceIn(MAX_EXTRAPOLATION_NANOS, ABSOLUTE_MAX_EXTRAPOLATION_NANOS)
+    private fun capFor(horizonNanos: Long, flags: com.example.test_face.PerfFlags.Config): Float {
+        if (!flags.forwardAge) return MAX_EXTRAPOLATION_NANOS
+        // `interval_margin`/`abs_max_extrap` de perf_flags (en caliente);
+        // defaults = [INTERVAL_MARGIN_NANOS]/[ABSOLUTE_MAX_EXTRAPOLATION_NANOS].
+        val margin = flags.intervalMarginMs * 1_000_000f
+        val ceiling = (flags.absMaxExtrapMs * 1_000_000f).coerceAtLeast(MAX_EXTRAPOLATION_NANOS)
+        return (horizonNanos.toFloat() + margin).coerceIn(MAX_EXTRAPOLATION_NANOS, ceiling)
     }
 
     /**
@@ -366,6 +394,10 @@ class PoseInterpolator {
     )
 
     private fun conjugate(q: Quaternion): Quaternion = Quaternion(-q.x, -q.y, -q.z, q.w)
+
+    /** Ángulo de giro de un cuaternión unitario, en grados (0-180). */
+    private fun angleDegrees(q: Quaternion): Float =
+        Math.toDegrees(2.0 * kotlin.math.acos(kotlin.math.abs(q.w).coerceIn(0f, 1f).toDouble())).toFloat()
 
     /** [q] o `−q` (misma rotación), el que esté en el hemisferio de [ref]:
      * así la diferencia es el giro CORTO entre las dos. */

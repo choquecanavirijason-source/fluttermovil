@@ -18,6 +18,10 @@ class EyeModelSlot {
      * del ojo, así las pestañas siempre se ajustan al ojo real. */
     var naturalSpan = 1f
 
+    /** [EyeTransform.worldPerImagePx] del último resultado — lo escribe el
+     * hilo del resultado y lo lee el vsync ([LashRenderer]). `0` = sin dato. */
+    @Volatile var worldPerImagePx = 0f
+
     /** [RawMesh.minY] — la raíz real de la pestaña en unidades locales del
      * `.glb` (mismo sistema de unidades que [naturalSpan], sin escalar).
      * `0f` mientras el mesh no haya terminado de parsear (degrada al

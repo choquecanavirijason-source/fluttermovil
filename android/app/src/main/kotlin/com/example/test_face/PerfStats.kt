@@ -44,6 +44,23 @@ object PerfStats {
     private var extrapolationSamples = 0
     private var extrapolationSaturated = 0
 
+    // Hilo principal, ojo izquierdo. CORRECCIÓN: el salto entre la pose que
+    // se estaba mostrando y la predicción nueva cuando llega una muestra
+    // (lo que [com.example.test_face.render.PoseInterpolator] reparte con la
+    // mezcla). Es el error de predicción: con buena predicción, ~0.
+    private var correctionCount = 0
+    private var correctionSpansSum = 0f
+    private var correctionDegSum = 0f
+    private var correctionSpansMax = 0f
+    private var correctionDegMax = 0f
+
+    // TEMBLOR por vsync: segunda diferencia de la pose escrita en el nodo
+    // (|p_t − 2p_{t−1} + p_{t−2}|, y su análogo angular). Un movimiento
+    // suave da ~0 aunque sea rápido; un rebote o un ruido la disparan.
+    private var jitterCount = 0
+    private var jitterSpansSum = 0f
+    private var jitterDegSum = 0f
+
     // Solo con `lock_release=start` (hilo de cómputo, ver
     // [FaceLandmarkerHelper]); `n/d` en el modo de siempre.
     @Volatile private var computeMs = Float.NaN
@@ -134,6 +151,25 @@ object PerfStats {
         if (saturated) extrapolationSaturated++
     }
 
+    /** Hilo principal: corrección al llegar una muestra, en anchos de ojo y
+     * grados. */
+    fun onSampleCorrection(spans: Float, degrees: Float) {
+        if (!spans.isFinite() || !degrees.isFinite()) return
+        correctionCount++
+        correctionSpansSum += spans
+        correctionDegSum += degrees
+        if (spans > correctionSpansMax) correctionSpansMax = spans
+        if (degrees > correctionDegMax) correctionDegMax = degrees
+    }
+
+    /** Hilo principal: segunda diferencia de la pose escrita, por vsync. */
+    fun onPoseJitter(spans: Float, degrees: Float) {
+        if (!spans.isFinite() || !degrees.isFinite()) return
+        jitterCount++
+        jitterSpansSum += spans
+        jitterDegSum += degrees
+    }
+
     fun onCameraFrame() { cameraFrames.incrementAndGet() }
     fun onDiscarded() { discarded.incrementAndGet() }
     fun onResult(faceDetected: Boolean) {
@@ -161,6 +197,22 @@ object PerfStats {
         val computeDrop = computeDropped.getAndSet(0)
         fun rate(n: Int) = if (windowSec > 0f) n / windowSec else Float.NaN
 
+        // Con el equipo en estrangulamiento térmico la CPU/GPU bajan de
+        // frecuencia y los tiempos no se pueden comparar con los de otra
+        // corrida: se avisa en una línea propia, ANTES de la medición, para
+        // que no pase desapercibido en el log pegado.
+        val thermal = thermalStatus()
+        if (thermal in NON_COMPARABLE_THERMAL) {
+            Log.w(TAG, "TERMICO_ALERTA termico=$thermal: la ventana siguiente de TIEMPOS_ETAPAS NO es comparable")
+        }
+        fun mean(sum: Float, n: Int) = if (n > 0) sum / n else Float.NaN
+        val correction = "correccion=${fmt3(mean(correctionSpansSum, correctionCount))}an/" +
+            "${fmt(mean(correctionDegSum, correctionCount))}°" +
+            "(max ${fmt3(if (correctionCount > 0) correctionSpansMax else Float.NaN)}an/" +
+            "${fmt(if (correctionCount > 0) correctionDegMax else Float.NaN)}° n=$correctionCount)"
+        val jitter = "temblor=${fmt3(mean(jitterSpansSum, jitterCount))}an/" +
+            "${fmt3(mean(jitterDegSum, jitterCount))}°_por_vsync"
+
         val proxyAge = when (sensorTimestampRealtime) {
             true -> "${fmt(proxyAgeMs)}ms edad_envio=${fmt(submitAgeMs)}ms"
             false -> "no_medible(SENSOR_INFO_TIMESTAMP_SOURCE!=REALTIME)"
@@ -180,7 +232,8 @@ object PerfStats {
                 "periodo=${fmt(refreshPeriodNanos / 1_000_000f)}ms " +
                 "sin_rostro=${if (res > 0) (noFace * 100f / res).roundToInt() else 0}% " +
                 "extrap_saturada=$extrapolationSaturated/$extrapolationSamples " +
-                "ventana=${fmt(windowSec)}s termico=${thermalStatus()}",
+                "$correction $jitter " +
+                "ventana=${fmt(windowSec)}s termico=$thermal",
         )
 
         vsyncCount = 0
@@ -190,6 +243,14 @@ object PerfStats {
         maxIntervalNanos = 0L
         extrapolationSamples = 0
         extrapolationSaturated = 0
+        correctionCount = 0
+        correctionSpansSum = 0f
+        correctionDegSum = 0f
+        correctionSpansMax = 0f
+        correctionDegMax = 0f
+        jitterCount = 0
+        jitterSpansSum = 0f
+        jitterDegSum = 0f
         // Se relee por ventana: con refresco variable (60/90/120 Hz) el
         // período cambia y un valor fijo contaría mal los frames largos.
         refreshPeriodNanos = readRefreshPeriodNanos()
@@ -227,4 +288,9 @@ object PerfStats {
     }
 
     private fun fmt(v: Float): String = if (v.isNaN()) "n/d" else String.format(Locale.US, "%.1f", v)
+
+    private fun fmt3(v: Float): String = if (v.isNaN()) "n/d" else String.format(Locale.US, "%.3f", v)
+
+    /** Estados térmicos con los que la medición no es comparable. */
+    private val NON_COMPARABLE_THERMAL = setOf("SEVERE", "CRITICAL", "EMERGENCY", "SHUTDOWN")
 }

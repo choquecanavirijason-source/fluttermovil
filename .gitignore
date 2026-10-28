@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+exp_*.txt
+log_latencia.txt
+perf_flags.properties
