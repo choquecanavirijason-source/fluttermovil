@@ -10,6 +10,15 @@ import java.nio.FloatBuffer
  * propia usada para el doblado del párpado (ver [LashMeshBender],
  * [LashRenderer.loadIntoSlot]). */
 class EyeModelSlot {
+    // Diagnostic identity only; never consulted to gate functional tracking or buffer reuse.
+    internal val bufferModelGeneration = java.util.concurrent.atomic.AtomicLong()
+    internal val bufferTrackingGeneration = java.util.concurrent.atomic.AtomicLong()
+    @Volatile internal var bufferTraceBinding: BufferLifetimeTelemetry.Binding? = null
+
+    internal fun traceTrackingBoundary() {
+        val generation = bufferTrackingGeneration.incrementAndGet()
+        bufferTraceBinding?.boundary(generation)
+    }
     var node: ModelNode? = null
     var path: String? = null
 
@@ -160,6 +169,10 @@ class EyeModelSlot {
     var lastBandScale = 1f
 
     fun reset() {
+        bufferModelGeneration.incrementAndGet()
+        traceTrackingBoundary()
+        bufferTraceBinding?.retire(bufferTrackingGeneration.get())
+        bufferTraceBinding = null
         node = null
         path = null
         naturalSpan = 1f

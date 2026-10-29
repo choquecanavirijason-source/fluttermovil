@@ -22,17 +22,45 @@ import kotlin.math.sqrt
  * estaba cuando se capturó el frame que MediaPipe acaba de procesar.
  */
 class PoseInterpolator {
-    private data class Sample(val transform: EyeTransform, val tNanos: Long)
+    private data class Sample(val transform: EyeTransform, val tNanos: Long,
+        val publication: PredictorTimingTelemetry.Publication? = null,
+        val trajectory: PoseTrajectoryTelemetry.Processed? = null)
 
     @Volatile private var s0: Sample? = null
     @Volatile private var s1: Sample? = null
     @Volatile private var s2: Sample? = null
     @Volatile private var pushesSinceReset = 0
 
-    fun push(transform: EyeTransform, tNanos: Long) {
+    // Render-thread diagnostic state only. Never fed back into prediction/blend.
+    private var traceCollecting = false
+    private var traceMid: Sample? = null
+    private var tracePrev: Sample? = null
+    private var traceCap = 0f
+    private var traceSoft = false
+    private var traceHistoryLatest: Sample? = null
+    private var traceHistoryMid: Sample? = null
+    private var traceHistoryPrev: Sample? = null
+    private var traceHistoryGeneration = -1
+    private var traceLastNow = 0L
+    private var traceTarget: EyeTransform? = null
+    private var traceEye = -1
+    private var traceSpan = 0f
+    private var traceRequestedNs = 0f
+    private var traceFactor = 0f
+    private var traceFunctionalDtNs = 0f
+    private var traceTimingMid: Sample? = null
+    private var traceTimingLatest: Sample? = null
+    private var traceTimingGeneration = -1
+    private var trajectoryLatest: Sample? = null
+    private var trajectoryPredicted: EyeTransform? = null
+    private var trajectoryBlended: EyeTransform? = null
+    private var trajectoryGeneration = 0
+
+    fun push(transform: EyeTransform, tNanos: Long, publication: PredictorTimingTelemetry.Publication? = null,
+        trajectory: PoseTrajectoryTelemetry.Processed? = null) {
         s0 = s1
         s1 = s2
-        s2 = Sample(transform, tNanos)
+        s2 = Sample(transform, tNanos, publication, trajectory)
         pushesSinceReset++
     }
 
@@ -90,10 +118,93 @@ class PoseInterpolator {
          * corrección de cada muestra en [com.example.test_face.PerfStats]
          * (lo pasa solo el ojo izquierdo, para no contar doble). */
         statsEyeSpanWorld: Float = 0f,
+        traceEye: Int = -1,
+        traceSpanWorld: Float = 0f,
     ): EyeTransform? {
+        traceCollecting = com.example.test_face.PerfFlags.config.timestampTrace &&
+            traceEye in 0..1 && PoseTraceTelemetry.sink != null
+        traceMid = null
+        tracePrev = null
+        val traceGeneration = historyGeneration
         val latest = s2 ?: return null
         val predicted = predict(latest, nowNanos, latencyNanos)
-        return blend(predicted, latest, nowNanos, statsEyeSpanWorld)
+        val out = blend(predicted, latest, nowNanos, statsEyeSpanWorld)
+        if (PoseTrajectoryTelemetry.current != null) {
+            trajectoryLatest = latest
+            trajectoryPredicted = predicted
+            trajectoryBlended = out
+            trajectoryGeneration = traceGeneration
+        } else {
+            trajectoryLatest = null
+            trajectoryPredicted = null
+            trajectoryBlended = null
+        }
+        if (traceCollecting && traceGeneration == historyGeneration) {
+            val sink = PoseTraceTelemetry.sink
+            val usedMid = traceMid
+            if (usedMid != null && (traceTimingMid !== usedMid || traceTimingLatest !== latest ||
+                    traceTimingGeneration != traceGeneration)) {
+                sink?.offerTiming(traceEye, System.identityHashCode(this), traceGeneration,
+                    usedMid.publication, latest.publication, usedMid.transform, latest.transform,
+                    usedMid.tNanos, latest.tNanos, if (tracePrev != null) 2 else 1,
+                    latencyNanos, traceRequestedNs, traceCap, traceFactor, traceFunctionalDtNs, traceSoft)
+                traceTimingMid = usedMid
+                traceTimingLatest = latest
+                traceTimingGeneration = traceGeneration
+            }
+            val old = traceHistoryLatest
+            val mid = traceHistoryMid
+            val prev = traceHistoryPrev
+            if (old != null && mid != null && traceMid != null && old !== latest &&
+                traceHistoryGeneration == traceGeneration && nowNanos - traceLastNow in 0L..100_000_000L
+            ) {
+                sink?.offer(0, traceEye, System.identityHashCode(this), traceGeneration, latest.tNanos,
+                    nowNanos, traceSpanWorld, null, predicted,
+                    prev?.transform, mid.transform, old.transform,
+                    prev?.tNanos ?: 0L, mid.tNanos, old.tNanos,
+                    latencyNanos, traceCap, traceSoft)
+            }
+            sink?.offer(1, traceEye, System.identityHashCode(this), traceGeneration, latest.tNanos,
+                nowNanos, traceSpanWorld, predicted, out)
+            traceHistoryLatest = latest
+            traceHistoryMid = traceMid
+            traceHistoryPrev = tracePrev
+            traceHistoryGeneration = traceGeneration
+            traceLastNow = nowNanos
+            traceTarget = out
+            this.traceEye = traceEye
+            traceSpan = traceSpanWorld
+        } else {
+            traceHistoryLatest = null
+            traceTarget = null
+        }
+        return out
+    }
+
+    /** Render-only observation, after final node writes. No functional state is changed. */
+    internal fun traceTrajectory(capture: PoseTrajectoryTelemetry.Capture, eye: Int, evaluation: Long,
+        frameTime: Long, follower: PoseFollower?, finalPosition: Float3?, finalRotation: Quaternion?,
+        lostFrames: Int, flags: Int = 0) {
+        // Status rows do not claim a sample was evaluated or a node pose was written.
+        val used = if (follower != null || flags and 512 != 0) trajectoryLatest else null
+        capture.offer(System.identityHashCode(this), eye,
+            if (used != null) trajectoryGeneration else historyGeneration,
+            used?.tNanos ?: 0L, evaluation, frameTime, used?.trajectory, used?.publication?.frame,
+            if (used != null) trajectoryPredicted else null,
+            if (used != null) trajectoryBlended else null,
+            follower, finalPosition, finalRotation, lostFrames,
+            flags or if (used != null && trajectoryGeneration != historyGeneration) 4 else 0)
+    }
+
+    /** Observe the already-computed follower result, before aesthetic lid transforms. */
+    internal fun traceFollower(follower: PoseFollower, nowNanos: Long) {
+        if (!com.example.test_face.PerfFlags.config.timestampTrace || !traceCollecting) return
+        val target = traceTarget ?: return
+        val latest = traceHistoryLatest ?: return
+        PoseTraceTelemetry.sink?.offer(2, traceEye, System.identityHashCode(this), traceHistoryGeneration,
+            latest.tNanos, nowNanos, traceSpan, null, target,
+            px = follower.posX, py = follower.posY, pz = follower.posZ,
+            qx = follower.rotX, qy = follower.rotY, qz = follower.rotZ, qw = follower.rotW)
     }
 
     /**
@@ -183,6 +294,7 @@ class PoseInterpolator {
         val mid = s1 ?: return latest.transform
         val dt1 = (latest.tNanos - mid.tNanos).toFloat()
         if (dt1 <= 0f) return latest.transform
+        if (traceCollecting) traceMid = mid
 
         // Timestamp predicho: ahora + latencia de pipeline completo.
         // Esto hace que el modelo se renderice donde el rostro ESTÁ AHORA,
@@ -198,14 +310,17 @@ class PoseInterpolator {
         // no depende de a qué ritmo entregue resultados el dispositivo.
         val flags = com.example.test_face.PerfFlags.config
         val cap = capFor(latencyNanos, flags)
+        if (traceCollecting) { traceCap = cap; traceSoft = flags.softExtrapolation }
         lastCapNanos = cap
         lastSampleSaturated = elapsed > cap
         val t = effectiveElapsed(elapsed, cap, flags.softExtrapolation) / dt1
+        if (traceCollecting) { traceRequestedNs = elapsed; traceFactor = t; traceFunctionalDtNs = dt1 }
 
         val prev = s0
         return if (prev != null) {
             val dt0 = (mid.tNanos - prev.tNanos).toFloat()
             if (dt0 > 0f) {
+                if (traceCollecting) tracePrev = prev
                 quadraticPredict(prev.transform, mid.transform, latest.transform, dt0, dt1, t)
             } else {
                 lerpTransform(mid.transform, latest.transform, 1f + t)

@@ -53,6 +53,12 @@ object PerfFlags {
     data class Config(
         /** `delegate=cpu`: [FaceLandmarkerHelper] construye directo con CPU. */
         val forceCpu: Boolean = false,
+        /** Observational CameraX/MediaPipe timing only; no tracking options change. */
+        val timestampTrace: Boolean = false,
+        /** Independent, one-shot 15s trajectory capture; off -> on re-arms it. */
+        val poseTrajectoryTrace: Boolean = false,
+        /** Independent source-buffer lifetime capture, off -> on re-arms 15 seconds. */
+        val bufferLifetimeTrace: Boolean = false,
         /** `blendshapes=false`: sin blendshapes en MediaPipe y apertura fija
          * en 1.0 (ver [com.example.test_face.render.FaceRenderPipeline]). */
         val blendshapes: Boolean = true,
@@ -140,6 +146,8 @@ object PerfFlags {
         val (cfg, info) = read(context, log = true)
         config = cfg
         fileInfo = info
+        com.example.test_face.render.PoseTrajectoryTelemetry.configure(context.applicationContext, cfg.poseTrajectoryTrace)
+        com.example.test_face.render.BufferLifetimeTelemetry.configure(context.applicationContext, cfg.bufferLifetimeTrace)
         Log.i(TAG, "PERF_FLAGS archivo=${info.path} ${if (info.exists) "leído" else "no existe -> valores por defecto"}")
         Log.i(TAG, "PERF_FLAGS ${describe(cfg)}")
         if (!cfg.blendshapes) {
@@ -191,6 +199,9 @@ object PerfFlags {
 
         val cfg = Config(
             forceCpu = !onOff("delegate", default = true, on = "gpu", off = "cpu"),
+            timestampTrace = onOff("timestamp_trace", default = false),
+            poseTrajectoryTrace = onOff("pose_trajectory_trace", default = false),
+            bufferLifetimeTrace = onOff("buffer_lifetime_trace", default = false),
             blendshapes = onOff("blendshapes", default = true, on = "true", off = "false"),
             analysisSize = value("analysis_size")?.let { v ->
                 ANALYSIS_SIZES[v] ?: DEFAULT_ANALYSIS_SIZE.also { invalid("analysis_size", v) }
@@ -249,6 +260,9 @@ object PerfFlags {
     /** Todos los valores efectivos, en formato `clave=valor`. */
     fun describe(cfg: Config = config): String =
         "delegate=${if (cfg.forceCpu) "cpu" else "gpu"} blendshapes=${cfg.blendshapes} " +
+            "timestamp_trace=${if (cfg.timestampTrace) "on" else "off"} " +
+            "pose_trajectory_trace=${if (cfg.poseTrajectoryTrace) "on" else "off"} " +
+            "buffer_lifetime_trace=${if (cfg.bufferLifetimeTrace) "on" else "off"} " +
             "analysis_size=${cfg.analysisSize.width}x${cfg.analysisSize.height} " +
             "overlay=${if (cfg.overlay) "on" else "off"} flutter_events=${cfg.flutterEvents.name.lowercase(Locale.US)} " +
             "use_cases=${if (cfg.useCasesMinimal) "minimal" else "all"} " +

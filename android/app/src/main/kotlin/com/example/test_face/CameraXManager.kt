@@ -125,7 +125,7 @@ class CameraXManager(
 
     private val helper = FaceLandmarkerHelper(
         context = activity,
-        onResult = { data, rawResult, resultBitmap ->
+        onResult = { data, rawResult, resultBitmap, traceContext ->
             // Medir la latencia REAL de MediaPipe en este dispositivo
             // El timestamp lo devuelve el PROPIO resultado, no una variable
             // compartida: `lastFrameSubmitMs` guardaba el último frame
@@ -193,6 +193,7 @@ class CameraXManager(
                 lashRenderer.onFaceResult(
                     rawResult, imageWidth, imageHeight, smoothedLatencyMs, resultBitmap,
                     preSubmitAgeMs = preSubmitMs,
+                    traceContext = traceContext,
                 )
                 faceMeshRenderer.onFaceResult(rawResult)
                 linerRenderer.onFaceResult(rawResult, imageWidth, imageHeight)
@@ -917,10 +918,11 @@ class CameraXManager(
                 setSessionCaptureCallback(reporter.captureCallback)
                 fpsRequest?.let { setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             }
+            val traceSensorSource = java.util.concurrent.atomic.AtomicReference("UNAVAILABLE")
             val imageAnalysis = analysisBuilder.build()
 
             imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                processFrame(imageProxy)
+                processFrame(imageProxy, traceSensorSource.get())
             }
             imageAnalysisUseCase = imageAnalysis
 
@@ -986,6 +988,7 @@ class CameraXManager(
                     *listOfNotNull(preview, imageAnalysis, extraUseCase).toTypedArray(),
                 )
                 timestampSource = logCameraCharacteristics(camera)
+                traceSensorSource.set(timestampSource)
                 // DIAGNÓSTICO alineación overlay: el overlay de Flutter asume
                 // que preview y análisis comparten encuadre (mismo aspect +
                 // mismo cropRect). Si CameraX resolvió resoluciones de aspect
@@ -1004,6 +1007,7 @@ class CameraXManager(
                     *listOfNotNull(imageAnalysis, extraUseCase).toTypedArray(),
                 )
                 timestampSource = logCameraCharacteristics(camera)
+                traceSensorSource.set(timestampSource)
             }
             videoCaptureBound = extraUseCase != null && extraUseCase === videoCapture
 
@@ -1217,13 +1221,20 @@ class CameraXManager(
     }
 
 
-    private fun processFrame(imageProxy: ImageProxy) {
+    private val traceFrameIds = AtomicLong()
+    private fun processFrame(imageProxy: ImageProxy, traceSensorSource: String) {
+        val frameId = traceFrameIds.incrementAndGet()
+        val trace = if (PerfFlags.config.timestampTrace || com.example.test_face.render.PoseTrajectoryTelemetry.current != null) TrackingTimingTelemetry.begin(
+            helper.traceSessionId, frameId, imageProxy.imageInfo.timestamp, traceSensorSource,
+            SystemClock.elapsedRealtimeNanos(),
+        ) else null
         // DIAGNÓSTICO (ver PerfStats): todo frame que entrega ImageAnalysis,
         // y su edad respecto del sensor al llegar acá.
         PerfStats.onCameraFrame()
         PerfStats.recordProxyAge(imageProxy.imageInfo.timestamp)
         val landmarker = helper.getLandmarker()
         if (landmarker == null || stopped.get() || analysisPausedForCapture) {
+            if (trace != null) TrackingTimingTelemetry.notSubmitted(trace)
             imageProxy.close()
             return
         }
@@ -1236,6 +1247,7 @@ class CameraXManager(
         // real. Este chequeo es sólo la optimización de saltear el trabajo.
         if (helper.isInferenceInFlight()) {
             PerfStats.onDiscarded()
+            if (trace != null) TrackingTimingTelemetry.notSubmitted(trace)
             imageProxy.close()
             return
         }
@@ -1424,7 +1436,7 @@ class CameraXManager(
             // copia y Canvas, que el timestamp de abajo ya no ve).
             PerfStats.recordSubmitAge(imageProxy.imageInfo.timestamp)
             recordPreSubmitAge(imageProxy.imageInfo.timestamp)
-            helper.detectAsync(mpImage, SystemClock.uptimeMillis())
+            helper.detectAsync(mpImage, SystemClock.uptimeMillis(), trace)
         } catch (e: Throwable) {
             // Throwable, NO Exception: un OutOfMemoryError es un Error, se
             // escapaba de acá y mataba el hilo de `analysisExecutor` — y como
@@ -1435,6 +1447,7 @@ class CameraXManager(
             Log.e(TAG, "processFrame: fallo procesando el frame de análisis", e)
             onError(e.message ?: "Error procesando frame")
         } finally {
+            if (trace != null) TrackingTimingTelemetry.notSubmitted(trace)
             imageProxy.close()
         }
     }

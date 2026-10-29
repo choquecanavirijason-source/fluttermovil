@@ -40,6 +40,7 @@ class LashRenderer(
 
     private val leftSlot = EyeModelSlot()
     private val rightSlot = EyeModelSlot()
+    private val bufferTraceRendererId = BufferLifetimeTelemetry.nextId()
 
     /** Estilo activo del diseño cargado (ver [LashStyleConfig]) — un mismo
      * estilo se aplica a los dos ojos (la asimetría izq/der la resuelve
@@ -79,6 +80,7 @@ class LashRenderer(
      * el horizonte queda como antes. */
     @Volatile private var measuredPreSubmitNanos = 0L
 
+    private var trajectoryEvaluationId = 0L
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!frameLoopRunning) return
@@ -95,8 +97,10 @@ class LashRenderer(
                 // con overlay=off, que es justo cuando más interesa.
                 com.example.test_face.PerfStats.onVsync(frameTimeNanos)
                 if (overlayEnabled) {
-                    writeInterpolatedPose(leftSlot, frameTimeNanos)
-                    writeInterpolatedPose(rightSlot, frameTimeNanos)
+                    val capture = PoseTrajectoryTelemetry.current
+                    if (capture != null) trajectoryEvaluationId++
+                    writeInterpolatedPose(leftSlot, frameTimeNanos, capture, trajectoryEvaluationId)
+                    writeInterpolatedPose(rightSlot, frameTimeNanos, capture, trajectoryEvaluationId)
                 }
             } catch (e: Throwable) {
                 if (!loggedFrameLoopFailure) {
@@ -303,9 +307,15 @@ class LashRenderer(
         return Float3(x * k, y * k, z * k)
     }
 
-    private fun writeInterpolatedPose(slot: EyeModelSlot, nowNanos: Long) {
-        val node = slot.node ?: return
-        if (!node.isVisible) return
+    private fun writeInterpolatedPose(slot: EyeModelSlot, nowNanos: Long,
+        trajectoryCapture: PoseTrajectoryTelemetry.Capture? = null, evaluationId: Long = 0L) {
+        val node = slot.node
+        if (node == null || !node.isVisible) {
+            if (trajectoryCapture != null) slot.interpolator.traceTrajectory(trajectoryCapture,
+                if (slot === leftSlot) 0 else 1, evaluationId, nowNanos,
+                null, null, null, lostFrames, if (node == null) 128 else 256)
+            return
+        }
         // ── PRESUPUESTO DE LATENCIA COMPLETO ────────────────────────────
         // Cuánto hay que predecir hacia adelante = todo lo que la pose ya
         // atrasó desde que la cámara capturó el frame. Son cuatro tramos, y
@@ -348,6 +358,8 @@ class LashRenderer(
             nowNanos,
             horizonNanos.coerceAtLeast(0L),
             statsEyeSpanWorld = if (slot === leftSlot) eyeSpanWorld(slot) else 0f,
+            traceEye = if (slot === leftSlot) 0 else 1,
+            traceSpanWorld = if (com.example.test_face.PerfFlags.config.timestampTrace) eyeSpanWorld(slot) else 0f,
         ) ?: return
         if (slot === leftSlot) {
             com.example.test_face.PerfStats.onExtrapolationSample(slot.interpolator.lastSampleSaturated)
@@ -366,6 +378,9 @@ class LashRenderer(
             !q.x.isFinite() || !q.y.isFinite() || !q.z.isFinite() || !q.w.isFinite() ||
             !sc.x.isFinite() || !sc.y.isFinite() || !sc.z.isFinite()
         ) {
+            if (trajectoryCapture != null) slot.interpolator.traceTrajectory(trajectoryCapture,
+                if (slot === leftSlot) 0 else 1, evaluationId, nowNanos,
+                null, null, null, lostFrames, 512 or 1024)
             if (!loggedNonFinitePose) {
                 loggedNonFinitePose = true
                 Log.w(TAG, "writeInterpolatedPose: pose no finita descartada pos=$p quat=$q scale=$sc")
@@ -387,6 +402,7 @@ class LashRenderer(
             )
         }
         slot.follower.advance(transform, nowNanos)
+        if (com.example.test_face.PerfFlags.config.timestampTrace) slot.interpolator.traceFollower(slot.follower, nowNanos)
         val f = slot.follower
 
         var position = Float3(f.posX, f.posY, f.posZ)
@@ -416,6 +432,9 @@ class LashRenderer(
         node.position = position
         node.quaternion = rotation
         node.scale = Float3(f.scaleX, f.scaleY, f.scaleZ)
+        if (trajectoryCapture != null) slot.interpolator.traceTrajectory(trajectoryCapture,
+            if (slot === leftSlot) 0 else 1, evaluationId, nowNanos,
+            f, position, rotation, lostFrames)
     }
 
     /**
@@ -523,6 +542,7 @@ class LashRenderer(
          * que sin esto el horizonte no compensaba ese tramo. 0 = no medible
          * (fuente de timestamp no REALTIME) o desactivado. */
         preSubmitAgeMs: Float = 0f,
+        traceContext: com.example.test_face.TrackingTimingTelemetry.Context? = null,
     ) {
         if (leftSlot.node == null && rightSlot.node == null) return
 
@@ -621,8 +641,8 @@ class LashRenderer(
         // [EyeTrackingFilter.apply].
         val frameNanos = result.timestampMs() * 1_000_000L
         OrientDebug.logLash(pipelineResult.left, pipelineResult.right) // TEMPORAL
-        applyTransform(leftSlot, pipelineResult.left, sv.engine, frameNanos, recovering)
-        applyTransform(rightSlot, pipelineResult.right, sv.engine, frameNanos, recovering)
+        applyTransform(leftSlot, pipelineResult.left, sv.engine, frameNanos, recovering, traceContext)
+        applyTransform(rightSlot, pipelineResult.right, sv.engine, frameNanos, recovering, traceContext)
     }
 
     /**
@@ -691,6 +711,7 @@ class LashRenderer(
      * PROGRESIVO: cuanto más parpadeaba la persona, peor quedaba.
      */
     private fun releaseSlot(slot: EyeModelSlot) {
+        slot.traceTrackingBoundary()
         val node = slot.node
         slot.filter.reset()
         // Mismo hilo que `filter` (ver [MotionGate]): al redetectar el rostro,
@@ -791,12 +812,14 @@ class LashRenderer(
         frameNanos: Long,
         /** Primer resultado con rostro tras una retención (ver [onFaceLost]). */
         recovering: Boolean = false,
+        traceContext: com.example.test_face.TrackingTimingTelemetry.Context? = null,
     ) {
         if (slot.node == null) return
         if (transform == null) {
             releaseSlot(slot)
             return
         }
+        if (recovering) slot.traceTrackingBoundary()
         // Ver [applyClosedDownShift]: conversión px → mundo de ESTE frame.
         if (transform.worldPerImagePx > 0f && transform.worldPerImagePx.isFinite()) {
             slot.worldPerImagePx = transform.worldPerImagePx
@@ -816,8 +839,11 @@ class LashRenderer(
         // [OpennessTracker]/[LidShape]), o sea si la FORMA se re-mide o se
         // reusa la última buena — eso ya lo resolvió FaceRenderPipeline, acá
         // solo se consume para saber si hay que volver a doblar la malla.
+        val trajectoryCapture = PoseTrajectoryTelemetry.current
+        val rawElapsedNs = if (trajectoryCapture != null) android.os.SystemClock.elapsedRealtimeNanos() else 0L
         val smoothed = slot.filter.apply(transform, frameNanos, slot.naturalSpan)
         val nowNanos = System.nanoTime()
+        val euroElapsedNs = if (trajectoryCapture != null) android.os.SystemClock.elapsedRealtimeNanos() else 0L
 
         // REESCRITO a buffer directo con setBufferAt in-place (ver
         // LashMeshBender/EyeModelSlot) — cero Geometry.Vertex/Float3 nuevos
@@ -828,6 +854,7 @@ class LashRenderer(
         // puntos. bendPending sigue como única red de seguridad si el hilo
         // principal se atrasa.
         val curve = transform.lashLineCurve
+        val bufferTraceModel = slot.bufferModelGeneration.get()
         val rawMesh = slot.rawMesh
         val geometry = slot.geometry
         val target = if (slot.useBufferAAsTarget) slot.positionBufferA else slot.positionBufferB
@@ -868,7 +895,11 @@ class LashRenderer(
             bendCurve != null && rawMesh != null && geometry != null && target != null &&
             restTangents != null && tangentTarget != null && !slot.bendPending
         ) {
-            val bent = LashMeshBender.bendInPlace(
+            val bufferWrite = if (com.example.test_face.PerfFlags.config.bufferLifetimeTrace)
+                BufferLifetimeTelemetry.begin(slot, bufferTraceRendererId, if (slot === leftSlot) 0 else 1,
+                    bufferTraceModel, target, tangentTarget) else null
+            var diagnosticBent = false
+            val bent = try { LashMeshBender.bendInPlace(
                 raw = rawMesh,
                 target = target,
                 previous = if (slot.hasBentBefore) prior else null,
@@ -878,7 +909,7 @@ class LashRenderer(
                 curve = bendCurve,
                 styleConfig = currentStyleConfig,
                 eyeWidthPx = transform.eyeWidthPx,
-            )
+            ).also { diagnosticBent = it } } finally { bufferWrite?.end(diagnosticBent) }
             if (bent) {
                 target.rewind()
                 tangentTarget.rewind()
@@ -887,16 +918,23 @@ class LashRenderer(
                 slot.useBufferAAsTarget = !slot.useBufferAAsTarget
                 slot.bendPending = true
                 val vertexCount = rawMesh.vertices.size
-                mainHandler.post {
+                val bufferPosted = mainHandler.post {
                     try {
-                        geometry.vertexBuffer.setBufferAt(engine, 0, target, 0, vertexCount * 3)
-                        geometry.vertexBuffer.setBufferAt(engine, 1, tangentTarget, 0, vertexCount * 4)
+                        if (bufferWrite == null) {
+                            geometry.vertexBuffer.setBufferAt(engine, 0, target, 0, vertexCount * 3)
+                            geometry.vertexBuffer.setBufferAt(engine, 1, tangentTarget, 0, vertexCount * 4)
+                        } else {
+                            bufferWrite.upload(geometry.vertexBuffer, engine, 0, target, vertexCount * 3)
+                            bufferWrite.upload(geometry.vertexBuffer, engine, 1, tangentTarget, vertexCount * 4)
+                        }
                     } catch (e: Exception) {
                         Log.e(TAG, "applyTransform: fallo subiendo malla doblada a GPU", e)
                     } finally {
                         slot.bendPending = false
+                        bufferWrite?.finish()
                     }
                 }
+                if (!bufferPosted) bufferWrite?.finish()
             }
         }
 
@@ -914,7 +952,15 @@ class LashRenderer(
             slot.interpolator.dropHistory()
             slot.follower.softenRecovery(nowNanos)
         }
-        slot.interpolator.push(smoothed, nowNanos)
+        val publication = if (com.example.test_face.PerfFlags.config.timestampTrace && traceContext != null)
+            PredictorTimingTelemetry.Publication(traceContext) else null
+        val trajectory = if (trajectoryCapture != null)
+            PoseTrajectoryTelemetry.Processed(trajectoryCapture.id, traceContext, transform, smoothed,
+                rawElapsedNs, euroElapsedNs, recovering) else null
+        trajectory?.beforePush()
+        slot.interpolator.push(smoothed, nowNanos, publication, trajectory)
+        trajectory?.afterPush()
+        publication?.complete()
 
         // PUERTA DE MOVIMIENTO (ver [MotionGate]): con la cara moviéndose
         // rápido, la pestaña no se dibuja. El push al interpolador y el

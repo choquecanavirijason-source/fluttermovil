@@ -29,10 +29,17 @@ class FaceLandmarkerHelper(
      * estimado. `null` si el image no envuelve un Bitmap (no debería pasar
      * con [com.google.mediapipe.framework.image.BitmapImageBuilder], que es
      * como se construye en [com.example.test_face.CameraXManager]). */
-    private val onResult: (Map<String, Any?>, FaceLandmarkerResult, Bitmap?) -> Unit,
+    private val onResult: (Map<String, Any?>, FaceLandmarkerResult, Bitmap?, TrackingTimingTelemetry.Context?) -> Unit,
     private val onError: (String) -> Unit
 ) {
     private var faceLandmarker: FaceLandmarker? = null
+    @Volatile var traceSessionId: Long = 0L
+        private set
+    @Volatile private var traceUsed = false
+    // Analysis thread only. Retain the high-water mark even when tracing is off:
+    // a reused key must not match a late callback after the bounded ring expires.
+    private var traceMaxTimestampMs = Long.MIN_VALUE
+    @Volatile private var traceSessionClosed = false
 
     /**
      * `true` mientras hay un frame entregado a `detectAsync` cuyo resultado
@@ -99,6 +106,7 @@ class FaceLandmarkerHelper(
         val imageHeight: Int,
         val bitmap: Bitmap?,
         val enqueuedNanos: Long,
+        val traceContext: TrackingTimingTelemetry.Context?,
     )
 
     private val pendingCompute = AtomicReference<PendingResult?>(null)
@@ -127,7 +135,7 @@ class FaceLandmarkerHelper(
         lastComputedTimestampMs = ts
         val startNanos = System.nanoTime()
         try {
-            deliver(p.result, p.imageWidth, p.imageHeight, p.bitmap)
+            deliver(p.result, p.imageWidth, p.imageHeight, p.bitmap, p.traceContext)
         } catch (e: Exception) {
             Log.e(TAG, "Exception in compute thread", e)
             onError(e.message ?: "Error processing FaceLandmarker result")
@@ -157,9 +165,9 @@ class FaceLandmarkerHelper(
     /** Mapper para Flutter + [onResult]: el trabajo que sigue a la
      * inferencia. En el modo de siempre corre en el hilo del callback de
      * MediaPipe; con `lock_release=start`, en el hilo de cómputo. */
-    private fun deliver(effective: FaceLandmarkerResult, imageWidth: Int, imageHeight: Int, bitmap: Bitmap?) {
+    private fun deliver(effective: FaceLandmarkerResult, imageWidth: Int, imageHeight: Int, bitmap: Bitmap?, traceContext: TrackingTimingTelemetry.Context?) {
         val mapped = mapper.map(effective, imageWidth, imageHeight, bitmap)
-        onResult(mapped, effective, bitmap)
+        onResult(mapped, effective, bitmap, traceContext)
     }
 
     /**
@@ -175,6 +183,8 @@ class FaceLandmarkerHelper(
      * la capacidad de arrancar por esto.
      */
     fun setup() {
+        traceSessionId = TRACE_SESSIONS.incrementAndGet()
+        traceSessionClosed = false
         try {
             context.assets.open(MODEL_ASSET).use { /* ensure packaged */ }
         } catch (e: Exception) {
@@ -230,6 +240,7 @@ class FaceLandmarkerHelper(
     }
 
     private fun buildLandmarker(delegate: Delegate, cfg: PerfFlags.Config): FaceLandmarker {
+        val callbackSessionId = traceSessionId
         val baseOptions = BaseOptions.builder()
             .setDelegate(delegate)
             .setModelAssetPath(MODEL_ASSET)
@@ -272,6 +283,9 @@ class FaceLandmarkerHelper(
             // cuánto cuesta (ver [PerfFlags.blendshapes]); default `true`.
             .setOutputFaceBlendshapes(cfg.blendshapes)
             .setResultListener { result, image ->
+                val traceContext = if (traceUsed && (PerfFlags.config.timestampTrace || com.example.test_face.render.PoseTrajectoryTelemetry.current != null)) {
+                    TrackingTimingTelemetry.callback(callbackSessionId, result.timestampMs(), SystemClock.elapsedRealtimeNanos())
+                } else null
                 // DIAGNÓSTICO (ver [PerfStats]): inferencia = de `detectAsync`
                 // (timestamp del resultado) al inicio de ESTE callback, sin
                 // los 16 ms fijos que suma LashRenderer.
@@ -312,9 +326,9 @@ class FaceLandmarkerHelper(
                         // (mapper + render) va al hilo de cómputo y el
                         // cerrojo se libera en el `finally` de abajo sin
                         // esperarlo.
-                        enqueueCompute(PendingResult(effective, image.width, image.height, bitmap, System.nanoTime()))
+                        enqueueCompute(PendingResult(effective, image.width, image.height, bitmap, System.nanoTime(), traceContext))
                     } else {
-                        deliver(effective, image.width, image.height, bitmap)
+                        deliver(effective, image.width, image.height, bitmap, traceContext)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Exception in result listener", e)
@@ -337,6 +351,7 @@ class FaceLandmarkerHelper(
                 }
             }
             .setErrorListener { error ->
+                if (traceUsed && PerfFlags.config.timestampTrace) TrackingTimingTelemetry.error()
                 // Mismo motivo que el `finally` de arriba: un error de
                 // inferencia no debe dejar el pipeline trancado.
                 inferenceInFlight.set(false)
@@ -374,7 +389,7 @@ class FaceLandmarkerHelper(
      * trabajo de conversión del bitmap cuando esto devuelve `false`, que es
      * el otro gasto grande por frame.
      */
-    fun detectAsync(image: com.google.mediapipe.framework.image.MPImage, timestampMs: Long): Boolean {
+    fun detectAsync(image: com.google.mediapipe.framework.image.MPImage, timestampMs: Long, trace: TrackingTimingTelemetry.Frame? = null): Boolean {
         val landmarker = faceLandmarker ?: return false
         val now = SystemClock.uptimeMillis()
         if (!inferenceInFlight.compareAndSet(false, true)) {
@@ -400,9 +415,17 @@ class FaceLandmarkerHelper(
         // Congela la rotación de ESTE frame — ver [rotationInFlight].
         rotationInFlight = analysisRotated180
         return try {
+            if (trace != null) {
+                traceUsed = true
+                trace.ambiguous = timestampMs <= traceMaxTimestampMs || trace.sessionId != traceSessionId
+                trace.closed = traceSessionClosed
+                TrackingTimingTelemetry.submit(trace, timestampMs)
+            }
+            traceMaxTimestampMs = maxOf(traceMaxTimestampMs, timestampMs)
             landmarker.detectAsync(image, timestampMs)
             true
         } catch (e: Throwable) {
+            if (trace != null) TrackingTimingTelemetry.error()
             inferenceInFlight.set(false)
             throw e
         }
@@ -418,6 +441,8 @@ class FaceLandmarkerHelper(
     fun isInferenceInFlight(): Boolean = inferenceInFlight.get()
 
     fun close() {
+        traceSessionClosed = true
+        if (traceUsed) TrackingTimingTelemetry.closeSession(traceSessionId)
         faceLandmarker?.close()
         faceLandmarker = null
         buildInfo = null
@@ -466,6 +491,7 @@ class FaceLandmarkerHelper(
     }
 
     private companion object {
+        private val TRACE_SESSIONS = java.util.concurrent.atomic.AtomicLong()
         /** Ver el vencimiento de seguridad en [detectAsync]. */
         private const val IN_FLIGHT_TIMEOUT_MS = 1_000L
 
