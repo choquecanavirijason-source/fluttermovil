@@ -59,6 +59,10 @@ object PerfFlags {
         val poseTrajectoryTrace: Boolean = false,
         /** Independent source-buffer lifetime capture, off -> on re-arms 15 seconds. */
         val bufferLifetimeTrace: Boolean = false,
+        /** Requested mode; LashRenderer latches it only at camera-session start. */
+        val lashDeformationFreeze: Boolean = false,
+        /** Position acceleration ablation; effective value is fixed at camera start. */
+        val predictorPosQuadratic: Boolean = true,
         /** `blendshapes=false`: sin blendshapes en MediaPipe y apertura fija
          * en 1.0 (ver [com.example.test_face.render.FaceRenderPipeline]). */
         val blendshapes: Boolean = true,
@@ -140,11 +144,16 @@ object PerfFlags {
     val overlay get() = config.overlay
     val flutterEvents get() = config.flutterEvents
 
-    /** Lee el archivo, lo publica en [config] y loguea (tag `CameraXManager`)
-     * ruta y valores. */
-    fun load(context: Context) {
-        val (cfg, info) = read(context, log = true)
+    /** Reads requested values; predictorPosQuadratic changes only at camera start.
+     * Other flags retain their existing reload behavior. Logs requested/effective. */
+    fun load(context: Context, cameraSessionStart: Boolean = false) {
+        val (requested, info) = read(context, log = true)
+        val cfg = requested.copy(predictorPosQuadratic =
+            if (cameraSessionStart) requested.predictorPosQuadratic else config.predictorPosQuadratic)
         config = cfg
+        Log.i(TAG, "PREDICTOR_POS_QUADRATIC requested=${if (requested.predictorPosQuadratic) "on" else "off"} " +
+            "effective=${if (cfg.predictorPosQuadratic) "on" else "off"} " +
+            "fixed_until_next_camera_start=true")
         fileInfo = info
         com.example.test_face.render.PoseTrajectoryTelemetry.configure(context.applicationContext, cfg.poseTrajectoryTrace)
         com.example.test_face.render.BufferLifetimeTelemetry.configure(context.applicationContext, cfg.bufferLifetimeTrace)
@@ -202,6 +211,8 @@ object PerfFlags {
             timestampTrace = onOff("timestamp_trace", default = false),
             poseTrajectoryTrace = onOff("pose_trajectory_trace", default = false),
             bufferLifetimeTrace = onOff("buffer_lifetime_trace", default = false),
+            lashDeformationFreeze = onOff("lash_deformation_freeze", default = false),
+            predictorPosQuadratic = onOff("predictor_pos_quadratic", default = true),
             blendshapes = onOff("blendshapes", default = true, on = "true", off = "false"),
             analysisSize = value("analysis_size")?.let { v ->
                 ANALYSIS_SIZES[v] ?: DEFAULT_ANALYSIS_SIZE.also { invalid("analysis_size", v) }
@@ -263,6 +274,8 @@ object PerfFlags {
             "timestamp_trace=${if (cfg.timestampTrace) "on" else "off"} " +
             "pose_trajectory_trace=${if (cfg.poseTrajectoryTrace) "on" else "off"} " +
             "buffer_lifetime_trace=${if (cfg.bufferLifetimeTrace) "on" else "off"} " +
+            "lash_deformation_freeze=${if (cfg.lashDeformationFreeze) "on" else "off"} " +
+            "predictor_pos_quadratic=${if (cfg.predictorPosQuadratic) "on" else "off"} " +
             "analysis_size=${cfg.analysisSize.width}x${cfg.analysisSize.height} " +
             "overlay=${if (cfg.overlay) "on" else "off"} flutter_events=${cfg.flutterEvents.name.lowercase(Locale.US)} " +
             "use_cases=${if (cfg.useCasesMinimal) "minimal" else "all"} " +

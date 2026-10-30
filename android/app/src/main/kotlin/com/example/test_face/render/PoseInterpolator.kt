@@ -438,7 +438,13 @@ class PoseInterpolator {
         } else {
             accelTerm
         }
-        val predictedPos = c.position + velocityTerm + limitedAccelTerm
+        // Session-fixed diagnostic: remove acceleration only for future position.
+        // Keep the original expression (and operation order) in normal mode.
+        val predictedPos = if (t > 0f && !com.example.test_face.PerfFlags.config.predictorPosQuadratic) {
+            c.position + velocityTerm
+        } else {
+            c.position + velocityTerm + limitedAccelTerm
+        }
 
         // Posición, rotación y escala se extrapolan con EL MISMO `t`.
         //

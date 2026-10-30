@@ -546,7 +546,8 @@ class CameraXManager(
             // DIAGNÓSTICO: flags de perf_flags.properties e info del equipo,
             // antes de construir el landmarker (el delegado y los blendshapes
             // se fijan al construirlo).
-            PerfFlags.load(activity)
+            PerfFlags.load(activity, cameraSessionStart = true)
+            val deformationFreeze = PerfFlags.config.lashDeformationFreeze
             PerfStats.init(activity)
             PerfStats.logDeviceInfo()
             lashRenderer.setOverlayEnabled(PerfFlags.overlay)
@@ -562,6 +563,7 @@ class CameraXManager(
                 return@execute
             }
             mainHandler.post {
+                lashRenderer.beginCameraSession(deformationFreeze)
                 stopped.set(false)
                 scheduleRebind()
                 mainHandler.removeCallbacks(perfFlagsPoll)
@@ -606,6 +608,7 @@ class CameraXManager(
         val before = PerfFlags.config
         PerfFlags.load(activity)
         val after = PerfFlags.config
+        lashRenderer.reportRequestedDeformationMode(after.lashDeformationFreeze)
         lashRenderer.setOverlayEnabled(after.overlay)
         val rebuilt = landmarkerNeedsRebuild().also { if (it) rebuildLandmarker() }
         if (helper.getLandmarker() == null) return

@@ -42,6 +42,29 @@ class LashRenderer(
     private val rightSlot = EyeModelSlot()
     private val bufferTraceRendererId = BufferLifetimeTelemetry.nextId()
 
+    @Volatile private var lashDeformationFrozen = false
+
+    /** Main thread, before camera binding. Hot reload never changes this value. */
+    fun beginCameraSession(freeze: Boolean) {
+        lashDeformationFrozen = freeze
+        if (freeze) {
+            // stop/start can retain an already bent model. SceneView packs fresh
+            // initialized buffers; never overwrite our dynamic source FloatBuffers.
+            val sv = sceneView
+            if (sv != null) for (slot in listOf(leftSlot, rightSlot)) {
+                val raw = slot.rawMesh ?: continue
+                slot.geometry?.setVertices(sv.engine, raw.vertices)
+            }
+        }
+        Log.i(TAG, "LASH_DEFORMATION_SESSION effective=${if (freeze) "on" else "off"} " +
+            "fixed_until_next_camera_start=true")
+    }
+
+    fun reportRequestedDeformationMode(requested: Boolean) {
+        Log.i(TAG, "LASH_DEFORMATION_SESSION requested=${if (requested) "on" else "off"} " +
+            "effective=${if (lashDeformationFrozen) "on" else "off"}; changes apply next camera session")
+    }
+
     /** Estilo activo del diseño cargado (ver [LashStyleConfig]) — un mismo
      * estilo se aplica a los dos ojos (la asimetría izq/der la resuelve
      * [RawMesh.mirroredAcrossX] en [loadIntoSlot], no esto). Se actualiza
@@ -891,7 +914,7 @@ class LashRenderer(
         // La excepción es que haya cambiado [bandScale]: ahí la curva
         // efectiva SÍ es otra y hay que rehacer el doblado.
         val bandScaleChanged = abs(bandScale - slot.lastBandScale) > 1e-3f
-        if ((transform.lidShapeTrusted || bandScaleChanged) &&
+        if (!lashDeformationFrozen && (transform.lidShapeTrusted || bandScaleChanged) &&
             bendCurve != null && rawMesh != null && geometry != null && target != null &&
             restTangents != null && tangentTarget != null && !slot.bendPending
         ) {
@@ -920,6 +943,9 @@ class LashRenderer(
                 val vertexCount = rawMesh.vertices.size
                 val bufferPosted = mainHandler.post {
                     try {
+                        // A previous session may already have queued this upload.
+                        // It must not replace the rest geometry of a frozen session.
+                        if (lashDeformationFrozen) return@post
                         if (bufferWrite == null) {
                             geometry.vertexBuffer.setBufferAt(engine, 0, target, 0, vertexCount * 3)
                             geometry.vertexBuffer.setBufferAt(engine, 1, tangentTarget, 0, vertexCount * 4)
