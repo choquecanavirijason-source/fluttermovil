@@ -569,6 +569,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   Future<void> _start() async {
+    // Primera apertura tras instalar: la vista de cámara se crea antes de que
+    // la usuaria conceda el permiso y queda en negro. Si el permiso se acaba
+    // de conceder, se reenlaza el preview al final.
+    final hadPermission = await Permission.camera.isGranted;
     final camera = await Permission.camera.request();
     if (!mounted) return;
     if (!camera.isGranted) {
@@ -596,6 +600,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         _status = 'Esperando detección…';
       }
     });
+    if (!hadPermission) await _rebindPreview();
 
     // La carga del GLB ya no depende de un retry-loop temporizado: viaja
     // como creationParams del PlatformView (ver HybridCameraPreview), así

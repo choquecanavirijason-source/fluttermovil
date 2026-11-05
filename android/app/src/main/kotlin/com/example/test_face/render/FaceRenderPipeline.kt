@@ -19,6 +19,7 @@ import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
  * plan de motor).
  */
 object FaceRenderPipeline {
+    private var blinkDebugCalls = 0 // TEMPORAL
 
     data class Result(val left: EyeTransform?, val right: EyeTransform?)
 
@@ -189,8 +190,19 @@ object FaceRenderPipeline {
         // Con blendshapes, umbral absoluto + histéresis; la línea base
         // relativa queda sólo para la señal geométrica (ver
         // [OpennessTracker.updateFromBlendshape]).
+        // TEMPORAL: apertura geométrica vs blendshape (izquierdo primero, luego derecho).
+        run {
+            val n = blinkDebugCalls++
+            if ((n / 2) % 3 == 0) android.util.Log.i("BlinkDebug", "%s geo=%.3f geoCorr=%.3f bs=%s %s".format(
+                if (n % 2 == 0) "L" else "R", eyeLandmarks.opennessRatio,
+                foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose),
+                blendshapeOpenness?.let { "%.2f".format(it) } ?: "-", EyeBlinkBlendshapes.lastDebug))
+        }
         val lidShapeTrusted = if (blendshapeOpenness != null) {
-            opennessTracker?.updateFromBlendshape(blendshapeOpenness) ?: true
+            opennessTracker?.updateFromBlendshape(
+                blendshapeOpenness,
+                foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose),
+            ) ?: true
         } else {
             opennessTracker?.update(openness) ?: true
         }

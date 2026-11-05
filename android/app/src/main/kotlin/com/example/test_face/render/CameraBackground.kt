@@ -65,8 +65,20 @@ class CameraBackground {
     var hasFrame = false
         private set
 
+    /** SceneView al que pertenece el fondo actual. */
+    private var attachedView: SceneView? = null
+
     fun attach(sceneView: SceneView) {
-        if (engine != null) return
+        if (engine != null) {
+            if (attachedView === sceneView) return
+            // Al volver a la app se crea un SceneView nuevo ANTES de que se
+            // libere el viejo (y ese detach tardío se ignora): si no se
+            // muda acá, el fondo sigue dibujándose en la vista vieja y la
+            // nueva queda negra.
+            Log.i(TAG, "attach: SceneView nuevo, se recrea el fondo de cámara")
+            detach()
+        }
+        attachedView = sceneView
         try {
             val eng = sceneView.engine
             val tex = Texture.Builder()
@@ -142,6 +154,7 @@ class CameraBackground {
             Log.e(TAG, "detach: excepción liberando el fondo (ignorada)", e)
         }
         engine = null
+        attachedView = null
         scene = null
         entity = 0
         texture = null

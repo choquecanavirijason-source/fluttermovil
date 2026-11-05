@@ -1012,6 +1012,10 @@ class LashRenderer(
         val rawElapsedNs = if (trajectoryCapture != null) android.os.SystemClock.elapsedRealtimeNanos() else 0L
         val smoothed = if (sync && !RendererConfiguration.FRAME_SYNC_USE_POSE_FILTER) {
             transform
+        } else if (sync) {
+            // El filtro solo quita temblor: no puede dejar la pestaña detrás
+            // de la imagen (ver [SyncPoseClamp]).
+            SyncPoseClamp.apply(transform, slot.filter.apply(transform, frameNanos, slot.naturalSpan), slot.naturalSpan)
         } else {
             slot.filter.apply(transform, frameNanos, slot.naturalSpan)
         }

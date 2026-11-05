@@ -42,6 +42,15 @@ object RendererConfiguration {
      * El fondo tiene que verse en espejo, como el análisis de MediaPipe. */
     const val FRAME_SYNC_FLIP_U = true
 
+    /** Modo sincronizado: cuánto puede quedar la pestaña filtrada detrás de
+     * la pose real (ver [SyncPoseClamp]). Más chico = más pegada pero con
+     * más temblor quieta; más grande = más estable pero se despega al
+     * moverse. Posición en anchos de ojo, rotación en grados, escala en
+     * fracción. */
+    const val FRAME_SYNC_MAX_POSITION_LAG_SPANS = 0.03f
+    const val FRAME_SYNC_MAX_ROTATION_LAG_DEG = 2.0f
+    const val FRAME_SYNC_MAX_SCALE_LAG_FRACTION = 0.03f
+
     // ── One Euro Filter: balance estabilidad/respuesta ──────────────────
     //
     // PROBLEMA resuelto: con minCutoff=3.0Hz el filtro era casi transparente
@@ -300,8 +309,25 @@ object RendererConfiguration {
      * BAJAR [EYE_BLINK_CLOSED_ABOVE]; si mirar hacia abajo con el ojo abierto
      * ya la vuelca (eyeBlink sube un poco al bajar la mirada), SUBIRLO.
      */
-    const val EYE_BLINK_CLOSED_ABOVE = 0.55f
-    const val EYE_BLINK_OPEN_BELOW = 0.35f
+    const val EYE_BLINK_CLOSED_ABOVE = 0.50f
+    const val EYE_BLINK_OPEN_BELOW = 0.30f
+
+    /** Alto/ancho geométrico del ojo (corregido por escorzo) que confirma el
+     * cierre de `eyeBlink` — ver [OpennessTracker.updateFromBlendshape].
+     * Medido 2026-11-05: abierto 0.22-0.37 (mirando abajo 0.24-0.27),
+     * cerrado 0.10-0.145. BAJAR [EYE_GEO_OPEN_RATIO] si un ojo rasgado abierto
+     * vuelca la pestaña; SUBIRLO si un ojo cerrado no termina de volcarla. */
+    const val EYE_GEO_OPEN_RATIO = 0.19f
+    const val EYE_GEO_CLOSED_RATIO = 0.135f
+
+    /** Fracción de `eyeLookDown` que se resta de `eyeBlink` de ese ojo: al mirar
+     * hacia abajo el párpado baja y eyeBlink sube sin parpadeo real. SUBIR (0.7)
+     * si aún se voltea al mirar abajo; BAJAR (0.3) si un ojo cerrado mirando
+     * abajo ya no vuelca la pestaña. 0 = sin compensación.
+     * En 0 desde 2026-11-05: con el ojo CERRADO eyeLookDown también sube
+     * (0.6-0.75) y la resta hacía leer abierto un ojo cerrado. La confusión
+     * con mirar abajo la resuelve ahora [EYE_GEO_OPEN_RATIO]. */
+    const val EYE_LOOKDOWN_BLINK_COMPENSATION = 0f
 
     // ── Seguimiento a tasa de pantalla (ver PoseFollower) ───────────────
 

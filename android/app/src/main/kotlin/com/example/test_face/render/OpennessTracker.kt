@@ -147,21 +147,31 @@ class OpennessTracker {
      *
      * Misma regla que [update]: una vez por frame y por ojo.
      */
-    fun updateFromBlendshape(openness: Float): Boolean {
+    fun updateFromBlendshape(openness: Float, geometricRatio: Float = Float.NaN): Boolean {
         if (!openness.isFinite()) {
             shapeTrusted = false
             return false
         }
+        // Cierre = MÍNIMO de dos señales que fallan en casos distintos
+        // (medido en dispositivo 2026-11-05):
+        //  - `eyeBlink` sube a 0.4-0.57 al MIRAR ABAJO con el ojo abierto,
+        //    casi lo mismo que un ojo cerrado (0.58-0.74);
+        //  - el alto/ancho geométrico sí los separa (abierto mirando abajo
+        //    0.24-0.27, cerrado 0.10-0.145), pero depende de la forma del ojo.
+        // Sólo cuenta como cerrado lo que las dos ven cerrado.
         val blink = 1f - openness.coerceIn(0f, 1f)
-        blinkClosed = if (blinkClosed) {
-            blink > RendererConfiguration.EYE_BLINK_OPEN_BELOW
-        } else {
-            blink > RendererConfiguration.EYE_BLINK_CLOSED_ABOVE
-        }
         val openBlink = RendererConfiguration.EYE_BLINK_OPEN_BELOW
         val closedBlink = RendererConfiguration.EYE_BLINK_CLOSED_ABOVE
-        normalizedOpenness = ((closedBlink - blink) / (closedBlink - openBlink))
-            .coerceIn(0f, 1f)
+        val blinkClosedness = ((blink - openBlink) / (closedBlink - openBlink)).coerceIn(0f, 1f)
+        val geoOpen = RendererConfiguration.EYE_GEO_OPEN_RATIO
+        val geoClosed = RendererConfiguration.EYE_GEO_CLOSED_RATIO
+        val geoClosedness = if (geometricRatio.isFinite() && geometricRatio > 0f) {
+            ((geoOpen - geometricRatio) / (geoOpen - geoClosed)).coerceIn(0f, 1f)
+        } else 1f
+        val closedness = minOf(blinkClosedness, geoClosedness)
+        normalizedOpenness = 1f - closedness
+        // Histéresis para congelar la forma del párpado.
+        blinkClosed = if (blinkClosed) closedness > 0.25f else closedness > 0.75f
         shapeTrusted = !blinkClosed
         return shapeTrusted
     }

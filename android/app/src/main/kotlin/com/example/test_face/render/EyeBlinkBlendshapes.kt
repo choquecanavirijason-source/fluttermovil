@@ -58,6 +58,9 @@ object EyeBlinkBlendshapes {
     /** Ojo DERECHO DEL SUJETO = ojo "LEFT" de este proyecto. */
     private const val SUBJECT_RIGHT_BLINK = "eyeBlinkRight"
 
+    private const val SUBJECT_LEFT_LOOK_DOWN = "eyeLookDownLeft"
+    private const val SUBJECT_RIGHT_LOOK_DOWN = "eyeLookDownRight"
+
     /**
      * Apertura por ojo, ya traducida a la convención de nombres de ESTE
      * proyecto (lado de imagen) y en la misma orientación que
@@ -74,6 +77,9 @@ object EyeBlinkBlendshapes {
     /** Ojos abiertos: el valor que se usa cuando MediaPipe NO calculó
      * blendshapes (`blendshapes=false` en perf_flags). */
     val NEUTRAL = Openness(left = 1f, right = 1f)
+
+    /** TEMPORAL: valores crudos del último resultado, por ojo del proyecto. */
+    @Volatile var lastDebug = ""
 
     /**
      * Como [openness], pero si el resultado no trae blendshapes EN ABSOLUTO
@@ -93,13 +99,27 @@ object EyeBlinkBlendshapes {
 
         var subjectLeft = Float.NaN
         var subjectRight = Float.NaN
+        var lookDownLeft = 0f
+        var lookDownRight = 0f
         for (category in categories) {
             when (category.categoryName()) {
                 SUBJECT_LEFT_BLINK -> subjectLeft = category.score()
                 SUBJECT_RIGHT_BLINK -> subjectRight = category.score()
+                SUBJECT_LEFT_LOOK_DOWN -> lookDownLeft = category.score()
+                SUBJECT_RIGHT_LOOK_DOWN -> lookDownRight = category.score()
             }
         }
         if (!subjectLeft.isFinite() || !subjectRight.isFinite()) return null
+
+        // Mirar hacia abajo baja el párpado y MediaPipe sube `eyeBlink` aunque
+        // el ojo siga abierto: cruzaba el umbral de cierre y volteaba la
+        // pestaña (a veces un ojo, a veces los dos). Se descuenta una parte
+        // de `eyeLookDown` del mismo ojo; con el ojo realmente cerrado el
+        // blink queda muy por encima del umbral y sigue contando como cierre.
+        val k = RendererConfiguration.EYE_LOOKDOWN_BLINK_COMPENSATION
+        lastDebug = "blinkL=%.2f downL=%.2f blinkR=%.2f downR=%.2f".format(subjectRight, lookDownRight, subjectLeft, lookDownLeft) // TEMPORAL
+        subjectLeft = (subjectLeft - k * lookDownLeft.coerceIn(0f, 1f)).coerceAtLeast(0f)
+        subjectRight = (subjectRight - k * lookDownRight.coerceIn(0f, 1f)).coerceAtLeast(0f)
 
         // `score` es CIERRE (1 = ojo cerrado); acá se devuelve APERTURA, para
         // que entre a OpennessTracker en la misma orientación que la señal

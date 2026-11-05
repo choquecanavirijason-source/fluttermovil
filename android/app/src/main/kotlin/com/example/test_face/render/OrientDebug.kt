@@ -56,6 +56,6 @@ object OrientDebug {
         fun e(t: EyeTransform?) = t?.let {
             "open=%.2f trusted=%s pos=(%.3f,%.3f)".format(it.normalizedOpenness, it.lidShapeTrusted, it.position.x, it.position.y)
         } ?: "null"
-        Log.i(TAG, "lash LEFT[${e(left)}] RIGHT[${e(right)}]")
+        Log.i(TAG, "lash LEFT[${e(left)}] RIGHT[${e(right)}] raw[${EyeBlinkBlendshapes.lastDebug}]")
     }
 }
