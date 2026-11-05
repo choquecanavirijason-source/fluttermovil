@@ -22,6 +22,12 @@ class EyeModelSlot {
     var node: ModelNode? = null
     var path: String? = null
 
+    /** Modo sincronizado ([RendererConfiguration.FRAME_SYNC_MODE]): pose del
+     * ÚLTIMO fotograma analizado, escrita desde el hilo de MediaPipe y
+     * aplicada tal cual (sin predicción) junto con ese mismo fotograma — ver
+     * `LashRenderer.writeSyncedPose`. `null` = sin pose (rostro perdido). */
+    @Volatile var syncPose: EyeTransform? = null
+
     /** Dimensión X del modelo (ancho) tal cual viene en el .glb — la escala
      * del mundo se calcula para que esta dimensión coincida con el ancho real
      * del ojo, así las pestañas siempre se ajustan al ojo real. */
@@ -184,6 +190,7 @@ class EyeModelSlot {
         interpolator.reset()
         follower.reset()
         motionGate.reset()
+        syncPose = null
         rawMesh = null
         geometry = null
         bendPending = false

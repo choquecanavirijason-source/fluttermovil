@@ -98,6 +98,27 @@ class LashRenderer(
 
     @Volatile private var measuredLatencyNanos = 35_000_000L  // seed: 35ms
 
+    // ── Modo sincronizado (RendererConfiguration.FRAME_SYNC_MODE) ─────────
+
+    /** Fotograma de cámara (buffer de GPU) capturado en el MISMO instante
+     * que el resultado de MediaPipe que lo acompaña. Ver [CameraBackground]. */
+    class SyncFrame(
+        val image: android.media.Image,
+        /** Giro horario que deja derecho el buffer del sensor. */
+        val rotationDegrees: Int,
+        /** Cámara frontal: se ve como espejo. */
+        val mirror: Boolean,
+    )
+
+    /** Fondo de cámara dentro de Filament (Android 10+). */
+    private val background: CameraBackground? =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) CameraBackground() else null
+
+    /** Si el último resultado llegó en modo sincronizado: ahí la pose la
+     * escribe [writeSyncedPose] junto con su fotograma, y el bucle de vsync
+     * ([writeInterpolatedPose]) NO debe pisarla con una pose extrapolada. */
+    @Volatile private var frameSyncActive = false
+
     /** Antigüedad del frame al entregarlo a MediaPipe (sensor →
      * `detectAsync`), ver [onFaceResult]. 0 = no medible o `forward_age=off`:
      * el horizonte queda como antes. */
@@ -162,6 +183,7 @@ class LashRenderer(
         configureEnvironment(view)
         configureRenderQuality(view)
         configureKeyLight(view)
+        if (RendererConfiguration.FRAME_SYNC_MODE) background?.attach(view)
         startFrameLoop()
     }
 
@@ -332,6 +354,9 @@ class LashRenderer(
 
     private fun writeInterpolatedPose(slot: EyeModelSlot, nowNanos: Long,
         trajectoryCapture: PoseTrajectoryTelemetry.Capture? = null, evaluationId: Long = 0L) {
+        // Modo sincronizado: la pose la escribe [writeSyncedPose] junto con
+        // su fotograma; extrapolarla acá la despegaría de la imagen.
+        if (frameSyncActive) return
         val node = slot.node
         if (node == null || !node.isVisible) {
             if (trajectoryCapture != null) slot.interpolator.traceTrajectory(trajectoryCapture,
@@ -483,6 +508,7 @@ class LashRenderer(
                 "engine=${System.identityHashCode(view.engine)}",
         )
         stopFrameLoop()
+        background?.detach()
         for (slot in listOf(leftSlot, rightSlot)) {
             slot.node?.let { old ->
                 Log.i(TAG, "detachSceneView destruyendo node=${System.identityHashCode(old)} path=${slot.path}")
@@ -566,8 +592,17 @@ class LashRenderer(
          * (fuente de timestamp no REALTIME) o desactivado. */
         preSubmitAgeMs: Float = 0f,
         traceContext: com.example.test_face.TrackingTimingTelemetry.Context? = null,
+        /** Modo sincronizado: fotograma de cámara de ESTE resultado. Siempre
+         * se muestra (o se cierra) una vez, también en las salidas tempranas.
+         * `null` = modo normal. */
+        syncFrame: SyncFrame? = null,
     ) {
-        if (leftSlot.node == null && rightSlot.node == null) return
+        frameSyncActive = syncFrame != null
+        if (syncFrame == null) hideBackground()
+        if (leftSlot.node == null && rightSlot.node == null) {
+            showBackgroundOnly(syncFrame, imageWidth, imageHeight)
+            return
+        }
 
         // Actualizar la latencia medida para que writeInterpolatedPose la use
         // en el próximo vsync. +16ms para compensar la composición de
@@ -575,7 +610,10 @@ class LashRenderer(
         measuredLatencyNanos = ((pipelineLatencyMs + 16f) * 1_000_000f).toLong()
         measuredPreSubmitNanos = (preSubmitAgeMs.coerceAtLeast(0f) * 1_000_000f).toLong()
 
-        val sv = sceneView ?: return
+        val sv = sceneView ?: run {
+            syncFrame?.image?.close()
+            return
+        }
         // fillCenter (no el constructor directo): los landmarks vienen
         // normalizados contra la imagen de análisis, pero el SceneView cubre
         // la pantalla y el preview de abajo recorta con FILL_CENTER. Ver
@@ -643,6 +681,7 @@ class LashRenderer(
         }
         if (pipelineResult == null) {
             onFaceLost()
+            showBackgroundOnly(syncFrame, imageWidth, imageHeight)
             return
         }
 
@@ -664,8 +703,107 @@ class LashRenderer(
         // [EyeTrackingFilter.apply].
         val frameNanos = result.timestampMs() * 1_000_000L
         OrientDebug.logLash(pipelineResult.left, pipelineResult.right) // TEMPORAL
-        applyTransform(leftSlot, pipelineResult.left, sv.engine, frameNanos, recovering, traceContext)
-        applyTransform(rightSlot, pipelineResult.right, sv.engine, frameNanos, recovering, traceContext)
+        val sync = syncFrame != null
+        applyTransform(leftSlot, pipelineResult.left, sv.engine, frameNanos, recovering, traceContext, sync)
+        applyTransform(rightSlot, pipelineResult.right, sv.engine, frameNanos, recovering, traceContext, sync)
+        if (syncFrame != null) postSyncedFrame(syncFrame, camera, backgroundDepth(sv))
+    }
+
+    /** Profundidad de vista del fondo: lejos, detrás de cualquier pestaña. */
+    private fun backgroundDepth(sv: SceneView): Float =
+        -(sv.cameraNode.far * 0.8f).coerceIn(1f, 500f)
+
+    /**
+     * Modo sincronizado: UN solo Runnable en el hilo principal que muestra el
+     * fotograma de cámara y escribe la pose de los dos ojos calculada para
+     * ESE fotograma — así llegan juntos al mismo render de Filament. La malla
+     * doblada de [applyTransform] se postea antes (mismo hilo, mismo orden).
+     */
+    private fun postSyncedFrame(frame: SyncFrame, camera: CameraProjection, depth: Float) {
+        val bg = background
+        if (bg == null) {
+            frame.image.close()
+            return
+        }
+        val posted = mainHandler.post {
+            try {
+                bg.show(frame.image, mainHandler, frame.rotationDegrees, frame.mirror, camera, depth)
+                writeSyncedPose(leftSlot)
+                writeSyncedPose(rightSlot)
+            } catch (e: Throwable) {
+                if (!loggedFrameLoopFailure) {
+                    loggedFrameLoopFailure = true
+                    Log.e(TAG, "postSyncedFrame: excepción (solo se loguea la primera)", e)
+                }
+            }
+        }
+        if (!posted) frame.image.close()
+    }
+
+    /** Fondo sin pestañas (sin rostro, o sin modelo cargado): la imagen
+     * sigue avanzando. Cierra [frame] si no se puede mostrar. */
+    fun showBackgroundOnly(frame: SyncFrame?, imageWidth: Int, imageHeight: Int) {
+        frame ?: return
+        val sv = sceneView
+        val bg = background
+        if (sv == null || bg == null || imageWidth <= 0 || imageHeight <= 0) {
+            frame.image.close()
+            return
+        }
+        val camera = CameraProjection.fillCenter(
+            projection = sv.cameraNode.projectionTransform,
+            cameraToWorld = sv.cameraNode.modelTransform,
+            imageWidth = imageWidth,
+            imageHeight = imageHeight,
+            viewportWidth = sv.width,
+            viewportHeight = sv.height,
+        )
+        val depth = backgroundDepth(sv)
+        val posted = mainHandler.post {
+            bg.show(frame.image, mainHandler, frame.rotationDegrees, frame.mirror, camera, depth)
+        }
+        if (!posted) frame.image.close()
+    }
+
+    /** Fuera del modo sincronizado el fondo no debe tapar el `PreviewView`. */
+    private fun hideBackground() {
+        val bg = background ?: return
+        if (!bg.hasFrame) return
+        mainHandler.post { bg.setVisible(false) }
+    }
+
+    /** Hilo principal. Ver [postSyncedFrame] y [EyeModelSlot.syncPose]. */
+    private fun writeSyncedPose(slot: EyeModelSlot) {
+        val node = slot.node ?: return
+        val pose = slot.syncPose ?: return
+        if (slot.visibleRequested != true) return
+        val p = pose.position
+        val q = pose.rotation
+        val sc = pose.scale
+        if (!p.x.isFinite() || !p.y.isFinite() || !p.z.isFinite() ||
+            !q.x.isFinite() || !q.y.isFinite() || !q.z.isFinite() || !q.w.isFinite() ||
+            !sc.x.isFinite() || !sc.y.isFinite() || !sc.z.isFinite()
+        ) {
+            return
+        }
+        var position = p
+        var rotation = q
+        // Mismos ajustes de ojo cerrado que el modo normal, con el cierre ya
+        // suavizado en [applyTransform] ([EyeModelSlot.bendClosedAmount]).
+        position += applyClosedDownShift(slot, pose, slot.bendClosedAmount, rotation)
+        LidDropRotation.apply(
+            closedAmount = slot.bendClosedAmount,
+            rootLocalY = slot.rootLocalY,
+            scaleY = sc.y,
+            q = rotation,
+        )?.let { drop ->
+            rotation = drop.rotation
+            position += drop.positionDelta
+        }
+        node.position = position
+        node.quaternion = rotation
+        node.scale = sc
+        if (!node.isVisible) node.isVisible = true
     }
 
     /**
@@ -756,6 +894,7 @@ class LashRenderer(
                 slot.lidFilter.reset()
                 slot.openness.reset()
                 slot.lidShape.reset()
+                slot.syncPose = null
                 if (node.isVisible) {
                     Log.i(TAG, "releaseSlot node=${System.identityHashCode(node)} -> OCULTO (onFaceLost)")
                 }
@@ -836,6 +975,8 @@ class LashRenderer(
         /** Primer resultado con rostro tras una retención (ver [onFaceLost]). */
         recovering: Boolean = false,
         traceContext: com.example.test_face.TrackingTimingTelemetry.Context? = null,
+        /** Modo sincronizado: ver [postSyncedFrame]. */
+        sync: Boolean = false,
     ) {
         if (slot.node == null) return
         if (transform == null) {
@@ -864,7 +1005,11 @@ class LashRenderer(
         // solo se consume para saber si hay que volver a doblar la malla.
         val trajectoryCapture = PoseTrajectoryTelemetry.current
         val rawElapsedNs = if (trajectoryCapture != null) android.os.SystemClock.elapsedRealtimeNanos() else 0L
-        val smoothed = slot.filter.apply(transform, frameNanos, slot.naturalSpan)
+        val smoothed = if (sync && !RendererConfiguration.FRAME_SYNC_USE_POSE_FILTER) {
+            transform
+        } else {
+            slot.filter.apply(transform, frameNanos, slot.naturalSpan)
+        }
         val nowNanos = System.nanoTime()
         val euroElapsedNs = if (trajectoryCapture != null) android.os.SystemClock.elapsedRealtimeNanos() else 0L
 
@@ -962,6 +1107,15 @@ class LashRenderer(
                 }
                 if (!bufferPosted) bufferWrite?.finish()
             }
+        }
+
+        if (sync) {
+            // Sin predicción ni puerta de movimiento: la imagen que se ve es
+            // la de este mismo resultado. [writeSyncedPose] aplica la pose
+            // junto con su fotograma.
+            slot.syncPose = smoothed
+            slot.visibleRequested = true
+            return
         }
 
         // Push directo (sin mainHandler.post): evita añadir ~16ms de latencia

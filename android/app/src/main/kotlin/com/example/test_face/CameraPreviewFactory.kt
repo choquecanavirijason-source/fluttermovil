@@ -62,6 +62,12 @@ class CameraPreviewFactory(
             // (val), no se puede reasignar tras crear la instancia.
             isOpaque = false,
         ).apply {
+            // Filament's UiHelper sets ZOrderOnTop for a translucent surface.
+            // That puts the whole 3D surface ABOVE Flutter's controls. With
+            // the synchronized camera background it also covers every button.
+            // Keep this surface above other camera surfaces, below window UI.
+            setZOrderOnTop(false)
+            setZOrderMediaOverlay(true)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT

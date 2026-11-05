@@ -109,7 +109,7 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.LEFT_EYE_UPPER_APEX,
             headPose, iw, ih, leftNaturalSpan, camera, RendererConfiguration.LEFT_EYE_X_NUDGE, leftRootLocalY, styleConfig, cameraBitmap,
             leftLidFilter, leftBlinkTracker, leftLidShape, blendshapeOpenness?.left, turns,
-            closedDownShiftPx,
+            closedDownShiftPx, result.timestampMs() * 1_000_000L,
         )
         val right = computeEye(
             "RIGHT",
@@ -118,7 +118,7 @@ object FaceRenderPipeline {
             FaceLandmarkIndices.RIGHT_EYE_UPPER_APEX,
             headPose, iw, ih, rightNaturalSpan, camera, RendererConfiguration.RIGHT_EYE_X_NUDGE, rightRootLocalY, styleConfig, cameraBitmap,
             rightLidFilter, rightBlinkTracker, rightLidShape, blendshapeOpenness?.right, turns,
-            closedDownShiftPx,
+            closedDownShiftPx, result.timestampMs() * 1_000_000L,
         )
         // Log.v eliminado — corría en CADA frame y agregaba latencia I/O
         return Result(left, right)
@@ -153,6 +153,7 @@ object FaceRenderPipeline {
         /** [FaceQuarterTurn.of] del rostro. `0` = todo como siempre. */
         turns: Int,
         closedDownShiftPx: Float,
+        frameNanos: Long,
     ): EyeTransform? {
         val imageEyeLandmarks = EyeLandmarks.from(landmarks, ringIndices, irisIndices, imageWidth, imageHeight)
             ?: return null
@@ -286,7 +287,16 @@ object FaceRenderPipeline {
         // hace falta devolverla a la imagen, y con la cara a 180° su arco ya
         // no sale invertido respecto del modelo.
         val curve = if (lidShapeTrusted) {
-            val smoothedLid = lidFilter?.apply(eyeLandmarks.upperLid, System.nanoTime(), maxOf(imageWidth, imageHeight))
+            // Euclidean canthus span does not shrink with in-plane head roll
+            // as the axis-aligned eye bounding box does.
+            val lidSpan = hypot(
+                anchor.lateralCanthus.x - anchor.medialCanthus.x,
+                anchor.lateralCanthus.y - anchor.medialCanthus.y,
+            )
+            val smoothedLid = lidFilter?.apply(
+                eyeLandmarks.upperLid, frameNanos,
+                anchor.lidCenter, anchor.upperLidTangent, lidSpan,
+            )
                 ?: eyeLandmarks.upperLid
             LashLineCurve.fit(smoothedLid, anchor.point, anchor.upperLidTangent)
                 ?.also { lidShape?.latchCurve(it) }

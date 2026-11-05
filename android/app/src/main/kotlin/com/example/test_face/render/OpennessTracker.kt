@@ -140,10 +140,10 @@ class OpennessTracker {
      * [RendererConfiguration.EYE_BLINK_CLOSED_ABOVE] para por qué la base
      * falla justo con la clienta de ojos cerrados.
      *
-     * El estado es binario (abierto/cerrado) y [normalizedOpenness] queda en
-     * `1`/`0`; el giro de la pestaña no salta porque [PoseFollower] lo
-     * suaviza. Cada ojo tiene su propio tracker, así que un ojo puede estar
-     * cerrado y el otro abierto.
+     * La confianza de la forma usa histéresis, pero [normalizedOpenness] es
+     * continua entre los dos umbrales. Así el giro, la elevación del ancla y
+     * la compensación de la banda acompañan la reapertura en vez de recibir
+     * un escalón 0 -> 1. Cada ojo tiene su propio tracker.
      *
      * Misma regla que [update]: una vez por frame y por ojo.
      */
@@ -158,7 +158,10 @@ class OpennessTracker {
         } else {
             blink > RendererConfiguration.EYE_BLINK_CLOSED_ABOVE
         }
-        normalizedOpenness = if (blinkClosed) 0f else 1f
+        val openBlink = RendererConfiguration.EYE_BLINK_OPEN_BELOW
+        val closedBlink = RendererConfiguration.EYE_BLINK_CLOSED_ABOVE
+        normalizedOpenness = ((closedBlink - blink) / (closedBlink - openBlink))
+            .coerceIn(0f, 1f)
         shapeTrusted = !blinkClosed
         return shapeTrusted
     }

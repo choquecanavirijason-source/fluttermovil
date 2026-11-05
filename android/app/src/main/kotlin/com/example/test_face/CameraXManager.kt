@@ -23,6 +23,7 @@ import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.view.Surface
+import android.view.View
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
@@ -78,6 +79,51 @@ class CameraXManager(
     private val onError: (String) -> Unit,
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // ── Modo sincronizado (RendererConfiguration.FRAME_SYNC_MODE) ─────────
+    /** Hilo propio para recibir los fotogramas de preview (no el principal). */
+    private val previewRingThread by lazy {
+        android.os.HandlerThread("PreviewFrameRing").apply { start() }
+    }
+
+    /** Fotogramas de cámara en alta resolución, para mostrar el del mismo
+     * instante que analizó MediaPipe. `null` antes de Android 10. */
+    private val previewRing: PreviewFrameRing? by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            PreviewFrameRing(Handler(previewRingThread.looper))
+        } else {
+            null
+        }
+    }
+
+    /** Si el `Preview` está enlazado AHORA al [previewRing] (lo decide
+     * [applyBinding]). */
+    @Volatile private var previewBoundToRing = false
+
+    /** Timestamp de sensor de cada fotograma enviado a MediaPipe, por el
+     * `uptimeMillis` con que se envió (el que devuelve
+     * `FaceLandmarkerResult.timestampMs()`). */
+    private val sensorTimestampBySubmit = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
+    /** El modo sincronizado corre con Android 10+ y fuera del modo clienta
+     * echada (análisis girado 180°), que sigue con el `PreviewView`. */
+    private fun frameSyncWanted(): Boolean =
+        com.example.test_face.render.RendererConfiguration.FRAME_SYNC_MODE &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            !analysisRotated180
+
+    /** Hilo de MediaPipe: el fotograma de preview que corresponde a [rawResultTimestampMs]. */
+    private fun syncFrameFor(rawResultTimestampMs: Long): com.example.test_face.render.LashRenderer.SyncFrame? {
+        val sensorTs = sensorTimestampBySubmit.remove(rawResultTimestampMs)
+        val ring = previewRing ?: return null
+        if (!previewBoundToRing || !frameSyncWanted()) return null
+        val image = (if (sensorTs != null) ring.takeClosest(sensorTs) else ring.takeLatest()) ?: return null
+        return com.example.test_face.render.LashRenderer.SyncFrame(
+            image = image,
+            rotationDegrees = ring.rotationDegrees,
+            mirror = lensFacing == CameraSelector.LENS_FACING_FRONT,
+        )
+    }
 
     private val lashRenderer = LashRenderer(activity, mainHandler)
 
@@ -180,8 +226,10 @@ class CameraXManager(
             )
             dumpAnnotatedAnalysisFrame(resultBitmap, data)
             sendTrackingResult(augmentedData, nowMs)
-            val imageWidth = (augmentedData["imageWidth"] as? Int) ?: 0
-            val imageHeight = (augmentedData["imageHeight"] as? Int) ?: 0
+            val imageWidth = (augmentedData["imageWidth"] as? Int) ?: (resultBitmap?.width ?: 0)
+            val imageHeight = (augmentedData["imageHeight"] as? Int) ?: (resultBitmap?.height ?: 0)
+            // Modo sincronizado: fotograma de cámara de ESTE resultado.
+            val syncFrame = syncFrameFor(rawResult.timestampMs())
             if (!PerfFlags.overlay) {
                 // overlay=off (perf_flags): solo cámara + detección — ni
                 // compute, ni doblado de malla, ni subida a GPU.
@@ -194,6 +242,7 @@ class CameraXManager(
                     rawResult, imageWidth, imageHeight, smoothedLatencyMs, resultBitmap,
                     preSubmitAgeMs = preSubmitMs,
                     traceContext = traceContext,
+                    syncFrame = syncFrame,
                 )
                 faceMeshRenderer.onFaceResult(rawResult)
                 linerRenderer.onFaceResult(rawResult, imageWidth, imageHeight)
@@ -201,6 +250,12 @@ class CameraXManager(
                 lashRenderer.onFaceLost()
                 faceMeshRenderer.onFaceLost()
                 linerRenderer.onFaceLost()
+            }
+            // Sin rostro (u overlay apagado) la imagen igual tiene que avanzar.
+            if (syncFrame != null && !(PerfFlags.overlay && augmentedData["faceDetected"] == true &&
+                    imageWidth > 0 && imageHeight > 0)
+            ) {
+                lashRenderer.showBackgroundOnly(syncFrame, imageWidth, imageHeight)
             }
         },
         onError = onError,
@@ -984,7 +1039,19 @@ class CameraXManager(
                         .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
                 }
                 preview = previewBuilder.build()
-                preview.setSurfaceProvider(pv.surfaceProvider)
+                // Modo sincronizado: la cámara va al anillo (y se dibuja en
+                // Filament junto con las pestañas); el PreviewView queda oculto.
+                val ring = previewRing
+                val useRing = frameSyncWanted() && ring != null
+                if (useRing && ring != null) {
+                    ring.clear()
+                    sensorTimestampBySubmit.clear()
+                    preview.setSurfaceProvider(ring)
+                } else {
+                    preview.setSurfaceProvider(pv.surfaceProvider)
+                }
+                previewBoundToRing = useRing
+                mainHandler.post { pv.visibility = if (useRing) View.INVISIBLE else View.VISIBLE }
                 val camera = provider.bindToLifecycle(
                     lifecycleOwner,
                     selector,
@@ -1439,7 +1506,15 @@ class CameraXManager(
             // copia y Canvas, que el timestamp de abajo ya no ve).
             PerfStats.recordSubmitAge(imageProxy.imageInfo.timestamp)
             recordPreSubmitAge(imageProxy.imageInfo.timestamp)
-            helper.detectAsync(mpImage, SystemClock.uptimeMillis(), trace)
+            val submitUptimeMs = SystemClock.uptimeMillis()
+            if (previewBoundToRing) {
+                sensorTimestampBySubmit[submitUptimeMs] = imageProxy.imageInfo.timestamp
+                // Acotado: los que MediaPipe no devolvió nunca se descartan.
+                if (sensorTimestampBySubmit.size > 32) {
+                    sensorTimestampBySubmit.keys.sorted().take(16).forEach { sensorTimestampBySubmit.remove(it) }
+                }
+            }
+            helper.detectAsync(mpImage, submitUptimeMs, trace)
         } catch (e: Throwable) {
             // Throwable, NO Exception: un OutOfMemoryError es un Error, se
             // escapaba de acá y mataba el hilo de `analysisExecutor` — y como

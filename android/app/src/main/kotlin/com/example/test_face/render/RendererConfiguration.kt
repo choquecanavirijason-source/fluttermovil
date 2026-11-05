@@ -15,6 +15,33 @@ import dev.romainguy.kotlin.math.Float3
  */
 object RendererConfiguration {
 
+    // ── Modo SINCRONIZADO ("estilo TikTok") ─────────────────────────────
+    //
+    // `true`: la cámara se dibuja DENTRO de Filament (alta resolución, ver
+    // [CameraBackground] y PreviewFrameRing) mostrando el fotograma
+    // capturado en el MISMO instante que analizó MediaPipe, y la pose de las
+    // pestañas se escribe junto con él. Imagen y pestañas cambian siempre
+    // juntas: no se despegan al mover la cabeza y no hace falta predecir la
+    // pose (PoseInterpolator) ni ocultarla al moverse (MotionGate).
+    //
+    // Requiere Android 10+; en versiones anteriores y en el modo clienta
+    // echada (análisis girado 180°) se usa el camino de siempre.
+    // `false` = comportamiento anterior, sin cambios.
+    const val FRAME_SYNC_MODE = true
+
+    /** Modo sincronizado: la pose igual pasa por el One Euro
+     * ([EyeTrackingFilter]) para quitar el temblor de MediaPipe. */
+    const val FRAME_SYNC_USE_POSE_FILTER = true
+
+    /** Modo sincronizado: invierte la coordenada vertical de la textura de
+     * cámara (convención de origen de las texturas externas). Si la imagen
+     * se ve cabeza abajo, cambiar este valor. */
+    const val FRAME_SYNC_FLIP_V = true
+
+    /** Modo sincronizado: invierte la coordenada horizontal de la textura.
+     * El fondo tiene que verse en espejo, como el análisis de MediaPipe. */
+    const val FRAME_SYNC_FLIP_U = true
+
     // ── One Euro Filter: balance estabilidad/respuesta ──────────────────
     //
     // PROBLEMA resuelto: con minCutoff=3.0Hz el filtro era casi transparente
@@ -895,16 +922,11 @@ object RendererConfiguration {
 
     // ── Suavizado de los puntos del párpado (ver UpperLidFilter) ───────
     /**
-     * One Euro sobre los 7 puntos del arco del párpado superior, en PÍXELES
-     * de la imagen de análisis — NO reusar los de posición/rotación, que
-     * operan en unidades de mundo (~0.01-0.6): el término `beta*|velocidad|`
-     * depende de la escala de la señal.
-     *
-     * En reposo un landmark oscila ~1-2 px; al mover la cabeza rápido se
-     * desplaza del orden de cientos de px/s. Con `minCutoff = 1.5 Hz` el
-     * filtro corta fuerte quieto, y con `beta = 0.03` a ~300 px/s el corte
-     * sube a ~10 Hz (1.5 + 0.03*300), o sea casi sin suavizar cuando de
-     * verdad te movés.
+     * One Euro sobre la FORMA local de los 7 puntos del párpado, normalizada
+     * a un ancho de ojo de 46 px (UpperLidFilter). Traslación, giro y escala
+     * se reconstruyen con el marco actual y no entran en este suavizado.
+     * Beta responde a deformación local; ya no al movimiento de la cabeza.
+     * NO reusar los parámetros de pose, que operan en unidades de mundo.
      *
      * SIN CALIBRAR EN DISPOSITIVO — son un punto de partida derivado de esas
      * magnitudes, no valores medidos. Si la pestaña "arrastra" la forma al
