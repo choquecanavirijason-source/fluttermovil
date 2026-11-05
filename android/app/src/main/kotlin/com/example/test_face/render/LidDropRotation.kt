@@ -2,7 +2,6 @@ package com.example.test_face.render
 
 import dev.romainguy.kotlin.math.Float3
 import dev.romainguy.kotlin.math.Quaternion
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -150,13 +149,9 @@ object LidDropRotation {
      *
      * ## La compensación
      *
-     * Si la malla se dobla con el desvío multiplicado por `1/cos θ`, tras la
-     * rotación la banda vuelve a mostrar el desvío ORIGINAL
-     * (`h·(1/cos θ)·cos θ = h`): sigue el párpado igual que con el ojo
-     * abierto, y lo único que queda volcado son las fibras. Cerca de θ=90°
-     * el factor se dispara (la banda queda de canto a la cámara y su arco no
-     * se ve), de ahí el tope
-     * [RendererConfiguration.LASH_CLOSED_BAND_COMPENSATION_MAX].
+     * Se aproxima la inversa de cos θ con amortiguación. Al pasar de canto
+     * (90°), la curva se aplana de forma continua. Recortar 1/cos θ dejaba
+     * un salto de +máximo a -máximo que invertía la malla en el parpadeo.
      *
      * El signo del giro no entra: `cos` es par, así que da igual hacia qué
      * lado haya resuelto la caída [apply] en este frame.
@@ -175,9 +170,17 @@ object LidDropRotation {
         // que se dobla es la CONGELADA de ojo abierto: se aplana aparte.
         val flatten = 1f + (RendererConfiguration.LASH_CLOSED_BAND_FLATTEN - 1f) * drop
         val max = RendererConfiguration.LASH_CLOSED_BAND_COMPENSATION_MAX
-        val raw = if (abs(c) < 1e-4f) max else (flatten / c)
+        val damping = 1f / (2f * max.coerceAtLeast(1f))
+        val dampingSquared = damping * damping
+        val raw = flatten * (1f + dampingSquared) * c / (c * c + dampingSquared)
         return raw.coerceIn(-max, max)
     }
+
+    /** Closure is already smoothed before BOTH rotation and deformation.
+     * Blending the compensated mesh again would retain the previous sign
+     * after the node has crossed 90°, briefly inverting the projected arc. */
+    fun deformationSmoothing(defaultSmoothing: Float, compensationChanged: Boolean): Float =
+        if (compensationChanged) 1f else defaultSmoothing
 
     /** `R(q) · v` — fórmula estándar `v + 2w(u×v) + 2u×(u×v)` con `u` la
      * parte vectorial de [q]. */

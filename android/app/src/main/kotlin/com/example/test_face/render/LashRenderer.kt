@@ -725,11 +725,16 @@ class LashRenderer(
             frame.image.close()
             return
         }
+        // Keep this image and its blink compensation from the same result.
+        val leftPose = leftSlot.syncPose
+        val rightPose = rightSlot.syncPose
+        val leftClosed = leftSlot.bendClosedAmount
+        val rightClosed = rightSlot.bendClosedAmount
         val posted = mainHandler.post {
             try {
                 bg.show(frame.image, mainHandler, frame.rotationDegrees, frame.mirror, camera, depth)
-                writeSyncedPose(leftSlot)
-                writeSyncedPose(rightSlot)
+                writeSyncedPose(leftSlot, leftPose, leftClosed)
+                writeSyncedPose(rightSlot, rightPose, rightClosed)
             } catch (e: Throwable) {
                 if (!loggedFrameLoopFailure) {
                     loggedFrameLoopFailure = true
@@ -773,9 +778,9 @@ class LashRenderer(
     }
 
     /** Hilo principal. Ver [postSyncedFrame] y [EyeModelSlot.syncPose]. */
-    private fun writeSyncedPose(slot: EyeModelSlot) {
+    private fun writeSyncedPose(slot: EyeModelSlot, pose: EyeTransform?, closedAmount: Float) {
         val node = slot.node ?: return
-        val pose = slot.syncPose ?: return
+        pose ?: return
         if (slot.visibleRequested != true) return
         val p = pose.position
         val q = pose.rotation
@@ -790,9 +795,9 @@ class LashRenderer(
         var rotation = q
         // Mismos ajustes de ojo cerrado que el modo normal, con el cierre ya
         // suavizado en [applyTransform] ([EyeModelSlot.bendClosedAmount]).
-        position += applyClosedDownShift(slot, pose, slot.bendClosedAmount, rotation)
+        position += applyClosedDownShift(slot, pose, closedAmount, rotation)
         LidDropRotation.apply(
-            closedAmount = slot.bendClosedAmount,
+            closedAmount = closedAmount,
             rootLocalY = slot.rootLocalY,
             scaleY = sc.y,
             q = rotation,
@@ -1047,8 +1052,13 @@ class LashRenderer(
             slot.bendClosedNanos == 0L || closedDtNanos <= 0L || closedTau <= 0f ||
             closedDtNanos > RendererConfiguration.POSE_FOLLOW_MAX_GAP_NANOS
         ) 1f else 1f - exp(-closedDtNanos.toFloat() / closedTau)
-        slot.bendClosedAmount += (targetClosed - slot.bendClosedAmount) * closedAlpha
-        slot.bendClosedNanos = nowNanos
+        // If the previous mesh upload is pending, keep its closure angle too.
+        // Advancing only the node can cross 90° while the mesh still carries
+        // the old compensation sign, producing an intermittent inverted arc.
+        if (!slot.bendPending) {
+            slot.bendClosedAmount += (targetClosed - slot.bendClosedAmount) * closedAlpha
+            slot.bendClosedNanos = nowNanos
+        }
         val bandScale = LidDropRotation.bandCompensation(slot.bendClosedAmount)
         val bendCurve = curve?.withDeviationScale(bandScale)
 
@@ -1073,7 +1083,9 @@ class LashRenderer(
                 previous = if (slot.hasBentBefore) prior else null,
                 restTangents = restTangents,
                 tangentTarget = tangentTarget,
-                smoothing = RendererConfiguration.LASH_BEND_SMOOTHING,
+                smoothing = LidDropRotation.deformationSmoothing(
+                    RendererConfiguration.LASH_BEND_SMOOTHING, bandScaleChanged,
+                ),
                 curve = bendCurve,
                 styleConfig = currentStyleConfig,
                 eyeWidthPx = transform.eyeWidthPx,

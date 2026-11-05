@@ -243,9 +243,12 @@ class CameraBackground {
         for ((u, v) in corners.map { it[0] to it[1] }) {
             val world = camera.unproject(2f * u - 1f, 1f - 2f * v, viewDepthZ)
             positions.put(world.x).put(world.y).put(world.z)
-            val (s, t) = sensorUv(u, v, rotationDegrees, mirror)
-            uvs.put(if (RendererConfiguration.FRAME_SYNC_FLIP_U) 1f - s else s)
-                .put(if (RendererConfiguration.FRAME_SYNC_FLIP_V) 1f - t else t)
+            val (s, t) = CameraUvTransform.textureUv(
+                u, v, rotationDegrees, mirror,
+                RendererConfiguration.FRAME_SYNC_FLIP_U,
+                RendererConfiguration.FRAME_SYNC_FLIP_V,
+            )
+            uvs.put(s).put(t)
         }
         positions.flip()
         uvs.flip()
@@ -267,14 +270,7 @@ class CameraBackground {
          * después el giro horario de [rotationDegrees].
          */
         fun sensorUv(u: Float, v: Float, rotationDegrees: Int, mirror: Boolean): Pair<Float, Float> {
-            val x = if (mirror) 1f - u else u
-            val y = v
-            return when (((rotationDegrees % 360) + 360) % 360) {
-                90 -> y to 1f - x
-                180 -> 1f - x to 1f - y
-                270 -> 1f - y to x
-                else -> x to y
-            }
+            return CameraUvTransform.sensorUv(u, v, rotationDegrees, mirror)
         }
     }
 }
