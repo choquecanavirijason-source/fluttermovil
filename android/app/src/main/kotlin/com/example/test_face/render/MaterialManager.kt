@@ -47,7 +47,13 @@ object MaterialManager {
                 metallic = 0f,
                 roughness = 1f,
                 reflectance = 0f,
-            ).apply { setDoubleSided(true) }
+            ).apply {
+                // The stock color material has no double-sided lighting
+                // capability. setDoubleSided(true) is a no-op with a warning;
+                // explicitly disable backface rejection for thin lash cards.
+                setCullingMode(Material.CullingMode.NONE)
+            }
+            Log.i(TAG, "Diagnostic lash material culling=${diagnostic.cullingMode}")
             node.setMaterialInstance(diagnostic)
             return
         }
@@ -81,6 +87,7 @@ object MaterialManager {
             instance.setParameter("anisotropy", ANISOTROPY_STRENGTH)
             instance.setParameter("anisotropyDirection", 1f, 0f, 0f)
             instance.setDoubleSided(true)
+            instance.setCullingMode(Material.CullingMode.NONE)
             node.setMaterialInstance(instance)
         } catch (e: Exception) {
             Log.e(TAG, "No se pudo aplicar el material anisotrópico de fibra — cae a PBR genérico", e)
@@ -96,6 +103,7 @@ object MaterialManager {
             instances.forEach { instance ->
                 try {
                     instance.setDoubleSided(true)
+                    instance.setCullingMode(Material.CullingMode.NONE)
                 } catch (e: Exception) {
                     Log.w(TAG, "No se pudo ajustar el material del modelo", e)
                 }

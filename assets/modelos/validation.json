@@ -1,0 +1,167 @@
+{
+  "procedural": [
+    {
+      "file": "anime\\anime_left.glb",
+      "vertices": 3554,
+      "triangles": 3216,
+      "bytes": 191336,
+      "sha256": "cc18f08b4d254a85f938f5b58b2e252546f59bea0a0554414f532733bd261169"
+    },
+    {
+      "file": "anime\\anime_right.glb",
+      "vertices": 3554,
+      "triangles": 3216,
+      "bytes": 191340,
+      "sha256": "d97d5fddee3395bb45d53edebe19247acc64b289db4c48317accf5afc622e9a4"
+    },
+    {
+      "file": "catclassic\\cat_classic_left.glb",
+      "vertices": 4994,
+      "triangles": 4512,
+      "bytes": 268244,
+      "sha256": "fd3e5daa16a8e8f072b2f05581e44fc6e7f951b3c32296be4e612e45eb86a486"
+    },
+    {
+      "file": "catclassic\\cat_classic_right.glb",
+      "vertices": 4994,
+      "triangles": 4512,
+      "bytes": 268248,
+      "sha256": "2958e7c2e794c8eaf4568373f53f4cd62a51844060b940502f1af683b327a2db"
+    },
+    {
+      "file": "dolleye\\doll_eye_left.glb",
+      "vertices": 4514,
+      "triangles": 4080,
+      "bytes": 242608,
+      "sha256": "b527b929963414cc6eea552f33be095c863a8204d8ffa21d1e5628fe6d1396c9"
+    },
+    {
+      "file": "dolleye\\doll_eye_right.glb",
+      "vertices": 4514,
+      "triangles": 4080,
+      "bytes": 242608,
+      "sha256": "b655f17df2ffb667ffb91ae16d90badd656e24f007c3e9ffa262d78cf8f31b54"
+    },
+    {
+      "file": "foxyeyex\\foxy_intense_left.glb",
+      "vertices": 4874,
+      "triangles": 4404,
+      "bytes": 261828,
+      "sha256": "541908d84688143bb05d088b2bca1f151afefe49c076934afb9d15996174146e"
+    },
+    {
+      "file": "foxyeyex\\foxy_intense_right.glb",
+      "vertices": 4874,
+      "triangles": 4404,
+      "bytes": 261832,
+      "sha256": "0229c69f8110223c80647e321d5675a91212df5f42aa7d2beb0dca0aa7a7f7c6"
+    },
+    {
+      "file": "kimk\\kim_k_left.glb",
+      "vertices": 5394,
+      "triangles": 4872,
+      "bytes": 289592,
+      "sha256": "e57f91bab41446e809b91614f26007ebc135eaaa4998feb6cc3e566501b536af"
+    },
+    {
+      "file": "kimk\\kim_k_right.glb",
+      "vertices": 5394,
+      "triangles": 4872,
+      "bytes": 289596,
+      "sha256": "c427ceccd691c8c74c1d3e114960cfdad643c88456f001b6a8d067a7dbadaf2a"
+    },
+    {
+      "file": "kitten\\kitten_left.glb",
+      "vertices": 3914,
+      "triangles": 3540,
+      "bytes": 210564,
+      "sha256": "9fc4f76997ed573098f36bc9331b24cbaf3ff5a6339133827af6b25789aa87ce"
+    },
+    {
+      "file": "kitten\\kitten_right.glb",
+      "vertices": 3914,
+      "triangles": 3540,
+      "bytes": 210568,
+      "sha256": "9897d730c2eeaff3a727ef54f6a7d8d170b70cf2dfc0270c6f9eecf680a1a589"
+    },
+    {
+      "file": "natural\\natural_left.glb",
+      "vertices": 2514,
+      "triangles": 2280,
+      "bytes": 135804,
+      "sha256": "b18b44ec8658a106029c09cbfec2a1d146ab6818d0bf888b36d69073f3f1e64f"
+    },
+    {
+      "file": "natural\\natural_right.glb",
+      "vertices": 2514,
+      "triangles": 2280,
+      "bytes": 135808,
+      "sha256": "e485b1efa86f87a0967a46619e44250dee2a419a4ec4f54a90653ab8b5686070"
+    },
+    {
+      "file": "squirrel\\squirrel_left.glb",
+      "vertices": 4394,
+      "triangles": 3972,
+      "bytes": 236200,
+      "sha256": "9d397d9f94f2c5d737c5e5189d3690c54ffcec15f772d12755c0d2646ea82de5"
+    },
+    {
+      "file": "squirrel\\squirrel_right.glb",
+      "vertices": 4394,
+      "triangles": 3972,
+      "bytes": 236204,
+      "sha256": "6136297cfe362d384316e327992d50440481087c5de4e88b8b75eb0e4d4a4089"
+    },
+    {
+      "file": "wetlook\\wet_look_left.glb",
+      "vertices": 4514,
+      "triangles": 4080,
+      "bytes": 242608,
+      "sha256": "cddc1222c1fff272b35102fa7d36382188d6671f345d5c3e3cc9b6df69f1b579"
+    },
+    {
+      "file": "wetlook\\wet_look_right.glb",
+      "vertices": 4514,
+      "triangles": 4080,
+      "bytes": 242612,
+      "sha256": "4b2584ae9f986ce20ad648fea72d2abbd0551750e9daef8401ae792d72c17f99"
+    },
+    {
+      "file": "wispy\\wispy_left.glb",
+      "vertices": 6434,
+      "triangles": 5808,
+      "bytes": 345132,
+      "sha256": "b6679193cebeccd7c8f12e158730646e63b17f8dd1ab3b1e5f87d864de2a74e0"
+    },
+    {
+      "file": "wispy\\wispy_right.glb",
+      "vertices": 6434,
+      "triangles": 5808,
+      "bytes": 345136,
+      "sha256": "1bdf13fc2361f29ceae6b1025199517cb91f3d00cbd1ad4c3a61a1febe1ac4cb"
+    }
+  ],
+  "original_cateye": [
+    {
+      "path": "cateye/cateyeleft.glb",
+      "style": "cateye",
+      "eye": "left",
+      "source": "original_backup",
+      "vertices": 17563,
+      "triangles": 24722,
+      "bytes": 922568,
+      "sha256": "6f40d04f8281c3eba5a2bda58b202fc6361036624911c88aa2a038a736009e9c"
+    },
+    {
+      "path": "cateye/cateyeright.glb",
+      "style": "cateye",
+      "eye": "right",
+      "source": "original_backup",
+      "vertices": 15154,
+      "triangles": 21272,
+      "bytes": 795872,
+      "sha256": "6e8f103f4d7d2600f48995129adb617cad170426a95f894d1f3e6a6937af37e0"
+    }
+  ],
+  "note": "Cat Eye originals verified against preserved backup; procedural pairs passed mobile geometry validator"
+}

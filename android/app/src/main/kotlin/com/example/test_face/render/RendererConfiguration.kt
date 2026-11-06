@@ -15,7 +15,7 @@ import dev.romainguy.kotlin.math.Float3
  */
 object RendererConfiguration {
     /** Temporary high-contrast material for root-position comparisons. */
-    const val LASH_DIAGNOSTIC_COLOR_ENABLED = true
+    const val LASH_DIAGNOSTIC_COLOR_ENABLED = false
 
     // ── Modo SINCRONIZADO ("estilo TikTok") ─────────────────────────────
     //

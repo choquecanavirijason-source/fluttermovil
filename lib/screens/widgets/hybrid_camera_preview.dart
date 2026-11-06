@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show Factory;
+import 'package:flutter/foundation.dart' show Factory, listEquals;
 import 'package:flutter/gestures.dart' show OneSequenceGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show PlatformViewHitTestBehavior;
@@ -88,7 +88,10 @@ Future<String> extractEyeModelAssetToFile(String assetPath) async {
   );
   final dir = await getTemporaryDirectory();
   final file = File('${dir.path}/${assetPath.split('/').last}');
-  if (!await file.exists() || await file.length() != bytes.length) {
+  final sameLength = await file.exists() && await file.length() == bytes.length;
+  // A model's geometry may change without changing its byte length.
+  // Refresh changed assets instead of retaining an older cached design.
+  if (!sameLength || !listEquals(await file.readAsBytes(), bytes)) {
     await file.writeAsBytes(bytes, flush: true);
   }
   return file.path;

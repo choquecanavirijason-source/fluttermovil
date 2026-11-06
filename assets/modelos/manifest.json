@@ -1,0 +1,242 @@
+[
+  {
+    "path": "cateye/cateyeleft.glb",
+    "style": "cateye",
+    "eye": "left",
+    "source": "original_backup",
+    "vertices": 17563,
+    "triangles": 24722,
+    "bytes": 922568,
+    "sha256": "6f40d04f8281c3eba5a2bda58b202fc6361036624911c88aa2a038a736009e9c"
+  },
+  {
+    "path": "cateye/cateyeright.glb",
+    "style": "cateye",
+    "eye": "right",
+    "source": "original_backup",
+    "vertices": 15154,
+    "triangles": 21272,
+    "bytes": 795872,
+    "sha256": "6e8f103f4d7d2600f48995129adb617cad170426a95f894d1f3e6a6937af37e0"
+  },
+  {
+    "path": "wispy/wispy_left.glb",
+    "style": "wispy",
+    "eye": "left",
+    "vertices": 6434,
+    "triangles": 5808,
+    "fibers": 156,
+    "bytes": 345132,
+    "sha256": "b6679193cebeccd7c8f12e158730646e63b17f8dd1ab3b1e5f87d864de2a74e0",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "wispy/wispy_right.glb",
+    "style": "wispy",
+    "eye": "right",
+    "vertices": 6434,
+    "triangles": 5808,
+    "fibers": 156,
+    "bytes": 345136,
+    "sha256": "1bdf13fc2361f29ceae6b1025199517cb91f3d00cbd1ad4c3a61a1febe1ac4cb",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "catclassic/cat_classic_left.glb",
+    "style": "catclassic",
+    "eye": "left",
+    "vertices": 4994,
+    "triangles": 4512,
+    "fibers": 120,
+    "bytes": 268244,
+    "sha256": "fd3e5daa16a8e8f072b2f05581e44fc6e7f951b3c32296be4e612e45eb86a486",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "catclassic/cat_classic_right.glb",
+    "style": "catclassic",
+    "eye": "right",
+    "vertices": 4994,
+    "triangles": 4512,
+    "fibers": 120,
+    "bytes": 268248,
+    "sha256": "2958e7c2e794c8eaf4568373f53f4cd62a51844060b940502f1af683b327a2db",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "foxyeyex/foxy_intense_left.glb",
+    "style": "foxyeye",
+    "eye": "left",
+    "vertices": 4874,
+    "triangles": 4404,
+    "fibers": 117,
+    "bytes": 261828,
+    "sha256": "541908d84688143bb05d088b2bca1f151afefe49c076934afb9d15996174146e",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "foxyeyex/foxy_intense_right.glb",
+    "style": "foxyeye",
+    "eye": "right",
+    "vertices": 4874,
+    "triangles": 4404,
+    "fibers": 117,
+    "bytes": 261832,
+    "sha256": "0229c69f8110223c80647e321d5675a91212df5f42aa7d2beb0dca0aa7a7f7c6",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "natural/natural_left.glb",
+    "style": "natural",
+    "eye": "left",
+    "vertices": 2514,
+    "triangles": 2280,
+    "fibers": 58,
+    "bytes": 135804,
+    "sha256": "b18b44ec8658a106029c09cbfec2a1d146ab6818d0bf888b36d69073f3f1e64f",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "natural/natural_right.glb",
+    "style": "natural",
+    "eye": "right",
+    "vertices": 2514,
+    "triangles": 2280,
+    "fibers": 58,
+    "bytes": 135808,
+    "sha256": "e485b1efa86f87a0967a46619e44250dee2a419a4ec4f54a90653ab8b5686070",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "dolleye/doll_eye_left.glb",
+    "style": "dolleye",
+    "eye": "left",
+    "vertices": 4514,
+    "triangles": 4080,
+    "fibers": 108,
+    "bytes": 242608,
+    "sha256": "b527b929963414cc6eea552f33be095c863a8204d8ffa21d1e5628fe6d1396c9",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "dolleye/doll_eye_right.glb",
+    "style": "dolleye",
+    "eye": "right",
+    "vertices": 4514,
+    "triangles": 4080,
+    "fibers": 108,
+    "bytes": 242608,
+    "sha256": "b655f17df2ffb667ffb91ae16d90badd656e24f007c3e9ffa262d78cf8f31b54",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "squirrel/squirrel_left.glb",
+    "style": "squirrel",
+    "eye": "left",
+    "vertices": 4394,
+    "triangles": 3972,
+    "fibers": 105,
+    "bytes": 236200,
+    "sha256": "9d397d9f94f2c5d737c5e5189d3690c54ffcec15f772d12755c0d2646ea82de5",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "squirrel/squirrel_right.glb",
+    "style": "squirrel",
+    "eye": "right",
+    "vertices": 4394,
+    "triangles": 3972,
+    "fibers": 105,
+    "bytes": 236204,
+    "sha256": "6136297cfe362d384316e327992d50440481087c5de4e88b8b75eb0e4d4a4089",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "kitten/kitten_left.glb",
+    "style": "kitten",
+    "eye": "left",
+    "vertices": 3914,
+    "triangles": 3540,
+    "fibers": 93,
+    "bytes": 210564,
+    "sha256": "9fc4f76997ed573098f36bc9331b24cbaf3ff5a6339133827af6b25789aa87ce",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "kitten/kitten_right.glb",
+    "style": "kitten",
+    "eye": "right",
+    "vertices": 3914,
+    "triangles": 3540,
+    "fibers": 93,
+    "bytes": 210568,
+    "sha256": "9897d730c2eeaff3a727ef54f6a7d8d170b70cf2dfc0270c6f9eecf680a1a589",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "wetlook/wet_look_left.glb",
+    "style": "wetlook",
+    "eye": "left",
+    "vertices": 4514,
+    "triangles": 4080,
+    "fibers": 108,
+    "bytes": 242608,
+    "sha256": "cddc1222c1fff272b35102fa7d36382188d6671f345d5c3e3cc9b6df69f1b579",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "wetlook/wet_look_right.glb",
+    "style": "wetlook",
+    "eye": "right",
+    "vertices": 4514,
+    "triangles": 4080,
+    "fibers": 108,
+    "bytes": 242612,
+    "sha256": "4b2584ae9f986ce20ad648fea72d2abbd0551750e9daef8401ae792d72c17f99",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "anime/anime_left.glb",
+    "style": "anime",
+    "eye": "left",
+    "vertices": 3554,
+    "triangles": 3216,
+    "fibers": 84,
+    "bytes": 191336,
+    "sha256": "cc18f08b4d254a85f938f5b58b2e252546f59bea0a0554414f532733bd261169",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "anime/anime_right.glb",
+    "style": "anime",
+    "eye": "right",
+    "vertices": 3554,
+    "triangles": 3216,
+    "fibers": 84,
+    "bytes": 191340,
+    "sha256": "d97d5fddee3395bb45d53edebe19247acc64b289db4c48317accf5afc622e9a4",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "kimk/kim_k_left.glb",
+    "style": "kimk",
+    "eye": "left",
+    "vertices": 5394,
+    "triangles": 4872,
+    "fibers": 130,
+    "bytes": 289592,
+    "sha256": "e57f91bab41446e809b91614f26007ebc135eaaa4998feb6cc3e566501b536af",
+    "widthMultiplier": 3.0
+  },
+  {
+    "path": "kimk/kim_k_right.glb",
+    "style": "kimk",
+    "eye": "right",
+    "vertices": 5394,
+    "triangles": 4872,
+    "fibers": 130,
+    "bytes": 289596,
+    "sha256": "c427ceccd691c8c74c1d3e114960cfdad643c88456f001b6a8d067a7dbadaf2a",
+    "widthMultiplier": 3.0
+  }
+]

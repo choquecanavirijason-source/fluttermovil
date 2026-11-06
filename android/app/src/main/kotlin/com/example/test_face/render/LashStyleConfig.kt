@@ -115,6 +115,12 @@ data class LashStyleConfig(
             "wispy" to WISPY,
             "catclassic" to CAT_CLASSIC,
             "foxyeye" to FOXY_EYE,
+            "dolleye" to DEFAULT,
+            "squirrel" to DEFAULT,
+            "kitten" to DEFAULT,
+            "wetlook" to DEFAULT,
+            "anime" to DEFAULT,
+            "kimk" to DEFAULT,
         )
 
         /**

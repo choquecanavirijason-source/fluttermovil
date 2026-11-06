@@ -1,0 +1,62 @@
+[
+  {
+    "file": "catclassic\\cat_classic_left.glb",
+    "bytes": 4394560,
+    "sha256": "28A1B5CA06A77D85295DC797EADBE2A1A8C23A0CCBF30C40727B67199AF1DAB2"
+  },
+  {
+    "file": "catclassic\\cat_classic_right.glb",
+    "bytes": 4393864,
+    "sha256": "32887EE359E82246D96CFC0FF98646889A0ECE26409233BE3E94577A17DD818B"
+  },
+  {
+    "file": "cateye\\cateyeleft.glb",
+    "bytes": 922568,
+    "sha256": "6F40D04F8281C3EBA5A2BDA58B202FC6361036624911C88AA2A038A736009E9C"
+  },
+  {
+    "file": "cateye\\cateyeleft1.glb",
+    "bytes": 3630860,
+    "sha256": "2B81B160F0D7E827196E659FC4A48A63A64744AFEC7B1126BE4A3D2B720858D2"
+  },
+  {
+    "file": "cateye\\cateyeright.glb",
+    "bytes": 795872,
+    "sha256": "6E8F103F4D7D2600F48995129ADB617CAD170426A95F894D1F3E6A6937AF37E0"
+  },
+  {
+    "file": "cateye\\cateyeright1.glb",
+    "bytes": 3630864,
+    "sha256": "7BCB3A69599DA34274E3273B0DBAC0ACAD93907BABED54BF81935E572C886EB1"
+  },
+  {
+    "file": "foxyeyex\\foxy_intense_left.glb",
+    "bytes": 5471032,
+    "sha256": "83C1506A9B6DEC75ED02C42C80FFD0DB77988B8EDB6BD9A2A4F93577AA8F0E54"
+  },
+  {
+    "file": "foxyeyex\\foxy_intense_right.glb",
+    "bytes": 5468916,
+    "sha256": "5D99E9A8DBBB02DB90780E9A466E9F5310B2A3191D88766E2F69B959FB837103"
+  },
+  {
+    "file": "natural\\natural_left.glb",
+    "bytes": 2738128,
+    "sha256": "3321D2E63EF966233643FF34F05688E320C308D1B9BD27529CC3D3B1CFA13220"
+  },
+  {
+    "file": "natural\\natural_right.glb",
+    "bytes": 2736736,
+    "sha256": "55E2FC3932C360538937D5A3A83A9C6B6D5B61CB0437CCABDA2C4601075DCE61"
+  },
+  {
+    "file": "wispy\\wispy_left.glb",
+    "bytes": 2312852,
+    "sha256": "1611DB9F2B87F34019C818D9683AACE740DB639F40254A28F1BD9FD8B6F532BC"
+  },
+  {
+    "file": "wispy\\wispy_right.glb",
+    "bytes": 2312856,
+    "sha256": "9A16EFB4C72CD64AA0BD682C22250593A08285C53359A8F38C5D1614513F0855"
+  }
+]

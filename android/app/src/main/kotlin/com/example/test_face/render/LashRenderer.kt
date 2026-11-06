@@ -1117,6 +1117,7 @@ class LashRenderer(
                 scaleYToZ = smoothed.scale.y / smoothed.scale.z,
                 curveWidthScale = RendererConfiguration.WIDTH_MULTIPLIER,
                 rootBinding = rootBinding,
+                scratch = slot.meshScratch,
             ).also { diagnosticBent = it } } finally { bufferWrite?.end(diagnosticBent) }
             if (bent) {
                 target.rewind()

@@ -6,7 +6,7 @@ New-Item -ItemType Directory -Force $output | Out-Null
 $math = Get-ChildItem (Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1/dev.romainguy/kotlin-math-jvm/1.5.3') -Recurse -Filter '*.jar' | Select-Object -First 1
 if (!$math) { throw 'Cached kotlin-math dependency not found' }
 $sources = @(Get-ChildItem $PSScriptRoot -Filter '*.kt' | ForEach-Object FullName)
-$sources += (Join-Path $render 'LashLineCurve.kt'), (Join-Path $render 'LashMeshBender.kt'), (Join-Path $render 'LashRootDepth.kt'), (Join-Path $render 'LashRootBinding.kt')
+$sources += (Join-Path $render 'LashLineCurve.kt'), (Join-Path $render 'LashMeshBender.kt'), (Join-Path $render 'LashRootDepth.kt'), (Join-Path $render 'LashRootBinding.kt'), (Join-Path $render 'LashMeshScratch.kt')
 $jar = Join-Path $output 'checks.jar'
 & kotlinc @sources -classpath $math.FullName -include-runtime -d $jar
 if ($LASTEXITCODE -ne 0) { throw 'Root pivot checks failed to compile' }

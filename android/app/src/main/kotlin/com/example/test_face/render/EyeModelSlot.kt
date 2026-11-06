@@ -179,6 +179,7 @@ class EyeModelSlot {
     var lastDropRadians = 0f
     var rootBandMinX = 0f
     var rootBandMaxX = 0f
+    val meshScratch = LashMeshScratch()
 
     fun reset() {
         bufferModelGeneration.incrementAndGet()
@@ -215,6 +216,7 @@ class EyeModelSlot {
         lastDropRadians = 0f
         rootBandMinX = 0f
         rootBandMaxX = 0f
+        meshScratch.clear()
         visibleRequested = null
     }
 }

@@ -113,18 +113,30 @@ flutter:
 
     - assets/modelos/cateye/cateyeleft.glb
     - assets/modelos/cateye/cateyeright.glb
+    - assets/modelos/cateye/preview.png
 
     - assets/modelos/wispy/wispy_left.glb
     - assets/modelos/wispy/wispy_right.glb
+    - assets/modelos/wispy/preview.png
 
     - assets/modelos/catclassic/cat_classic_left.glb
     - assets/modelos/catclassic/cat_classic_right.glb
+    - assets/modelos/catclassic/preview.png
 
     - assets/modelos/foxyeyex/foxy_intense_left.glb
     - assets/modelos/foxyeyex/foxy_intense_right.glb
+    - assets/modelos/foxyeyex/preview.png
 
     - assets/modelos/natural/natural_left.glb
     - assets/modelos/natural/natural_right.glb
+    - assets/modelos/natural/preview.png
+
+    - assets/modelos/dolleye/
+    - assets/modelos/squirrel/
+    - assets/modelos/kitten/
+    - assets/modelos/wetlook/
+    - assets/modelos/anime/
+    - assets/modelos/kimk/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

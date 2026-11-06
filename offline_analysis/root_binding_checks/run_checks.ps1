@@ -8,7 +8,7 @@ $math = Get-ChildItem (Join-Path $env:USERPROFILE '.gradle/caches/modules-2/file
 if (!$math) { throw 'Cached kotlin-math dependency not found' }
 $sources = @('Geometry.kt','Normal.kt','Log.kt') | ForEach-Object { Join-Path $fixtures $_ }
 $sources += @(Get-ChildItem $PSScriptRoot -Filter '*.kt' | ForEach-Object FullName)
-$sources += @('LashLineCurve.kt','LashMeshBender.kt','LashRootBinding.kt','LashRootDepth.kt','LidDropRotation.kt','CameraProjection.kt') | ForEach-Object { Join-Path $render $_ }
+$sources += @('LashLineCurve.kt','LashMeshBender.kt','LashRootBinding.kt','LashRootDepth.kt','LashMeshScratch.kt','LidDropRotation.kt','CameraProjection.kt') | ForEach-Object { Join-Path $render $_ }
 $jar = Join-Path $output 'checks.jar'
 & kotlinc @sources -classpath $math.FullName -include-runtime -d $jar
 if ($LASTEXITCODE -ne 0) { throw 'Root binding checks failed to compile' }
@@ -19,3 +19,5 @@ $meshes = Join-Path $output 'meshes'
 if ($LASTEXITCODE -ne 0) { throw 'Asset fixture extraction failed' }
 & java -cp ($jar + ';' + $math.FullName) com.example.test_face.render.AssetCheckKt $meshes
 if ($LASTEXITCODE -ne 0) { throw 'Real asset binding checks failed' }
+& java -cp ($jar + ';' + $math.FullName) com.example.test_face.render.BulkCheckKt $meshes
+if ($LASTEXITCODE -ne 0) { throw 'Bulk-write equivalence checks failed' }

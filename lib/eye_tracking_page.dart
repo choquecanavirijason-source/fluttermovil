@@ -65,33 +65,69 @@ String _lashStyleIdFor(String displayName) =>
 const _localLashPresets = [
   _LocalLashPreset(
     name: 'Cat Eye',
-    thumbnailAsset: 'assets/p1.png',
+    thumbnailAsset: 'assets/modelos/cateye/preview.png',
     leftModelAsset: defaultLeftEyeModelAsset,
     rightModelAsset: defaultRightEyeModelAsset,
   ),
   _LocalLashPreset(
     name: 'Wispy',
-    thumbnailAsset: 'assets/p2.png',
+    thumbnailAsset: 'assets/modelos/wispy/preview.png',
     leftModelAsset: 'assets/modelos/wispy/wispy_left.glb',
     rightModelAsset: 'assets/modelos/wispy/wispy_right.glb',
   ),
   _LocalLashPreset(
     name: 'Cat Classic',
-    thumbnailAsset: 'assets/p3.png',
+    thumbnailAsset: 'assets/modelos/catclassic/preview.png',
     leftModelAsset: 'assets/modelos/catclassic/cat_classic_left.glb',
     rightModelAsset: 'assets/modelos/catclassic/cat_classic_right.glb',
   ),
   _LocalLashPreset(
     name: 'Foxy Eye',
-    thumbnailAsset: 'assets/p4.png',
+    thumbnailAsset: 'assets/modelos/foxyeyex/preview.png',
     leftModelAsset: 'assets/modelos/foxyeyex/foxy_intense_left.glb',
     rightModelAsset: 'assets/modelos/foxyeyex/foxy_intense_right.glb',
   ),
   _LocalLashPreset(
     name: 'Natural',
-    thumbnailAsset: 'assets/p5.png',
+    thumbnailAsset: 'assets/modelos/natural/preview.png',
     leftModelAsset: 'assets/modelos/natural/natural_left.glb',
     rightModelAsset: 'assets/modelos/natural/natural_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Doll Eye',
+    thumbnailAsset: 'assets/modelos/dolleye/preview.png',
+    leftModelAsset: 'assets/modelos/dolleye/doll_eye_left.glb',
+    rightModelAsset: 'assets/modelos/dolleye/doll_eye_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Squirrel',
+    thumbnailAsset: 'assets/modelos/squirrel/preview.png',
+    leftModelAsset: 'assets/modelos/squirrel/squirrel_left.glb',
+    rightModelAsset: 'assets/modelos/squirrel/squirrel_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Kitten',
+    thumbnailAsset: 'assets/modelos/kitten/preview.png',
+    leftModelAsset: 'assets/modelos/kitten/kitten_left.glb',
+    rightModelAsset: 'assets/modelos/kitten/kitten_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Wet Look',
+    thumbnailAsset: 'assets/modelos/wetlook/preview.png',
+    leftModelAsset: 'assets/modelos/wetlook/wet_look_left.glb',
+    rightModelAsset: 'assets/modelos/wetlook/wet_look_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Anime',
+    thumbnailAsset: 'assets/modelos/anime/preview.png',
+    leftModelAsset: 'assets/modelos/anime/anime_left.glb',
+    rightModelAsset: 'assets/modelos/anime/anime_right.glb',
+  ),
+  _LocalLashPreset(
+    name: 'Kim K',
+    thumbnailAsset: 'assets/modelos/kimk/preview.png',
+    leftModelAsset: 'assets/modelos/kimk/kim_k_left.glb',
+    rightModelAsset: 'assets/modelos/kimk/kim_k_right.glb',
   ),
 ];
 
@@ -142,7 +178,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// volver a ver dónde cree el motor que está la línea de pestañas (es lo
   /// único que hace falta cambiar; el painter sigue enchufado al
   /// `_frameNotifier` y se repinta a la cadencia real del tracking).
-  static const bool _showLidLandmarkDebug = true;
+  static const bool _showLidLandmarkDebug = false;
 
   /// DIAGNÓSTICO: `flutter_overlays` de `perf_flags.properties`. `false`
   /// saca los painters que van encima de la cámara (guía de ojos y puntos de

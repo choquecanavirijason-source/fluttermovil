@@ -138,6 +138,7 @@ object LashMeshBender {
          * must use displayed X coordinates, not the unexpanded asset width. */
         curveWidthScale: Float = 1f,
         rootBinding: LashRootBinding? = null,
+        scratch: LashMeshScratch? = null,
     ): Boolean {
         val span = raw.maxX - raw.minX
         // LASH_DEFORMATION_ENABLED=false aísla el TRANSFORM (posición/
@@ -205,6 +206,9 @@ object LashMeshBender {
 
         val vertices = raw.vertices
         val n = vertices.size
+        scratch?.prepare(n)
+        val positionOutput = scratch?.positions
+        val tangentOutput = scratch?.tangents
 
         // Diagnóstico temporal (ver RendererConfiguration.MESH_CALIBRATION_LOGGING)
         // — rango real de deviationPx/pixelLocalX en este doblado, para
@@ -294,13 +298,25 @@ object LashMeshBender {
                 val prevX = previous!!.get(base)
                 val prevY = previous.get(base + 1)
                 val prevZ = previous.get(base + 2)
-                target.put(base, prevX + (bentX - prevX) * smoothing)
-                target.put(base + 1, prevY + (bentY - prevY) * smoothing)
-                target.put(base + 2, prevZ + (bentZ - prevZ) * smoothing)
+                if (positionOutput != null) {
+                    positionOutput[base] = prevX + (bentX - prevX) * smoothing
+                    positionOutput[base + 1] = prevY + (bentY - prevY) * smoothing
+                    positionOutput[base + 2] = prevZ + (bentZ - prevZ) * smoothing
+                } else {
+                    target.put(base, prevX + (bentX - prevX) * smoothing)
+                    target.put(base + 1, prevY + (bentY - prevY) * smoothing)
+                    target.put(base + 2, prevZ + (bentZ - prevZ) * smoothing)
+                }
             } else {
-                target.put(base, bentX)
-                target.put(base + 1, bentY)
-                target.put(base + 2, bentZ)
+                if (positionOutput != null) {
+                    positionOutput[base] = bentX
+                    positionOutput[base + 1] = bentY
+                    positionOutput[base + 2] = bentZ
+                } else {
+                    target.put(base, bentX)
+                    target.put(base + 1, bentY)
+                    target.put(base + 2, bentZ)
+                }
             }
 
             // Tangente: rotar el cuaternión DE REPOSO (precalculado, ver
@@ -319,10 +335,27 @@ object LashMeshBender {
             val ry = restTangents[tb + 1]
             val rz = restTangents[tb + 2]
             val rw = restTangents[tb + 3]
-            tangentTarget.put(tb, cosHalf * rx - sinHalf * ry)
-            tangentTarget.put(tb + 1, cosHalf * ry + sinHalf * rx)
-            tangentTarget.put(tb + 2, cosHalf * rz + sinHalf * rw)
-            tangentTarget.put(tb + 3, cosHalf * rw - sinHalf * rz)
+            if (tangentOutput != null) {
+                tangentOutput[tb] = cosHalf * rx - sinHalf * ry
+                tangentOutput[tb + 1] = cosHalf * ry + sinHalf * rx
+                tangentOutput[tb + 2] = cosHalf * rz + sinHalf * rw
+                tangentOutput[tb + 3] = cosHalf * rw - sinHalf * rz
+            } else {
+                tangentTarget.put(tb, cosHalf * rx - sinHalf * ry)
+                tangentTarget.put(tb + 1, cosHalf * ry + sinHalf * rx)
+                tangentTarget.put(tb + 2, cosHalf * rz + sinHalf * rw)
+                tangentTarget.put(tb + 3, cosHalf * rw - sinHalf * rz)
+            }
+        }
+        if (positionOutput != null && tangentOutput != null) {
+            val positionCursor = target.position()
+            val tangentCursor = tangentTarget.position()
+            target.position(0)
+            target.put(positionOutput)
+            target.position(positionCursor)
+            tangentTarget.position(0)
+            tangentTarget.put(tangentOutput)
+            tangentTarget.position(tangentCursor)
         }
         if (RendererConfiguration.MESH_CALIBRATION_LOGGING) {
             android.util.Log.i(
