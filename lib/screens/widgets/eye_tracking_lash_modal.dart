@@ -4,12 +4,14 @@ class EyeTrackingLashModal extends StatelessWidget {
   final List<String> designImages;
   final List<String> designOptions;
   final VoidCallback onClose;
+  final ValueChanged<int>? onSelect;
 
   const EyeTrackingLashModal({
     super.key,
     required this.designImages,
     required this.designOptions,
     required this.onClose,
+    this.onSelect,
   });
 
   @override
@@ -37,11 +39,18 @@ class EyeTrackingLashModal extends StatelessWidget {
                         child: Row(
                           children: [
                             const SizedBox(width: 12),
-                            const Icon(Icons.search, color: Colors.white54, size: 22),
+                            const Icon(
+                              Icons.search,
+                              color: Colors.white54,
+                              size: 22,
+                            ),
                             const SizedBox(width: 8),
                             const Expanded(
                               child: TextField(
-                                style: TextStyle(color: Colors.white, fontSize: 16),
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                ),
                                 decoration: InputDecoration(
                                   hintText: 'Buscar',
                                   hintStyle: TextStyle(color: Colors.white54),
@@ -56,7 +65,11 @@ class EyeTrackingLashModal extends StatelessWidget {
                     const SizedBox(width: 12),
                     GestureDetector(
                       onTap: onClose,
-                      child: const Icon(Icons.close, color: Colors.white, size: 28),
+                      child: const Icon(
+                        Icons.close,
+                        color: Colors.white,
+                        size: 28,
+                      ),
                     ),
                   ],
                 ),
@@ -67,55 +80,59 @@ class EyeTrackingLashModal extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: GridView.builder(
                     itemCount: designImages.length,
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 4,
-                      mainAxisSpacing: 12,
-                      crossAxisSpacing: 12,
-                      childAspectRatio: 0.85,
-                    ),
-                    itemBuilder: (context, index) {
-                      return Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black,
-                          borderRadius: BorderRadius.circular(12),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 4,
+                          mainAxisSpacing: 12,
+                          crossAxisSpacing: 12,
+                          childAspectRatio: 0.85,
                         ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Container(
-                              width: 54,
-                              height: 54,
-                              decoration: const BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Center(
-                                child: Image.asset(
-                                  designImages[index],
-                                  width: 38,
-                                  height: 38,
-                                  fit: BoxFit.contain,
-                                  errorBuilder: (_, __, ___) => const Icon(
-                                    Icons.image_not_supported,
-                                    color: Colors.grey,
-                                    size: 32,
+                    itemBuilder: (context, index) {
+                      return GestureDetector(
+                        onTap: () => onSelect?.call(index),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 54,
+                                height: 54,
+                                decoration: const BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Center(
+                                  child: Image.asset(
+                                    designImages[index],
+                                    width: 38,
+                                    height: 38,
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (_, _, _) => const Icon(
+                                      Icons.image_not_supported,
+                                      color: Colors.grey,
+                                      size: 32,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              designOptions[index],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.normal,
+                              const SizedBox(height: 8),
+                              Text(
+                                designOptions[index],
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.normal,
+                                ),
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       );
                     },

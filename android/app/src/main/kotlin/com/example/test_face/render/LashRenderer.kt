@@ -119,6 +119,24 @@ class LashRenderer(
      * ([writeInterpolatedPose]) NO debe pisarla con una pose extrapolada. */
     @Volatile private var frameSyncActive = false
 
+    // Switching to the assistant's live PreviewView must not retain a stale
+    // Filament camera plane while MediaPipe has no face to report.
+    @Volatile private var synchronizedPreviewEnabled = true
+    @Volatile private var previewSourceGeneration = 0
+
+    /** Main thread, after CameraX successfully binds its preview source. */
+    fun setSynchronizedPreviewEnabled(enabled: Boolean) {
+        if (synchronizedPreviewEnabled == enabled) return
+        synchronizedPreviewEnabled = enabled
+        previewSourceGeneration++
+        if (!enabled) {
+            frameSyncActive = false
+            background?.setVisible(false)
+        }
+        Log.i(TAG, "PREVIEW_SOURCE synchronized=$enabled generation=$previewSourceGeneration")
+    }
+
+
     /** Antigüedad del frame al entregarlo a MediaPipe (sensor →
      * `detectAsync`), ver [onFaceResult]. 0 = no medible o `forward_age=off`:
      * el horizonte queda como antes. */
@@ -730,7 +748,12 @@ class LashRenderer(
         val rightPose = rightSlot.syncPose
         val leftClosed = leftSlot.bendClosedAmount
         val rightClosed = rightSlot.bendClosedAmount
+        val sourceGeneration = previewSourceGeneration
         val posted = mainHandler.post {
+            if (!synchronizedPreviewEnabled || sourceGeneration != previewSourceGeneration) {
+                frame.image.close()
+                return@post
+            }
             try {
                 bg.show(frame.image, mainHandler, frame.rotationDegrees, frame.mirror, camera, depth)
                 writeSyncedPose(leftSlot, leftPose, leftClosed)
@@ -764,7 +787,12 @@ class LashRenderer(
             viewportHeight = sv.height,
         )
         val depth = backgroundDepth(sv)
+        val sourceGeneration = previewSourceGeneration
         val posted = mainHandler.post {
+            if (!synchronizedPreviewEnabled || sourceGeneration != previewSourceGeneration) {
+                frame.image.close()
+                return@post
+            }
             bg.show(frame.image, mainHandler, frame.rotationDegrees, frame.mirror, camera, depth)
         }
         if (!posted) frame.image.close()

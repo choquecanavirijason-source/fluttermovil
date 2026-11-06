@@ -104,6 +104,7 @@ flutter:
     - assets/flash.png
 
     # Imágenes de la cámara
+    - assets/cateye_options/
     - assets/p1.png
     - assets/p2.png
     - assets/p3.png

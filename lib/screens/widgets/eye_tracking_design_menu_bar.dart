@@ -9,6 +9,9 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
   final ValueChanged<int>? onSelectDesign;
   final VoidCallback onOpenGrid;
   final String categoryTitle;
+  final String? helperText;
+  final String resetLabel;
+  final VoidCallback? onReset;
 
   const EyeTrackingDesignMenuBar({
     super.key,
@@ -18,6 +21,9 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
     this.onSelectDesign,
     required this.onOpenGrid,
     required this.categoryTitle,
+    this.helperText,
+    this.resetLabel = 'Restaurar original',
+    this.onReset,
   });
 
   static const _green = AppColors.actionGreen;
@@ -52,6 +58,31 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
               ),
             ),
           ),
+          if (helperText != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      helperText!,
+                      style: const TextStyle(color: Colors.white, fontSize: 11),
+                    ),
+                  ),
+                  if (onReset != null)
+                    TextButton(
+                      onPressed: onReset,
+                      child: Text(
+                        resetLabel,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           // ── Panel de opciones ─────────────────────────────
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -70,8 +101,8 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
                             onTap: () => onSelectDesign?.call(index),
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 200),
-                              width: 60,
-                              height: 60,
+                              width: 76,
+                              height: 80,
                               padding: const EdgeInsets.symmetric(
                                 vertical: 4,
                                 horizontal: 6,
@@ -97,7 +128,7 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
                                     width: 34,
                                     height: 34,
                                     color: isSelected ? _green : Colors.white,
-                                    errorBuilder: (_, __, _) => const Icon(
+                                    errorBuilder: (_, _, _) => const Icon(
                                       Icons.image_not_supported,
                                       color: Colors.white54,
                                       size: 34,
@@ -106,6 +137,9 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
                                   const SizedBox(height: 2),
                                   Text(
                                     designOptions[index],
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
                                     style: TextStyle(
                                       color: isSelected ? _green : Colors.white,
                                       fontWeight: FontWeight.w500,

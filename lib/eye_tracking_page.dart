@@ -18,10 +18,13 @@ import 'features/tracking/data/tracking_repository_impl.dart';
 import 'eye_tracking_alignment.dart';
 import 'eye_tracking_customization_options.dart';
 import 'lid_landmark_debug_painter.dart';
+import 'lashes/cat_eye_recipe.dart';
+import 'lashes/cat_eye_recipe_cache.dart';
 import 'eye_tracking_model.dart';
 import 'eye_tracking_photo_pipeline.dart';
 import 'native_eye_tracking_service.dart';
 import 'screens/widgets/bottom_carousel.dart';
+import 'screens/widgets/preview_startup_cover.dart';
 import 'screens/widgets/client_picker_sheet.dart';
 import 'screens/widgets/eye_position_guide_painter.dart';
 import 'screens/widgets/eye_tracking_bottom_actions.dart';
@@ -167,6 +170,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   static const Duration _mappableFrameMaxAge = Duration(milliseconds: 1500);
 
   String _status = 'Inicializando...';
+  String? _startupFailure;
+  Timer? _startupWatchdog;
   DateTime? _lastFrameUiUpdate;
 
   bool _workAssistantOpening = false;
@@ -252,12 +257,69 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
+  final _recipeCache = CatEyeRecipeCache();
+  CatEyeRecipe? _appliedRecipe;
+  Timer? _recipeTimer;
+  int _recipeRequest = 0;
+  bool _buildingRecipe = false;
+
+  void _resetRecipeSelection() {
+    _selectedDesignIndex = _appliedRecipe?.length ?? 1;
+    _selectedTechIndex = _appliedRecipe?.technique ?? 0;
+    _selectedThicknessIndex = _appliedRecipe?.thickness ?? 3;
+  }
+
+  Future<void> _applyRecipe(CatEyeRecipe recipe, int request) async {
+    try {
+      final paths = await _recipeCache.resolve(recipe);
+      if (!mounted ||
+          request != _recipeRequest ||
+          _selectedLashIndex != recipe.style) {
+        return;
+      }
+      setState(() => _switchingDesignModel = true);
+      await _service.loadEyeModels(
+        leftPath: paths.left,
+        rightPath: paths.right,
+      );
+      await _service.setLashStyle(recipe.styleId);
+      if (!mounted) return;
+      setState(() {
+        _leftModelPath = paths.left;
+        _rightModelPath = paths.right;
+        _appliedRecipe = recipe;
+      });
+    } catch (e) {
+      if (mounted && request == _recipeRequest) {
+        setState(_resetRecipeSelection);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se pudieron aplicar los ajustes. Inténtalo de nuevo.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted && request == _recipeRequest) {
+        setState(() {
+          _buildingRecipe = false;
+          _switchingDesignModel = false;
+        });
+      }
+    }
+  }
+
+  void _restoreCurrentStyle() {
+    if (_switchingDesignModel) return;
+    _onLashSelect(_selectedLashIndex);
+  }
+
   int _selectedFilter = 0;
   int _selectedLashIndex = 0;
-  int _selectedDesignIndex = 2;
+  int _selectedDesignIndex = 1;
   int _selectedTechIndex = 0;
-  int _selectedEffectIndex = 0;
-  int _selectedThicknessIndex = 0;
+  int _selectedThicknessIndex = 3;
   bool _showTransparentMenu = true;
 
   /// Categoría activa del menú inferior: 'design', 'tech', 'effect', 'thickness', o null.
@@ -485,6 +547,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       });
     } catch (e) {
       debugPrint('No se pudieron resolver los .glb de pestañas: $e');
+      if (mounted) {
+        setState(() => _startupFailure = 'No se pudieron cargar los diseños.');
+      }
     }
   }
 
@@ -495,8 +560,26 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       previewCaptureKey: _previewCaptureKey,
     );
     WidgetsBinding.instance.addObserver(this);
-    unawaited(_resolveEyeModelPaths());
-    _start();
+    // Paint the loading view before creating native camera/Filament surfaces.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _startupWatchdog = Timer(const Duration(seconds: 20), () {
+        if (mounted && _frame == null) {
+          setState(
+            () => _startupFailure ??=
+                'No se pudo iniciar la cámara. Vuelve a intentarlo.',
+          );
+        }
+      });
+      unawaited(_resolveEyeModelPaths());
+      unawaited(
+        _start().catchError((Object error, StackTrace stack) {
+          if (mounted) {
+            setState(() => _startupFailure = 'No se pudo iniciar la cámara.');
+          }
+        }),
+      );
+    });
     _timingsDiag.start();
     unawaited(_loadPerfFlags());
 
@@ -560,6 +643,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // cámara…") — la llegada del primer frame oculta el badge (ver
     // `_frame == null` en el `build`).
     final isFirstFrame = _frame == null;
+    if (isFirstFrame) {
+      _startupWatchdog?.cancel();
+      _startupFailure = null;
+    }
     _frame = frame;
     // Repintado de los overlays: independiente del throttle de `setState`
     // (ver [_frameNotifier]) — aquí no hay límite, cada frame que llega se
@@ -595,7 +682,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
-        setState(() => _status = 'Error: $e');
+        setState(() {
+          _status = 'Error: $e';
+          if (_frame == null) _startupFailure = 'No se pudo iniciar la cámara.';
+        });
       },
     );
     await _service.startTracking();
@@ -612,7 +702,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final camera = await Permission.camera.request();
     if (!mounted) return;
     if (!camera.isGranted) {
-      setState(() => _status = 'Permiso de cámara denegado');
+      setState(() {
+        _status = 'Permiso de cámara denegado';
+        _startupFailure =
+            'Se necesita permiso de cámara para abrir el probador.';
+      });
       return;
     }
 
@@ -622,7 +716,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
-        setState(() => _status = 'Error: $e');
+        setState(() {
+          _status = 'Error: $e';
+          if (_frame == null) _startupFailure = 'No se pudo iniciar la cámara.';
+        });
       },
     );
 
@@ -654,6 +751,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   @override
   void dispose() {
+    _startupWatchdog?.cancel();
+    _recipeTimer?.cancel();
+    _recipeRequest++;
     _timingsDiag.stop();
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
@@ -663,24 +763,43 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     unawaited(_service.setInvertedFaceMode(false));
     _service.stopTracking();
     _frameNotifier.dispose();
-    ref.read(sessionClientProvider.notifier).state = null;
+    // Route disposal may run during build: notify other consumers only after
+    // their current frame has finished, never from this element's teardown.
+    final sessionController = ref.read(sessionClientProvider.notifier);
+    final departingClient = sessionController.state;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (identical(sessionController.state, departingClient)) {
+        sessionController.state = null;
+      }
+    });
     super.dispose();
   }
 
+  bool _leavingPreview = false;
+
   void _goHome(BuildContext context) {
-    if (!context.mounted) return;
-    context.go('/');
+    if (!mounted || _leavingPreview) return;
+    if (_alignmentGuideActive && !_capturingPhoto && !_workAssistantOpening) {
+      _toggleAlignmentGuide();
+      return;
+    }
+    _leavingPreview = true;
+    // Do not navigate recursively while Router is disposing a popped route.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.go('/');
+    });
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   void _onFilterSelect(int index) {
+    if (_switchingDesignModel) return;
+    final resetRemote = _selectedLashIndex >= _localLashPresets.length;
+    if (resetRemote) _onLashSelect(0);
     setState(() {
       _selectedFilter = index;
       _showTransparentMenu = true;
       _activeCategory = null;
-      // La lista de diseños del nuevo filtro recién se resuelve en el
-      // próximo build (viene de un provider); reiniciar el índice evita
-      // referenciar una posición fuera de rango del filtro anterior.
-      _selectedLashIndex = 0;
+      // Local presets have identical indices in both catalogue filters.
     });
   }
 
@@ -691,11 +810,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     });
   }
 
-  List<String> get _activeCategoryImages =>
-      LashCustomizationCatalog.imagesFor(_activeCategory);
+  List<String> get _activeCategoryImages => _activeCategory == 'effect'
+      ? _localLashPresets.map((p) => p.thumbnailAsset).toList()
+      : LashCustomizationCatalog.imagesFor(_activeCategory);
 
-  List<String> get _activeCategoryOptions =>
-      LashCustomizationCatalog.optionsFor(_activeCategory);
+  List<String> get _activeCategoryOptions => _activeCategory == 'effect'
+      ? _localLashPresets.map((p) => p.name).toList()
+      : LashCustomizationCatalog.optionsFor(_activeCategory);
 
   int get _activeCategorySelectedIndex {
     switch (_activeCategory) {
@@ -704,7 +825,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       case 'tech':
         return _selectedTechIndex;
       case 'effect':
-        return _selectedEffectIndex;
+        return _selectedLashIndex < _localLashPresets.length
+            ? _selectedLashIndex
+            : -1;
       case 'thickness':
         return _selectedThicknessIndex;
       default:
@@ -713,6 +836,21 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   void _onActiveCategorySelect(int index) {
+    if (_switchingDesignModel || _hidingLashesForAlignmentGuide) return;
+    if (_activeCategory == 'effect') {
+      _onLashSelect(index);
+      return;
+    }
+    if (_selectedLashIndex >= _localLashPresets.length) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Selecciona un estilo local para ajustar largo, técnica y grosor.',
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       switch (_activeCategory) {
         case 'design':
@@ -721,14 +859,24 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         case 'tech':
           _selectedTechIndex = index;
           break;
-        case 'effect':
-          _selectedEffectIndex = index;
-          break;
         case 'thickness':
           _selectedThicknessIndex = index;
           break;
       }
+      _buildingRecipe = true;
     });
+    final recipe = CatEyeRecipe(
+      style: _selectedLashIndex,
+      length: _selectedDesignIndex,
+      technique: _selectedTechIndex,
+      thickness: _selectedThicknessIndex,
+    );
+    final request = ++_recipeRequest;
+    _recipeTimer?.cancel();
+    _recipeTimer = Timer(
+      const Duration(milliseconds: 120),
+      () => unawaited(_applyRecipe(recipe, request)),
+    );
   }
 
   Future<void> _resumeEyePreviewAfterAssistant() async {
@@ -767,7 +915,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
         if (!mounted) return;
-        setState(() => _status = 'Error: $e');
+        setState(() {
+          _status = 'Error: $e';
+          if (_frame == null) _startupFailure = 'No se pudo iniciar la cámara.';
+        });
       },
     );
     await _service.startTracking();
@@ -1022,10 +1173,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// cerrados durante todo el procesamiento posterior, y además la foto
   /// salía de un instante distinto al que se estaba viendo.
   void _toggleAlignmentGuide() {
-    if (_workAssistantOpening) return;
+    if (_workAssistantOpening || _buildingRecipe || _switchingDesignModel) {
+      return;
+    }
     final activating = !_alignmentGuideActive;
     setState(() {
       _alignmentGuideActive = activating;
+      // Lying-client analysis belongs to the guide. Restore the regular
+      // preview mode when returning to the lash try-on screen.
+      if (!activating) _cameraInverted180 = false;
       _eyesAligned = false;
       _faceFramed = false;
       _eyesClosedOk = false;
@@ -1319,11 +1475,25 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   Future<void> _saveToClient(Client client) async {
+    if (_buildingRecipe || _switchingDesignModel) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Espera a que se aplique el diseño.')),
+      );
+      return;
+    }
+    final effect = _selectedLashIndex < _localLashPresets.length
+        ? _localLashPresets[_selectedLashIndex].name
+        : _currentCarouselDesigns[_selectedLashIndex - _localLashPresets.length]
+              .name;
+    final recipe = _appliedRecipe;
     final notes = [
-      'Diseño: ${LashCustomizationCatalog.designOptionAt(_selectedDesignIndex)}',
-      'Tecnología: ${LashCustomizationCatalog.techOptionAt(_selectedTechIndex)}',
-      'Efecto: ${LashCustomizationCatalog.effectOptionAt(_selectedEffectIndex)}',
-      'Grosor: ${LashCustomizationCatalog.thicknessOptionAt(_selectedThicknessIndex)}',
+      'Efecto: $effect',
+      if (recipe == null) 'Modelo: original',
+      if (recipe != null) ...[
+        'Largo: ${LashCustomizationCatalog.designOptionAt(recipe.length)}',
+        'Técnica: ${LashCustomizationCatalog.techOptionAt(recipe.technique)}',
+        'Grosor: ${LashCustomizationCatalog.thicknessOptionAt(recipe.thickness)}',
+      ],
     ].join(' | ');
 
     try {
@@ -1353,12 +1523,26 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   void _onLashSelect(int index) {
-    setState(() => _selectedLashIndex = index);
+    if (_switchingDesignModel) return;
+    _recipeTimer?.cancel();
+    _recipeRequest++;
+    setState(() {
+      _selectedLashIndex = index;
+      _appliedRecipe = null;
+      _buildingRecipe = false;
+      _resetRecipeSelection();
+    });
     // Los presets locales van primero en el carrusel (ver build()), así que
     // los primeros _localLashPresets.length índices son locales y el resto
     // corresponde a _currentCarouselDesigns (catálogo remoto).
-    if (index < _localLashPresets.length) {
+    if (index == 0) {
+      // Keep the original Cat Eye entry and its current configurable behavior.
       unawaited(_switchLocalPreset(_localLashPresets[index]));
+      return;
+    }
+    if (index < _localLashPresets.length) {
+      setState(() => _buildingRecipe = true);
+      unawaited(_applyRecipe(CatEyeRecipe(style: index), _recipeRequest));
       return;
     }
     final remoteIndex = index - _localLashPresets.length;
@@ -1407,9 +1591,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         : 0;
 
     return PopScope(
-      canPop: true,
+      canPop: false,
       onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (!didPop) return;
+        if (didPop) return;
         _goHome(context);
       },
       child: Scaffold(
@@ -1524,7 +1708,24 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               EyeTrackingDesignMenuBar(
                 designImages: _activeCategoryImages,
                 designOptions: _activeCategoryOptions,
-                selectedDesign: _activeCategorySelectedIndex,
+                selectedDesign:
+                    _activeCategory == 'effect' ||
+                        (_selectedLashIndex < _localLashPresets.length &&
+                            _appliedRecipe != null) ||
+                        _buildingRecipe
+                    ? _activeCategorySelectedIndex
+                    : -1,
+                helperText: _buildingRecipe
+                    ? 'Aplicando…'
+                    : _selectedLashIndex < _localLashPresets.length
+                    ? '${_localLashPresets[_selectedLashIndex].name} · ${_appliedRecipe == null ? 'original' : 'personalizado'}'
+                    : 'Ajustes disponibles para estilos locales',
+                resetLabel: _selectedLashIndex == 0
+                    ? 'Restaurar original'
+                    : 'Restablecer',
+                onReset: _selectedLashIndex < _localLashPresets.length
+                    ? _restoreCurrentStyle
+                    : null,
                 onSelectDesign: _onActiveCategorySelect,
                 onOpenGrid: () => setState(() => _showLashModal = true),
                 categoryTitle: LashCustomizationCatalog.titleFor(
@@ -1535,6 +1736,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               EyeTrackingLashModal(
                 designImages: _activeCategoryImages,
                 designOptions: _activeCategoryOptions,
+                onSelect: (index) {
+                  setState(() => _showLashModal = false);
+                  _onActiveCategorySelect(index);
+                },
                 onClose: () => setState(() => _showLashModal = false),
               ),
             if (!_showLashModal)
@@ -1763,6 +1968,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   ),
                 ),
               ),
+            PreviewStartupCover(
+              ready: _frame != null,
+              error: _startupFailure,
+              onBack: () => _goHome(context),
+            ),
           ],
         ),
       ),

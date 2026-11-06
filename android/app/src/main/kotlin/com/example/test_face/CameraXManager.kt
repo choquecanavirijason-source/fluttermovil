@@ -105,12 +105,14 @@ class CameraXManager(
      * `FaceLandmarkerResult.timestampMs()`). */
     private val sensorTimestampBySubmit = java.util.concurrent.ConcurrentHashMap<Long, Long>()
 
-    /** El modo sincronizado corre con Android 10+ y fuera del modo clienta
-     * echada (análisis girado 180°), que sigue con el `PreviewView`. */
+    /** Keep the synchronized preview throughout the assistant, including
+     * lying-client analysis. Only analysis rotates; its result is derotated by
+     * FaceLandmarkerHelper, and camera buffers retain their sensor orientation.
+     * Avoid switching to an initially hidden TextureView inside VirtualDisplay. */
     private fun frameSyncWanted(): Boolean =
         com.example.test_face.render.RendererConfiguration.FRAME_SYNC_MODE &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            !analysisRotated180
+            (!analysisRotated180 || photoModeEnabled)
 
     /** Hilo de MediaPipe: el fotograma de preview que corresponde a [rawResultTimestampMs]. */
     private fun syncFrameFor(rawResultTimestampMs: Long): com.example.test_face.render.LashRenderer.SyncFrame? {
@@ -1057,6 +1059,9 @@ class CameraXManager(
                     selector,
                     *listOfNotNull(preview, imageAnalysis, extraUseCase).toTypedArray(),
                 )
+                // Hide the previous synchronized camera plane immediately when
+                // switching to the assistant's live PreviewView, even without a face.
+                lashRenderer.setSynchronizedPreviewEnabled(useRing)
                 timestampSource = logCameraCharacteristics(camera)
                 traceSensorSource.set(timestampSource)
                 // DIAGNÓSTICO alineación overlay: el overlay de Flutter asume
