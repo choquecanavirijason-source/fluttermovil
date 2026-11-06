@@ -3,6 +3,7 @@ package com.example.test_face.render
 import android.util.Log
 import com.google.android.filament.Material
 import io.github.sceneview.SceneView
+import io.github.sceneview.math.Color
 import io.github.sceneview.node.ModelNode
 
 /**
@@ -40,6 +41,16 @@ object MaterialManager {
     private const val ANISOTROPY_STRENGTH = 0.85f
 
     fun tune(node: ModelNode, sceneView: SceneView) {
+        if (RendererConfiguration.LASH_DIAGNOSTIC_COLOR_ENABLED) {
+            val diagnostic = sceneView.materialLoader.createColorInstance(
+                color = Color(1f, 0f, 1f, 1f),
+                metallic = 0f,
+                roughness = 1f,
+                reflectance = 0f,
+            ).apply { setDoubleSided(true) }
+            node.setMaterialInstance(diagnostic)
+            return
+        }
         val fiberMaterial = loadFiberMaterial(sceneView)
         if (fiberMaterial != null) {
             applyAnisotropicMaterial(node, fiberMaterial)

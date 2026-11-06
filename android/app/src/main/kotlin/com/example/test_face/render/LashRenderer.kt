@@ -1063,8 +1063,26 @@ class LashRenderer(
             slot.bendClosedAmount += (targetClosed - slot.bendClosedAmount) * closedAlpha
             slot.bendClosedNanos = nowNanos
         }
-        val bandScale = LidDropRotation.bandCompensation(slot.bendClosedAmount)
-        val bendCurve = curve?.withDeviationScale(bandScale)
+        val dropAmount = if (RendererConfiguration.LASH_CLOSED_DROP_ENABLED)
+            LidDropRotation.dropAmount(slot.bendClosedAmount) else 0f
+        val bandScale = 1f + (RendererConfiguration.LASH_CLOSED_BAND_FLATTEN - 1f) * dropAmount
+        val dropRadians = LidDropRotation.angleRadians(slot.bendClosedAmount, smoothed.rotation)
+        val rootBinding = if (sync) transform.attachmentWorldLine?.let { line ->
+            val dropped = LidDropRotation.apply(slot.bendClosedAmount, slot.rootLocalY, smoothed.scale.y, smoothed.rotation)
+            LashRootBinding.fromWorld(
+                line, smoothed.position + (dropped?.positionDelta ?: Float3()),
+                dropped?.rotation ?: smoothed.rotation, smoothed.scale,
+                slot.rootBandMinX, slot.rootBandMaxX,
+            )
+        } else null
+        val closedCurve = transform.closedLashLineCurve
+        val closedBlend = ((slot.bendClosedAmount - 0.7f) / 0.25f).coerceIn(0f, 1f)
+        val closedWeight = closedBlend * closedBlend * (3f - 2f * closedBlend)
+        val useClosedCurve = closedCurve != null
+        val heldBendCurve = curve?.withDeviationScale(bandScale)
+        // Use real closed contours without flattening them a second time.
+        // The bender preserves their Y/Z profile through the node's drop.
+        val bendCurve = slot.closedContour.resolve(heldBendCurve, closedCurve, closedWeight, nowNanos)
 
         // `lidShapeTrusted == false` (ojo cerrándose): con la forma congelada
         // el doblado se saltea, porque ocurre en espacio LOCAL del mesh y
@@ -1073,8 +1091,9 @@ class LashRenderer(
         // La excepción es que haya cambiado [bandScale]: ahí la curva
         // efectiva SÍ es otra y hay que rehacer el doblado.
         val bandScaleChanged = abs(bandScale - slot.lastBandScale) > 1e-3f
-        if (!lashDeformationFrozen && (transform.lidShapeTrusted || bandScaleChanged) &&
-            bendCurve != null && rawMesh != null && geometry != null && target != null &&
+        val dropChanged = abs(dropRadians - slot.lastDropRadians) > 1e-4f
+        if (!lashDeformationFrozen && (rootBinding != null || transform.lidShapeTrusted || bandScaleChanged || dropChanged || useClosedCurve || slot.usedClosedCurve) &&
+            (bendCurve != null || rootBinding != null) && rawMesh != null && geometry != null && target != null &&
             restTangents != null && tangentTarget != null && !slot.bendPending
         ) {
             val bufferWrite = if (com.example.test_face.PerfFlags.config.bufferLifetimeTrace)
@@ -1088,17 +1107,24 @@ class LashRenderer(
                 restTangents = restTangents,
                 tangentTarget = tangentTarget,
                 smoothing = LidDropRotation.deformationSmoothing(
-                    RendererConfiguration.LASH_BEND_SMOOTHING, bandScaleChanged,
+                    RendererConfiguration.LASH_BEND_SMOOTHING, rootBinding != null || bandScaleChanged || dropChanged,
                 ),
                 curve = bendCurve,
                 styleConfig = currentStyleConfig,
                 eyeWidthPx = transform.eyeWidthPx,
+                rootDepths = slot.rootDepths,
+                dropRadians = dropRadians,
+                scaleYToZ = smoothed.scale.y / smoothed.scale.z,
+                curveWidthScale = RendererConfiguration.WIDTH_MULTIPLIER,
+                rootBinding = rootBinding,
             ).also { diagnosticBent = it } } finally { bufferWrite?.end(diagnosticBent) }
             if (bent) {
                 target.rewind()
                 tangentTarget.rewind()
                 slot.hasBentBefore = true
                 slot.lastBandScale = bandScale
+                slot.usedClosedCurve = useClosedCurve
+                slot.lastDropRadians = dropRadians
                 slot.useBufferAAsTarget = !slot.useBufferAAsTarget
                 slot.bendPending = true
                 val vertexCount = rawMesh.vertices.size
@@ -1258,7 +1284,9 @@ class LashRenderer(
                     // el pase a negro neutro, que normaliza contra el máximo
                     // resultante — así el negro sale del degradado YA
                     // corregido y no se reintroduce la línea dura en la raíz.
-                    val rawMesh = mirroredMesh
+                    val rawMesh = if (RendererConfiguration.LASH_DIAGNOSTIC_COLOR_ENABLED) {
+                        mirroredMesh.withDiagnosticVertexColor()
+                    } else mirroredMesh
                         .withColorFloor(RendererConfiguration.LASH_COLOR_FLOOR)
                         .toNeutralBlack(RendererConfiguration.LASH_BLACK_TIP_LUMINANCE)
                     val geometry = Geometry.Builder(RenderableManager.PrimitiveType.TRIANGLES)
@@ -1269,6 +1297,11 @@ class LashRenderer(
                     if (renderableNode != null) {
                         renderableNode.setGeometry(geometry)
                         slot.rawMesh = rawMesh
+                        slot.rootDepths = LashRootDepth.perVertex(rawMesh)
+                        val rootTolerance = (rawMesh.vertices.maxOf { it.position.y } - rawMesh.minY) * 0.005f
+                        val rootRow = rawMesh.vertices.filter { it.position.y - rawMesh.minY <= rootTolerance }
+                        slot.rootBandMinX = rootRow.minOf { it.position.x }
+                        slot.rootBandMaxX = rootRow.maxOf { it.position.x }
                         slot.geometry = geometry
                         // Double-buffer de LashMeshBender.bendInPlace —
                         // FloatBuffer DIRECTO, se asigna UNA vez acá con el

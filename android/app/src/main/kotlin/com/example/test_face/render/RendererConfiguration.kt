@@ -14,6 +14,8 @@ import dev.romainguy.kotlin.math.Float3
  * pasan sin casi ningún suavizado → CERO lag perceptible.
  */
 object RendererConfiguration {
+    /** Temporary high-contrast material for root-position comparisons. */
+    const val LASH_DIAGNOSTIC_COLOR_ENABLED = true
 
     // ── Modo SINCRONIZADO ("estilo TikTok") ─────────────────────────────
     //
@@ -598,7 +600,7 @@ object RendererConfiguration {
      * SUBIR si con el ojo cerrado la pestaña sigue quedando alta; BAJAR si
      * se despega del párpado hacia el pómulo. `0f` lo desactiva.
      */
-    const val LASH_CLOSED_DOWN_SHIFT_DP = 2f
+    const val LASH_CLOSED_DOWN_SHIFT_DP = 0f
 
     /**
      * Ajuste fino que se SUMA a [LASH_CLOSED_DOWN_SHIFT_DP], en píxeles
@@ -614,7 +616,9 @@ object RendererConfiguration {
      * vsync con el cierre suavizado, no dentro del ancla — ver
      * `LashRenderer.applyClosedDownShift` (`closed_shift` en perf_flags).
      */
-    const val LASH_CLOSED_DOWN_SHIFT_EXTRA_PX = 11f
+    // The measured closed-lid contour already locates the attachment line.
+    // A further cheekward shift separates the band from that measured line.
+    const val LASH_CLOSED_DOWN_SHIFT_EXTRA_PX = 0f
 
     /**
      * Ganancia de la CURVA DE RESPUESTA del giro: con cuánto cierre medido
@@ -677,7 +681,7 @@ object RendererConfiguration {
      * BAJAR si con el ojo cerrado la línea de la raíz sigue viéndose
      * demasiado arqueada; SUBIR si queda demasiado recta y artíficial.
      */
-    const val LASH_CLOSED_BAND_FLATTEN = 0.7f
+    const val LASH_CLOSED_BAND_FLATTEN = 0.55f
 
     // ── Congelado de forma por parpadeo (ver OpennessTracker/LidShape) ──
     // Los dos valores están en apertura NORMALIZADA: 0 = cerrado

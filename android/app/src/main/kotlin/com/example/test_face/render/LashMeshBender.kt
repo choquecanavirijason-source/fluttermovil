@@ -131,13 +131,20 @@ object LashMeshBender {
          * transición entre [strength] y esto usa [LashLineCurve.wingBlend],
          * con derivada cero en el borde. */
         wingStrength: Float = RendererConfiguration.LASH_BEND_WING_STRENGTH,
+        rootDepths: FloatArray? = null,
+        dropRadians: Float = 0f,
+        scaleYToZ: Float = RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER,
+        /** Actual projected band width / measured eye width. Curve samples
+         * must use displayed X coordinates, not the unexpanded asset width. */
+        curveWidthScale: Float = 1f,
+        rootBinding: LashRootBinding? = null,
     ): Boolean {
         val span = raw.maxX - raw.minX
         // LASH_DEFORMATION_ENABLED=false aísla el TRANSFORM (posición/
         // rotación/escala) de la DEFORMACIÓN (este doblado) para diagnóstico
         // — ver RendererConfiguration.
         val canBend = RendererConfiguration.LASH_DEFORMATION_ENABLED &&
-            curve != null && eyeWidthPx > 0f && strength > 0f && span > 1e-4f
+            (curve != null || rootBinding != null) && eyeWidthPx > 0f && strength > 0f && span > 1e-4f
         if (!canBend) {
             if (RendererConfiguration.MESH_CALIBRATION_LOGGING) {
                 android.util.Log.w(
@@ -191,6 +198,10 @@ object LashMeshBender {
         // solo por seguridad numérica.
         val radiusPx = (eyeWidthPx * styleConfig.zDepthDropRadiusFraction).coerceAtLeast(1e-3f)
         val blend = previous != null && smoothing < 1f
+        val compensateRoot = rootDepths?.size == raw.vertices.size && dropRadians != 0f &&
+            scaleYToZ.isFinite() && scaleYToZ > 1e-6f
+        val dropCos = if (compensateRoot) cos(dropRadians) else 1f
+        val dropSin = if (compensateRoot) sin(dropRadians) else 0f
 
         val vertices = raw.vertices
         val n = vertices.size
@@ -210,12 +221,12 @@ object LashMeshBender {
             // es solo acceso a campo, no asigna nada nuevo.
             val pos = vertices[i].position
             val t = (pos.x - raw.minX) / span
-            val pixelLocalX = (t - 0.5f) * eyeWidthPx
+            val pixelLocalX = (t - 0.5f) * eyeWidthPx * curveWidthScale
 
             // Fuerza efectiva: `strength` dentro del rango con datos reales,
             // amortiguando suave y continuamente hacia `wingStrength` en la
             // extrapolación — ver [LashLineCurve.wingBlend].
-            val effectiveStrength = strength - (strength - wingStrength) * curve!!.wingBlend(pixelLocalX)
+            val effectiveStrength = strength - (strength - wingStrength) * (curve?.wingBlend(pixelLocalX) ?: 0f)
 
             // SIGNO (fix 2026-09-03): [LashLineCurve.fit] proyecta los puntos
             // del párpado en ESPACIO DE IMAGEN, donde Y crece hacia ABAJO.
@@ -237,8 +248,8 @@ object LashMeshBender {
             // tangente más abajo (`atan(slope)`), y tiene que seguir al shear
             // de posición o la normal queda peleada con la superficie
             // doblada.
-            val deviationPx = -curve.deviationAt(pixelLocalX) * effectiveStrength
-            val slope = -curve.slopeAt(pixelLocalX) * effectiveStrength
+            val deviationPx = -(curve?.deviationAt(pixelLocalX) ?: 0f) * effectiveStrength
+            val slope = -(curve?.slopeAt(pixelLocalX) ?: 0f) * effectiveStrength
             if (deviationPx < minDeviationPx) minDeviationPx = deviationPx
             if (deviationPx > maxDeviationPx) maxDeviationPx = deviationPx
             if (pixelLocalX < minPixelLocalX) minPixelLocalX = pixelLocalX
@@ -251,9 +262,30 @@ object LashMeshBender {
             val depthDropPx = ((pixelLocalX * pixelLocalX) / (2f * radiusPx)).coerceAtMost(radiusPx)
             val depthDropLocal = depthDropPx * depthUnitsPerPixel * styleConfig.foxyLiftMultiplier * strength
 
-            val bentX = pos.x
-            val bentY = pos.y + deviationPx * verticalUnitsPerPixel
-            val bentZ = pos.z - depthDropLocal
+            var bentX = pos.x
+            val rootY = deviationPx * verticalUnitsPerPixel
+            val rootZ = (rootDepths?.get(i) ?: 0f) - depthDropLocal
+            // Inverse-rotate only the attachment profile before the node drops.
+            // After that rotation the band stays on its desired Y/Z contour,
+            // while each fiber keeps the original drop around its own root.
+            // Account for nonuniform node scale (Y volume differs from Z).
+            val correctionY = if (compensateRoot)
+                (dropCos - 1f) * rootY + dropSin * rootZ / scaleYToZ else 0f
+            val correctionZ = if (compensateRoot)
+                (dropCos - 1f) * rootZ - dropSin * rootY * scaleYToZ else 0f
+            var bentY = pos.y + rootY + correctionY
+            var bentZ = pos.z - depthDropLocal + correctionZ
+            if (rootBinding != null && rootDepths != null) {
+                val u = (pos.x - rootBinding.sourceMinX) / (rootBinding.sourceMaxX - rootBinding.sourceMinX)
+                val seg = rootBinding.segment(u)
+                val a = rootBinding.points[seg]
+                val b = rootBinding.points[seg + 1]
+                val interval = (rootBinding.knots[seg + 1] - rootBinding.knots[seg]).coerceAtLeast(1e-6f)
+                val k = (u - rootBinding.knots[seg]) / interval
+                bentX = a.x + (b.x - a.x) * k
+                bentY = a.y + (b.y - a.y) * k + pos.y - raw.minY
+                bentZ = a.z + (b.z - a.z) * k + pos.z - rootDepths[i]
+            }
 
             val base = i * POSITION_COMPONENTS
             if (blend) {

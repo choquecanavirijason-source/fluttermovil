@@ -55,6 +55,15 @@ import kotlin.math.sin
  */
 object LidDropRotation {
 
+    /** Shared by node rotation and mesh root compensation; no inverse cosine. */
+    fun angleRadians(closedAmount: Float, q: Quaternion): Float {
+        if (!RendererConfiguration.LASH_CLOSED_DROP_ENABLED) return 0f
+        val drop = dropAmount(closedAmount)
+        if (drop <= 1e-3f) return 0f
+        val sign = if (1f - 2f * (q.x * q.x + q.y * q.y) >= 0f) 1f else -1f
+        return Math.toRadians((RendererConfiguration.LASH_CLOSED_DROP_DEGREES * drop * sign).toDouble()).toFloat()
+    }
+
     /** Rotación y corrección de posición para un frame. [positionDelta] hay
      * que SUMARLO a la posición que venía de la pose. */
     data class Result(val rotation: Quaternion, val positionDelta: Float3)
@@ -158,7 +167,10 @@ object LidDropRotation {
      *
      * @param closedAmount el mismo `0..1` que recibe [apply].
      */
-    fun bandCompensation(closedAmount: Float): Float {
+    fun bandCompensation(
+        closedAmount: Float,
+        closedFlatten: Float = RendererConfiguration.LASH_CLOSED_BAND_FLATTEN,
+    ): Float {
         if (!RendererConfiguration.LASH_CLOSED_DROP_ENABLED) return 1f
         if (!RendererConfiguration.LASH_CLOSED_BAND_COMPENSATION_ENABLED) return 1f
         val drop = dropAmount(closedAmount)
@@ -168,7 +180,7 @@ object LidDropRotation {
         val c = cos(Math.toRadians(degrees.toDouble()).toFloat())
         // El párpado cerrado es más recto que el abierto, y la curva con la
         // que se dobla es la CONGELADA de ojo abierto: se aplana aparte.
-        val flatten = 1f + (RendererConfiguration.LASH_CLOSED_BAND_FLATTEN - 1f) * drop
+        val flatten = 1f + (closedFlatten - 1f) * drop
         val max = RendererConfiguration.LASH_CLOSED_BAND_COMPENSATION_MAX
         val damping = 1f / (2f * max.coerceAtLeast(1f))
         val dampingSquared = damping * damping

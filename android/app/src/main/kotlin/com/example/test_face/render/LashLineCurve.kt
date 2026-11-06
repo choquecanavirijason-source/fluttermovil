@@ -59,6 +59,24 @@ class LashLineCurve private constructor(
     fun withDeviationScale(scale: Float): LashLineCurve =
         if (scale == deviationScale) this
         else LashLineCurve(nodeX, nodeY, nodeSlope, scale)
+
+    /** Blend measured shapes in the same eye-local frame. This changes only
+     * mesh geometry, never the eye's rigid pose or its tracking history. */
+    fun blendShape(other: LashLineCurve, amount: Float): LashLineCurve {
+        if (amount <= 0f) return this
+        if (amount >= 1f) return other
+        val xs = (nodeX.asList() + other.nodeX.asList()).sorted()
+            .fold(ArrayList<Float>()) { values, x ->
+                if (values.isEmpty() || x - values.last() >= MIN_NODE_SPACING_PX) values.add(x)
+                values
+            }.toFloatArray()
+        if (xs.size < 2) return this
+        val ys = FloatArray(xs.size) { i ->
+            val a = deviationAt(xs[i])
+            a + (other.deviationAt(xs[i]) - a) * amount
+        }
+        return LashLineCurve(xs, ys, monotoneTangents(xs, ys))
+    }
     private val minLocalX: Float get() = nodeX[0]
     private val maxLocalX: Float get() = nodeX[nodeX.size - 1]
 

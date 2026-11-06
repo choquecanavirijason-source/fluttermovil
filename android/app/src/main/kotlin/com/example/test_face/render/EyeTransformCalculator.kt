@@ -55,6 +55,11 @@ data class EyeTransform(
      * la extrapolación de [PoseInterpolator] sería directamente nociva acá
      * (un parpadeo no se predice). */
     val normalizedOpenness: Float = 1f,
+    /** Current closed-lid contour, used only for mesh shape. Never latched
+     * into the open-eye shape/filter or used to calculate the rigid pose. */
+    val closedLashLineCurve: LashLineCurve? = null,
+    /** Current upper-lid points, unprojected with this frame's camera. */
+    val attachmentWorldLine: List<Float3>? = null,
 )
 
 /**

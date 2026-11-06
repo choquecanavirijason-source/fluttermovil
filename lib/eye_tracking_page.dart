@@ -142,7 +142,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// volver a ver dónde cree el motor que está la línea de pestañas (es lo
   /// único que hace falta cambiar; el painter sigue enchufado al
   /// `_frameNotifier` y se repinta a la cadencia real del tracking).
-  static const bool _showLidLandmarkDebug = false;
+  static const bool _showLidLandmarkDebug = true;
 
   /// DIAGNÓSTICO: `flutter_overlays` de `perf_flags.properties`. `false`
   /// saca los painters que van encima de la cámara (guía de ojos y puntos de
@@ -1411,6 +1411,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                           isComplex: true,
                           painter: LidLandmarkDebugPainter(
                             frames: _frameNotifier,
+                            compact: true,
                           ),
                         ),
                       ),

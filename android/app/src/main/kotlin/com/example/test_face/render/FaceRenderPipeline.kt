@@ -316,9 +316,28 @@ object FaceRenderPipeline {
         } else {
             lidShape?.curve
         }
+        // A fully closed lid has its own contour (straight or curved). Measure
+        // it separately; do not contaminate the held open-eye shape/history.
+        // Use the existing closed-state hysteresis. A second, stricter 0.3
+        // openness gate discarded valid closed contours on small fluctuations
+        // while the eye was still classified closed, reviving the held arc.
+        val closedCurve = if (ClosedLidContour.shouldMeasure(lidShapeTrusted, openAmount) && eyeLandmarks.upperLid.all {
+                it.x.isFinite() && it.y.isFinite()
+            } && eyeLandmarks.upperLid.size >= 4 && anchor.widthPx > 1f &&
+            eyeLandmarks.upperLid.maxOf { -it.x * anchor.upperLidTangent.y + it.y * anchor.upperLidTangent.x } -
+                eyeLandmarks.upperLid.minOf { -it.x * anchor.upperLidTangent.y + it.y * anchor.upperLidTangent.x } < anchor.widthPx * 0.35f
+        ) LashLineCurve.fit(eyeLandmarks.upperLid, anchor.point, anchor.upperLidTangent) else null
         return transform.copy(
             opennessRatio = openness,
             lashLineCurve = curve,
+            closedLashLineCurve = closedCurve,
+            attachmentWorldLine = eyeLandmarks.ring.drop(8).sortedBy { it.x }.map { upright ->
+                val p = FaceQuarterTurn.rotate(upright, turns, cx, cy)
+                camera.unproject(
+                    2f * p.x / imageWidth - 1f, 1f - 2f * p.y / imageHeight,
+                    headPose.position.z.coerceIn(RendererConfiguration.MIN_DEPTH, RendererConfiguration.MAX_DEPTH),
+                )
+            },
             eyeWidthPx = anchor.widthPx,
             lidShapeTrusted = lidShapeTrusted,
             // Sin tracker (no debería pasar en el flujo normal) se reporta el

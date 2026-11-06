@@ -153,6 +153,11 @@ data class RawMesh(
         }
         return copy(vertices = adjusted)
     }
+
+    /** Neutral vertex tint so the diagnostic material remains visible. */
+    fun withDiagnosticVertexColor(): RawMesh = copy(vertices = vertices.map { vertex ->
+        vertex.copy(color = Float4(1f, 1f, 1f, vertex.color?.w ?: 1f))
+    })
 }
 
 /**

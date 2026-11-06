@@ -21,8 +21,9 @@ class LidLandmarkDebugPainter extends CustomPainter {
   /// tracking entregara 25-30 fps. Con `repaint` el límite ya no aplica: el
   /// repintado es una operación de capa, no un rebuild.
   final ValueListenable<TrackingFrame?> frames;
+  final bool compact;
 
-  const LidLandmarkDebugPainter({required this.frames})
+  const LidLandmarkDebugPainter({required this.frames, this.compact = false})
       : super(repaint: frames);
 
   Matrix4? _imageToCanvas(TrackingFrame f, Size canvasSize) {
@@ -76,7 +77,7 @@ class LidLandmarkDebugPainter extends CustomPainter {
       ..strokeWidth = 1.2..style = PaintingStyle.stroke..strokeCap = StrokeCap.round;
 
     // ── Líneas de párpado inferior ────────────────────────────────────────
-    if (lowerLid.length >= 2) {
+    if (!compact && lowerLid.length >= 2) {
       final p = Path()..moveTo(lowerLid.first.x, lowerLid.first.y);
       for (int i = 1; i < lowerLid.length; i++) p.lineTo(lowerLid[i].x, lowerLid[i].y);
       canvas.drawPath(p, redLine);
@@ -87,6 +88,13 @@ class LidLandmarkDebugPainter extends CustomPainter {
       final p = Path()..moveTo(upperLid.first.x, upperLid.first.y);
       for (int i = 1; i < upperLid.length; i++) p.lineTo(upperLid[i].x, upperLid[i].y);
       canvas.drawPath(p, greenLine);
+    }
+
+    if (compact) {
+      for (final p in upperLid) {
+        canvas.drawCircle(Offset(p.x, p.y), 1.5, greenFill);
+      }
+      return;
     }
 
     // ── Puntos del párpado inferior (rojo) ───────────────────────────────

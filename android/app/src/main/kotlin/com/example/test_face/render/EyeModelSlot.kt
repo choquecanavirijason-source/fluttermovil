@@ -173,6 +173,12 @@ class EyeModelSlot {
      * no cambie (y con la forma congelada), re-doblar daría exactamente la
      * misma malla y se saltea. */
     var lastBandScale = 1f
+    var usedClosedCurve = false
+    val closedContour = ClosedLidContour()
+    var rootDepths: FloatArray? = null
+    var lastDropRadians = 0f
+    var rootBandMinX = 0f
+    var rootBandMaxX = 0f
 
     fun reset() {
         bufferModelGeneration.incrementAndGet()
@@ -203,6 +209,12 @@ class EyeModelSlot {
         bendClosedAmount = 0f
         bendClosedNanos = 0L
         lastBandScale = 1f
+        usedClosedCurve = false
+        closedContour.reset()
+        rootDepths = null
+        lastDropRadians = 0f
+        rootBandMinX = 0f
+        rootBandMaxX = 0f
         visibleRequested = null
     }
 }

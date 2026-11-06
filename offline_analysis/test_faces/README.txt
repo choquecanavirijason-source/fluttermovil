@@ -1,0 +1,2 @@
+Synthetic test portraits generated with the built-in image_gen tool.
+Prompt: Photorealistic 4-row x 2-column contact sheet. Four fictional adult women with almond, round, narrow/upturned and hooded eyes. Same person and pose within each row, eyes open on the left and gently closed on the right. Full visible face, short natural lashes, no makeup, neutral lighting. Distinct natural closed-lid contours. Spanish labels. Use one enlarged portrait at a time for face detection. Static synthetic portraits test placement, not real blink timing or tracking quality.
