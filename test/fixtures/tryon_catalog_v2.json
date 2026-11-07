@@ -1,0 +1,737 @@
+{
+  "schema_version": 2,
+  "engine_version": 2,
+  "revision": "f9b3c556df56b138e31e195d9b4d248c4f75c7bdf228d842439eb8a820e8bd78",
+  "styles": [
+    {
+      "key": "cateye",
+      "name": "Cat Eye",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "cateye",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 0,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "custom-5d",
+      "name": "Nuevo estilo",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": null,
+      "profile": {
+        "length_profile": [
+          {
+            "t": 0.0,
+            "length": 0.26
+          },
+          {
+            "t": 0.0625,
+            "length": 0.265766
+          },
+          {
+            "t": 0.125,
+            "length": 0.281919
+          },
+          {
+            "t": 0.1875,
+            "length": 0.306739
+          },
+          {
+            "t": 0.25,
+            "length": 0.338507
+          },
+          {
+            "t": 0.3125,
+            "length": 0.375501
+          },
+          {
+            "t": 0.375,
+            "length": 0.416004
+          },
+          {
+            "t": 0.4375,
+            "length": 0.458295
+          },
+          {
+            "t": 0.5,
+            "length": 0.500656
+          },
+          {
+            "t": 0.5625,
+            "length": 0.541365
+          },
+          {
+            "t": 0.625,
+            "length": 0.578703
+          },
+          {
+            "t": 0.6875,
+            "length": 0.610952
+          },
+          {
+            "t": 0.75,
+            "length": 0.636391
+          },
+          {
+            "t": 0.8125,
+            "length": 0.653301
+          },
+          {
+            "t": 0.875,
+            "length": 0.659961
+          },
+          {
+            "t": 0.9375,
+            "length": 0.66
+          },
+          {
+            "t": 1.0,
+            "length": 0.6
+          }
+        ],
+        "curl": 0.58,
+        "fan": 9.0,
+        "sweep": 20.0,
+        "roots": [
+          72,
+          48,
+          40,
+          56
+        ],
+        "spike_every": 0,
+        "spike_offset": 0,
+        "spike_multiplier": 1.0,
+        "fan_spread": 10.0,
+        "mega_fan_spread": 16.0,
+        "width_multiplier": 1.0
+      },
+      "is_active": true,
+      "sort_order": 0,
+      "allowed_lengths": [
+        3
+      ],
+      "allowed_techniques": [
+        4
+      ],
+      "allowed_thicknesses": [
+        4
+      ],
+      "defaults": {
+        "length": 3,
+        "technique": 4,
+        "thickness": 4
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 2
+    },
+    {
+      "key": "wispy",
+      "name": "Wispy",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "wispy",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 1,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "catclassic",
+      "name": "Cat Classic",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "catclassic",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 2,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "foxyeye",
+      "name": "Foxy Eye",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "foxyeye",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 3,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "natural",
+      "name": "Natural",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "natural",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 4,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "dolleye",
+      "name": "Doll Eye",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "dolleye",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 5,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "squirrel",
+      "name": "Squirrel",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "squirrel",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 6,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "kitten",
+      "name": "Kitten",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "kitten",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 7,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "wetlook",
+      "name": "Wet Look",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "wetlook",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 8,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "anime",
+      "name": "Anime",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "anime",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 9,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "kimk",
+      "name": "Kim K",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "kimk",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 10,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    }
+  ],
+  "options": {
+    "length": [
+      {
+        "id": 0,
+        "name": "Corto",
+        "is_active": true,
+        "sort_order": 0,
+        "parameters": {
+          "scale": 0.78,
+          "diameter": null,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 3,
+        "name": "Extra largo",
+        "is_active": true,
+        "sort_order": 0,
+        "parameters": {
+          "scale": 1.4,
+          "diameter": null,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 1,
+        "name": "Medio",
+        "is_active": true,
+        "sort_order": 1,
+        "parameters": {
+          "scale": 1.0,
+          "diameter": null,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 2,
+        "name": "Largo",
+        "is_active": true,
+        "sort_order": 2,
+        "parameters": {
+          "scale": 1.23,
+          "diameter": null,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      }
+    ],
+    "technique": [
+      {
+        "id": 0,
+        "name": "Clásica",
+        "is_active": true,
+        "sort_order": 0,
+        "parameters": {
+          "scale": null,
+          "diameter": null,
+          "base_technique": 0,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 4,
+        "name": "Volumen 5D",
+        "is_active": true,
+        "sort_order": 0,
+        "parameters": {
+          "scale": null,
+          "diameter": null,
+          "base_technique": 1,
+          "fibers_per_group": 5,
+          "single_every": 0,
+          "density": 1.2,
+          "spread": 12.0
+        },
+        "revision": 1
+      },
+      {
+        "id": 1,
+        "name": "Volumen",
+        "is_active": true,
+        "sort_order": 1,
+        "parameters": {
+          "scale": null,
+          "diameter": null,
+          "base_technique": 1,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 2,
+        "name": "Megavolumen",
+        "is_active": true,
+        "sort_order": 2,
+        "parameters": {
+          "scale": null,
+          "diameter": null,
+          "base_technique": 2,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 3,
+        "name": "Híbrida",
+        "is_active": true,
+        "sort_order": 3,
+        "parameters": {
+          "scale": null,
+          "diameter": null,
+          "base_technique": 3,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      }
+    ],
+    "thickness": [
+      {
+        "id": 0,
+        "name": "0.05 mm",
+        "is_active": true,
+        "sort_order": 0,
+        "parameters": {
+          "scale": null,
+          "diameter": 0.05,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 4,
+        "name": "0.12 mm",
+        "is_active": true,
+        "sort_order": 0,
+        "parameters": {
+          "scale": null,
+          "diameter": 0.12,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 1,
+        "name": "0.07 mm",
+        "is_active": true,
+        "sort_order": 1,
+        "parameters": {
+          "scale": null,
+          "diameter": 0.07,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 2,
+        "name": "0.10 mm",
+        "is_active": true,
+        "sort_order": 2,
+        "parameters": {
+          "scale": null,
+          "diameter": 0.1,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      },
+      {
+        "id": 3,
+        "name": "0.15 mm",
+        "is_active": true,
+        "sort_order": 3,
+        "parameters": {
+          "scale": null,
+          "diameter": 0.15,
+          "base_technique": null,
+          "fibers_per_group": null,
+          "single_every": 0,
+          "density": 1.0,
+          "spread": null
+        },
+        "revision": 1
+      }
+    ]
+  }
+}

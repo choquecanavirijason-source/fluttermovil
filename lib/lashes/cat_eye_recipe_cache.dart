@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'cat_eye_recipe.dart';
 
-List<Uint8List> _generatePair(Map<String, int> map) {
+List<Uint8List> _generatePair(Map<String, dynamic> map) {
   final recipe = CatEyeRecipe.fromMap(map);
   return [
     buildCatEyeGlb(recipe, right: false),

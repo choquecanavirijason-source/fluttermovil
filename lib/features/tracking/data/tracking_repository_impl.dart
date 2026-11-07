@@ -22,10 +22,12 @@ class TrackingRepositoryImpl implements TrackingRepository {
     int? lashDesignId,
     int? branchId,
     String? designNotes,
+    Map<String, dynamic>? tryOnRecipe,
   }) {
     final notes = designNotes?.trim();
     final body = <String, dynamic>{
       'client_id': clientId,
+      if (tryOnRecipe != null) 'tryon_recipe': tryOnRecipe,
       'eye_type_id': ?eyeTypeId,
       'effect_id': ?effectId,
       'volume_id': ?volumeId,
@@ -43,11 +45,10 @@ class TrackingRepositoryImpl implements TrackingRepository {
   Future<String> aiCompare({
     required Uint8List beforeJpegBytes,
     required Uint8List afterJpegBytes,
-  }) =>
-      _api.aiCompare(
-        beforeJpegBytes: beforeJpegBytes,
-        afterJpegBytes: afterJpegBytes,
-      );
+  }) => _api.aiCompare(
+    beforeJpegBytes: beforeJpegBytes,
+    afterJpegBytes: afterJpegBytes,
+  );
 
   @override
   Future<LashAiRecommendation> aiRecommend(Uint8List jpegBytes) =>

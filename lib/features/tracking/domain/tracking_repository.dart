@@ -12,6 +12,7 @@ abstract class TrackingRepository {
     int? lashDesignId,
     int? branchId,
     String? designNotes,
+    Map<String, dynamic>? tryOnRecipe,
   });
 
   /// Historial de aplicaciones del cliente (más reciente primero).

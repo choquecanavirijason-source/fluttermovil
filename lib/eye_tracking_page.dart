@@ -20,6 +20,7 @@ import 'eye_tracking_customization_options.dart';
 import 'lid_landmark_debug_painter.dart';
 import 'lashes/cat_eye_recipe.dart';
 import 'lashes/cat_eye_recipe_cache.dart';
+import 'lashes/tryon_catalog.dart';
 import 'eye_tracking_model.dart';
 import 'eye_tracking_photo_pipeline.dart';
 import 'native_eye_tracking_service.dart';
@@ -47,12 +48,21 @@ class _LocalLashPreset {
   final String thumbnailAsset;
   final String leftModelAsset;
   final String rightModelAsset;
+  final TryOnStyle? catalogStyle;
+  String get stableKey => catalogStyle?.key ?? _lashStyleIdFor(name);
+  int get engineStyle =>
+      catalogStyle?.engineStyle ?? CatEyeRecipe.styleIds.indexOf(stableKey);
+  TryOnStyle get definition =>
+      catalogStyle ??
+      TryOnStyle(key: stableKey, name: name, builtinStyle: stableKey);
+  bool get originalCatEye => definition.originalCatEye;
 
   const _LocalLashPreset({
     required this.name,
     required this.thumbnailAsset,
     required this.leftModelAsset,
     required this.rightModelAsset,
+    this.catalogStyle,
   });
 }
 
@@ -148,6 +158,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   late final EyeTrackingPhotoPipeline _photoPipeline;
 
   StreamSubscription<TrackingFrame>? _sub;
+  StreamSubscription<String>? _catalogShapeSubscription;
+  String? _catalogEyeShapeCode;
   TrackingFrame? _frame;
 
   /// Canal de repintado de los overlays de landmarks (puntos del párpado y
@@ -257,6 +269,75 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
+  bool _catalogViewReady = false;
+  bool _catalogLoadStarted = false;
+  bool _catalogUserInteracted = false;
+
+  void _maybeLoadPublishedCatalog() {
+    if (!mounted ||
+        !_catalogViewReady ||
+        _frame == null ||
+        _catalogLoadStarted) {
+      return;
+    }
+    _catalogLoadStarted = true;
+    unawaited(_loadPublishedCatalog());
+  }
+
+  List<_LocalLashPreset>? _publishedPresets;
+  List<_LocalLashPreset> get _availableLashPresets =>
+      _publishedPresets ?? _localLashPresets;
+  _LocalLashPreset? get _selectedPreset =>
+      _selectedLashIndex >= 0 &&
+          _selectedLashIndex < _availableLashPresets.length
+      ? _availableLashPresets[_selectedLashIndex]
+      : null;
+  TryOnStyle? _appliedCatalogStyle;
+
+  Future<void> _loadPublishedCatalog() async {
+    final catalog = await TryOnCatalogRepository(ref.read(dioProvider)).load();
+    if (!mounted ||
+        catalog == null ||
+        _catalogUserInteracted ||
+        _buildingRecipe ||
+        _switchingDesignModel ||
+        _alignmentGuideActive ||
+        _capturingPhoto) {
+      return;
+    }
+    final previousKey = _selectedPreset?.stableKey;
+    final presets = catalog.styles
+        .where((s) => s.active)
+        .map((style) {
+          final base = _localLashPresets[style.engineStyle];
+          return _LocalLashPreset(
+            name: style.name,
+            thumbnailAsset: style.thumbnail ?? base.thumbnailAsset,
+            leftModelAsset: base.leftModelAsset,
+            rightModelAsset: base.rightModelAsset,
+            catalogStyle: style,
+          );
+        })
+        .toList(growable: false);
+    if (presets.isEmpty) return;
+    final matching = presets.indexWhere((p) => p.stableKey == previousKey);
+    setState(() {
+      _publishedPresets = presets;
+      _selectedLashIndex = matching < 0 ? 0 : matching;
+      _currentCarouselDesigns = const [];
+    });
+    // Keep the approved Cat Eye original only when its published definition
+    // remains original; other published defaults are applied through the cache.
+    if (_appliedRecipe == null &&
+        _selectedPreset!.originalCatEye &&
+        previousKey == _selectedPreset!.stableKey) {
+      _resetRecipeSelection();
+      _appliedCatalogStyle = _selectedPreset!.definition;
+    } else {
+      _onLashSelect(_selectedLashIndex);
+    }
+  }
+
   final _recipeCache = CatEyeRecipeCache();
   CatEyeRecipe? _appliedRecipe;
   Timer? _recipeTimer;
@@ -264,9 +345,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   bool _buildingRecipe = false;
 
   void _resetRecipeSelection() {
-    _selectedDesignIndex = _appliedRecipe?.length ?? 1;
-    _selectedTechIndex = _appliedRecipe?.technique ?? 0;
-    _selectedThicknessIndex = _appliedRecipe?.thickness ?? 3;
+    final style = _selectedPreset?.definition;
+    _selectedDesignIndex = _appliedRecipe?.length ?? style?.defaultLength ?? 1;
+    _selectedTechIndex =
+        _appliedRecipe?.technique ?? style?.defaultTechnique ?? 0;
+    _selectedThicknessIndex =
+        _appliedRecipe?.thickness ?? style?.defaultThickness ?? 3;
   }
 
   Future<void> _applyRecipe(CatEyeRecipe recipe, int request) async {
@@ -274,7 +358,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       final paths = await _recipeCache.resolve(recipe);
       if (!mounted ||
           request != _recipeRequest ||
-          _selectedLashIndex != recipe.style) {
+          _selectedPreset?.stableKey !=
+              (recipe.catalogStyleKey ?? recipe.styleId)) {
         return;
       }
       setState(() => _switchingDesignModel = true);
@@ -288,6 +373,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         _leftModelPath = paths.left;
         _rightModelPath = paths.right;
         _appliedRecipe = recipe;
+        _appliedCatalogStyle = _selectedPreset?.definition;
       });
     } catch (e) {
       if (mounted && request == _recipeRequest) {
@@ -495,7 +581,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   /// Igual que [_switchDesignModel] pero para un diseño empaquetado en la
-  /// app (ver [_localLashPresets]): cada lado usa su propio asset real, sin
+  /// app (ver [_availableLashPresets]): cada lado usa su propio asset real, sin
   /// necesidad de descargar nada.
   Future<void> _switchLocalPreset(_LocalLashPreset preset) async {
     if (_switchingDesignModel) return;
@@ -509,8 +595,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _leftModelPath = leftPath;
       _rightModelPath = rightPath;
       await _service.loadEyeModels(leftPath: leftPath, rightPath: rightPath);
-      final styleId = _lashStyleIdFor(preset.name);
+      final styleId = CatEyeRecipe.styleIds[preset.engineStyle];
       await _service.setLashStyle(styleId);
+      _appliedCatalogStyle = preset.definition;
     } catch (e) {
       debugPrint('No se pudo cargar el preset local ${preset.name}: $e');
       if (mounted) {
@@ -648,6 +735,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _startupFailure = null;
     }
     _frame = frame;
+    _maybeLoadPublishedCatalog();
     // Repintado de los overlays: independiente del throttle de `setState`
     // (ver [_frameNotifier]) — aquí no hay límite, cada frame que llega se
     // dibuja, que es lo que hace que los puntos sigan la cabeza sin saltos.
@@ -723,6 +811,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       },
     );
 
+    _catalogShapeSubscription ??= _service.eyeShapeStream.listen((shape) {
+      if (mounted && shape != _catalogEyeShapeCode) {
+        setState(() => _catalogEyeShapeCode = shape);
+      }
+    });
     await _service.startTracking();
     if (!mounted) return;
     // La cámara activa vive en Kotlin y puede haber quedado en la trasera
@@ -752,6 +845,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   @override
   void dispose() {
     _startupWatchdog?.cancel();
+    _catalogShapeSubscription?.cancel();
     _recipeTimer?.cancel();
     _recipeRequest++;
     _timingsDiag.stop();
@@ -793,7 +887,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   void _onFilterSelect(int index) {
     if (_switchingDesignModel) return;
-    final resetRemote = _selectedLashIndex >= _localLashPresets.length;
+    final resetRemote = _selectedLashIndex >= _availableLashPresets.length;
     if (resetRemote) _onLashSelect(0);
     setState(() {
       _selectedFilter = index;
@@ -810,42 +904,65 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     });
   }
 
+  List<int> get _activeOptionValues {
+    final style = _selectedPreset?.definition;
+    return switch (_activeCategory) {
+      'design' => style?.lengths ?? const [0, 1, 2],
+      'tech' => style?.techniques ?? const [0, 1, 2, 3],
+      'thickness' => style?.thicknesses ?? const [0, 1, 2, 3],
+      _ => const [],
+    };
+  }
+
+  String _optionKind(String? category) => switch (category) {
+    'design' => 'length',
+    'tech' => 'technique',
+    _ => 'thickness',
+  };
+  String _optionLabel(String kind, int id) =>
+      _selectedPreset!.definition.options.get(kind, id).name;
   List<String> get _activeCategoryImages => _activeCategory == 'effect'
-      ? _localLashPresets.map((p) => p.thumbnailAsset).toList()
-      : LashCustomizationCatalog.imagesFor(_activeCategory);
-
+      ? _availableLashPresets.map((p) => p.thumbnailAsset).toList()
+      : _activeOptionValues.map((id) {
+          final images = LashCustomizationCatalog.imagesFor(_activeCategory);
+          final option = _selectedPreset!.definition.options.get(
+            _optionKind(_activeCategory),
+            id,
+          );
+          final index = _activeCategory == 'tech'
+              ? option.parameters['base_technique'] as int
+              : id;
+          return images[index.clamp(0, images.length - 1)];
+        }).toList();
   List<String> get _activeCategoryOptions => _activeCategory == 'effect'
-      ? _localLashPresets.map((p) => p.name).toList()
-      : LashCustomizationCatalog.optionsFor(_activeCategory);
-
+      ? _availableLashPresets.map((p) => p.name).toList()
+      : _activeOptionValues
+            .map((id) => _optionLabel(_optionKind(_activeCategory), id))
+            .toList();
   int get _activeCategorySelectedIndex {
-    switch (_activeCategory) {
-      case 'design':
-        return _selectedDesignIndex;
-      case 'tech':
-        return _selectedTechIndex;
-      case 'effect':
-        return _selectedLashIndex < _localLashPresets.length
-            ? _selectedLashIndex
-            : -1;
-      case 'thickness':
-        return _selectedThicknessIndex;
-      default:
-        return 0;
-    }
+    final value = switch (_activeCategory) {
+      'design' => _selectedDesignIndex,
+      'tech' => _selectedTechIndex,
+      'thickness' => _selectedThicknessIndex,
+      _ => -1,
+    };
+    return _activeCategory == 'effect'
+        ? (_selectedPreset == null ? -1 : _selectedLashIndex)
+        : _activeOptionValues.indexOf(value);
   }
 
   void _onActiveCategorySelect(int index) {
     if (_switchingDesignModel || _hidingLashesForAlignmentGuide) return;
+    _catalogUserInteracted = true;
     if (_activeCategory == 'effect') {
       _onLashSelect(index);
       return;
     }
-    if (_selectedLashIndex >= _localLashPresets.length) {
+    if (_selectedLashIndex >= _availableLashPresets.length) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Selecciona un estilo local para ajustar largo, técnica y grosor.',
+            'Selecciona un estilo del probador para ajustar largo, técnica y grosor.',
           ),
         ),
       );
@@ -854,19 +971,18 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     setState(() {
       switch (_activeCategory) {
         case 'design':
-          _selectedDesignIndex = index;
+          _selectedDesignIndex = _activeOptionValues[index];
           break;
         case 'tech':
-          _selectedTechIndex = index;
+          _selectedTechIndex = _activeOptionValues[index];
           break;
         case 'thickness':
-          _selectedThicknessIndex = index;
+          _selectedThicknessIndex = _activeOptionValues[index];
           break;
       }
       _buildingRecipe = true;
     });
-    final recipe = CatEyeRecipe(
-      style: _selectedLashIndex,
+    final recipe = _selectedPreset!.definition.recipe(
       length: _selectedDesignIndex,
       technique: _selectedTechIndex,
       thickness: _selectedThicknessIndex,
@@ -1481,18 +1597,19 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       );
       return;
     }
-    final effect = _selectedLashIndex < _localLashPresets.length
-        ? _localLashPresets[_selectedLashIndex].name
-        : _currentCarouselDesigns[_selectedLashIndex - _localLashPresets.length]
+    final effect = _selectedLashIndex < _availableLashPresets.length
+        ? _availableLashPresets[_selectedLashIndex].name
+        : _currentCarouselDesigns[_selectedLashIndex -
+                  _availableLashPresets.length]
               .name;
     final recipe = _appliedRecipe;
     final notes = [
       'Efecto: $effect',
       if (recipe == null) 'Modelo: original',
       if (recipe != null) ...[
-        'Largo: ${LashCustomizationCatalog.designOptionAt(recipe.length)}',
-        'Técnica: ${LashCustomizationCatalog.techOptionAt(recipe.technique)}',
-        'Grosor: ${LashCustomizationCatalog.thicknessOptionAt(recipe.thickness)}',
+        'Largo: ${recipe.options?.length.name ?? LashCustomizationCatalog.designOptionAt(recipe.length)}',
+        'Técnica: ${recipe.options?.technique.name ?? LashCustomizationCatalog.techOptionAt(recipe.technique)}',
+        'Grosor: ${recipe.options?.thickness.name ?? LashCustomizationCatalog.thicknessOptionAt(recipe.thickness)}',
       ],
     ].join(' | ');
 
@@ -1503,6 +1620,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             clientId: client.id,
             eyeTypeId: _selectedEyeType?.id,
             designNotes: notes,
+            tryOnRecipe: (_appliedCatalogStyle ?? _selectedPreset?.definition)
+                ?.snapshot(applied: recipe),
           );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1524,28 +1643,36 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   void _onLashSelect(int index) {
     if (_switchingDesignModel) return;
+    _catalogUserInteracted = true;
     _recipeTimer?.cancel();
     _recipeRequest++;
     setState(() {
       _selectedLashIndex = index;
       _appliedRecipe = null;
+      _appliedCatalogStyle = null;
       _buildingRecipe = false;
       _resetRecipeSelection();
     });
     // Los presets locales van primero en el carrusel (ver build()), así que
-    // los primeros _localLashPresets.length índices son locales y el resto
+    // los primeros _availableLashPresets.length índices son locales y el resto
     // corresponde a _currentCarouselDesigns (catálogo remoto).
-    if (index == 0) {
+    if (index < _availableLashPresets.length &&
+        _availableLashPresets[index].originalCatEye) {
       // Keep the original Cat Eye entry and its current configurable behavior.
-      unawaited(_switchLocalPreset(_localLashPresets[index]));
+      unawaited(_switchLocalPreset(_availableLashPresets[index]));
       return;
     }
-    if (index < _localLashPresets.length) {
+    if (index < _availableLashPresets.length) {
       setState(() => _buildingRecipe = true);
-      unawaited(_applyRecipe(CatEyeRecipe(style: index), _recipeRequest));
+      unawaited(
+        _applyRecipe(
+          _availableLashPresets[index].definition.recipe(),
+          _recipeRequest,
+        ),
+      );
       return;
     }
-    final remoteIndex = index - _localLashPresets.length;
+    final remoteIndex = index - _availableLashPresets.length;
     if (remoteIndex >= 0 && remoteIndex < _currentCarouselDesigns.length) {
       unawaited(_switchDesignModel(_currentCarouselDesigns[remoteIndex]));
     }
@@ -1571,24 +1698,40 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // Solo diseños con imagen entran al carrusel — se mantiene esta MISMA
     // lista (filtrada) en _currentCarouselDesigns para que el índice tocado
     // en el carrusel siga correspondiendo al diseño correcto en _onLashSelect.
-    _currentCarouselDesigns = rawDesigns
-        .where((d) => d.hasImage)
-        .toList(growable: false);
+    _currentCarouselDesigns =
+        (_publishedPresets == null ? rawDesigns : <CatalogItem>[])
+            .where((d) => d.hasImage)
+            .toList(growable: false);
     final carousel = _currentCarouselDesigns;
     // Presets locales primero (siempre disponibles, no dependen del
     // catálogo remoto), después los del admin — ver _onLashSelect para el
     // mapeo de índice a diseño.
+    var presetIndices = List.generate(_availableLashPresets.length, (i) => i);
+    if (_selectedFilter == 0 && _catalogEyeShapeCode != null) {
+      final compatible = presetIndices.where((i) {
+        final eyes = _availableLashPresets[i].definition.eyeTypes;
+        return eyes.isEmpty || eyes.contains(_catalogEyeShapeCode);
+      }).toList();
+      if (compatible.isNotEmpty) presetIndices = compatible;
+    }
     final carouselImagePaths = [
-      ..._localLashPresets.map((p) => p.thumbnailAsset),
+      ...presetIndices.map((i) => _availableLashPresets[i].thumbnailAsset),
       ...carousel.map((d) => d.imageUrl!),
     ];
     final carouselLabels = [
-      ..._localLashPresets.map((p) => p.name),
+      ...presetIndices.map((i) => _availableLashPresets[i].name),
       ...carousel.map((d) => d.name),
     ];
-    final safeLash = _selectedLashIndex < carouselImagePaths.length
-        ? _selectedLashIndex
-        : 0;
+    final safeLash = _selectedPreset != null
+        ? presetIndices.indexOf(_selectedLashIndex)
+        : presetIndices.length +
+              _selectedLashIndex -
+              _availableLashPresets.length;
+    final selectedLabel =
+        _selectedPreset?.name ??
+        (safeLash >= 0 && safeLash < carouselLabels.length
+            ? carouselLabels[safeLash]
+            : 'Diseño');
 
     return PopScope(
       canPop: false,
@@ -1616,6 +1759,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                           key: ValueKey<String>('eye_preview_$_previewSession'),
                           leftModelPath: _leftModelPath!,
                           rightModelPath: _rightModelPath!,
+                          onCreated: () {
+                            _catalogViewReady = true;
+                            _maybeLoadPublishedCatalog();
+                          },
                         ),
                       )
                     else
@@ -1678,7 +1825,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   child: carouselImagePaths.isNotEmpty
                       ? BottomCarousel(
                           selectedLash: safeLash,
-                          onSelect: _onLashSelect,
+                          onSelect: (index) => _onLashSelect(
+                            index < presetIndices.length
+                                ? presetIndices[index]
+                                : _availableLashPresets.length +
+                                      index -
+                                      presetIndices.length,
+                          ),
                           imagePaths: carouselImagePaths,
                         )
                       : Container(
@@ -1710,20 +1863,20 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 designOptions: _activeCategoryOptions,
                 selectedDesign:
                     _activeCategory == 'effect' ||
-                        (_selectedLashIndex < _localLashPresets.length &&
+                        (_selectedLashIndex < _availableLashPresets.length &&
                             _appliedRecipe != null) ||
                         _buildingRecipe
                     ? _activeCategorySelectedIndex
                     : -1,
                 helperText: _buildingRecipe
                     ? 'Aplicando…'
-                    : _selectedLashIndex < _localLashPresets.length
-                    ? '${_localLashPresets[_selectedLashIndex].name} · ${_appliedRecipe == null ? 'original' : 'personalizado'}'
-                    : 'Ajustes disponibles para estilos locales',
-                resetLabel: _selectedLashIndex == 0
+                    : _selectedLashIndex < _availableLashPresets.length
+                    ? '${_availableLashPresets[_selectedLashIndex].name} · ${_appliedRecipe == null ? 'original' : 'personalizado'}'
+                    : 'Selecciona un estilo del probador para ver sus ajustes',
+                resetLabel: _selectedPreset?.originalCatEye == true
                     ? 'Restaurar original'
                     : 'Restablecer',
-                onReset: _selectedLashIndex < _localLashPresets.length
+                onReset: _selectedLashIndex < _availableLashPresets.length
                     ? _restoreCurrentStyle
                     : null,
                 onSelectDesign: _onActiveCategorySelect,
@@ -1747,9 +1900,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 // Nombre del diseño de pestaña seleccionado en el carrusel
                 // — antes se mostraba debajo de cada miniatura, ahora vive
                 // acá (ver BottomCarousel más abajo, sin `labels`).
-                label: safeLash < carouselLabels.length
-                    ? carouselLabels[safeLash]
-                    : 'Diseño',
+                label: selectedLabel,
               ),
             if (!_showLashModal)
               Positioned(

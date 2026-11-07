@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'lash_render_profile.dart';
+import 'lash_options.dart';
 
 /// Nominal salon settings; visual scale is calibrated independently of mm.
 class CatEyeRecipe {
@@ -18,37 +20,96 @@ class CatEyeRecipe {
     'kimk',
   ];
   final int length, technique, thickness, style;
+  final LashRenderProfile? profile;
+  final ResolvedLashOptions? options;
+  final String? catalogStyleKey;
+  final int catalogRevision;
   const CatEyeRecipe({
     this.length = 1,
     this.technique = 0,
     this.thickness = 3,
     this.style = 0,
+    this.profile,
+    this.options,
+    this.catalogStyleKey,
+    this.catalogRevision = 0,
   });
   String get styleId => styleIds[style];
-  String get key =>
-      '${styleId}_${style == 0 ? 'v1' : 'v2'}_${length}_${technique}_$thickness';
-  Map<String, int> toMap() => {
+  String get key {
+    if (catalogStyleKey == null && profile == null && options == null) {
+      return '${styleId}_${style == 0 ? 'v1' : 'v2'}_${length}_${technique}_$thickness';
+    }
+    var hash = 0x811c9dc5;
+    for (final byte in utf8.encode(
+      jsonEncode({'profile': profile?.toJson(), 'options': options?.toJson()}),
+    )) {
+      hash = ((hash ^ byte) * 0x01000193) & 0xffffffff;
+    }
+    final safe = (catalogStyleKey ?? styleId).replaceAll(
+      RegExp('[^a-z0-9_-]'),
+      '_',
+    );
+    return 'remote_${safe}_${catalogRevision}_${hash.toRadixString(16)}_${length}_${technique}_$thickness';
+  }
+
+  Map<String, dynamic> toMap() => {
     'style': style,
+    'resolved_options': options?.toJson(),
+    'profile': profile?.toJson(),
+    'catalog_key': catalogStyleKey,
+    'catalog_revision': catalogRevision,
     'length': length,
     'technique': technique,
     'thickness': thickness,
   };
-  factory CatEyeRecipe.fromMap(Map<String, int> m) => CatEyeRecipe(
+  factory CatEyeRecipe.fromMap(Map<String, dynamic> m) => CatEyeRecipe(
     style: m['style'] ?? 0,
+    options: m['resolved_options'] == null
+        ? null
+        : ResolvedLashOptions.fromJson(
+            Map<String, dynamic>.from(m['resolved_options'] as Map),
+          ),
+    profile: m['profile'] == null
+        ? null
+        : LashRenderProfile.fromJson(
+            Map<String, dynamic>.from(m['profile'] as Map),
+          ),
+    catalogStyleKey: m['catalog_key'] as String?,
+    catalogRevision: m['catalog_revision'] as int? ?? 0,
     length: m['length']!,
     technique: m['technique']!,
     thickness: m['thickness']!,
   );
-  int get roots => (style == 9
-      ? [24, 36, 40, 32]
-      : style == 8
-      ? [36, 48, 40, 48]
-      : [72, 48, 40, 56])[technique];
+  int get engineTechnique =>
+      options?.technique.parameters['base_technique'] as int? ?? technique;
+  int get roots {
+    final base =
+        profile?.roots[engineTechnique] ??
+        (style == 9
+            ? [24, 36, 40, 32]
+            : style == 8
+            ? [36, 48, 40, 48]
+            : [72, 48, 40, 56])[engineTechnique];
+    final density =
+        (options?.technique.parameters['density'] as num?)?.toDouble() ?? 1;
+    final maxFan = options?.technique.parameters['fibers_per_group'] as int?;
+    if (maxFan == null && density == 1) return base;
+    return (base * density).round().clamp(
+      8,
+      math.min(120, 240 ~/ (maxFan ?? [1, 3, 6, 3][engineTechnique])),
+    );
+  }
+
   double get curl =>
+      profile?.curl ??
       [.58, .65, .55, .38, .48, .72, .62, .54, .52, .64, .61][style];
-  double get fan => [9, 15, 9, 7, 10, 13, 10, 8, 8, 15, 12][style].toDouble();
-  double get sweep => [20, 6, 12, 32, 3, 0, 10, 14, 8, 2, 12][style].toDouble();
+  double get fan =>
+      profile?.fan ?? [9, 15, 9, 7, 10, 13, 10, 8, 8, 15, 12][style].toDouble();
+  double get sweep =>
+      profile?.sweep ??
+      [20, 6, 12, 32, 3, 0, 10, 14, 8, 2, 12][style].toDouble();
   double lengthAt(double t, int root) {
+    if (profile != null) return profile!.lengthAt(t, root);
     final arch = math.pow(math.sin(math.pi * t).clamp(0.0, 1.0), .8);
     return switch (style) {
       1 => (.29 + .24 * arch + .045 * t) * (root % 4 == 2 ? 1.42 : .92),
@@ -65,12 +126,18 @@ class CatEyeRecipe {
     };
   }
 
-  int fanSize(int root) => switch (technique) {
-    1 => 3,
-    2 => 6,
-    3 => root.isEven ? 1 : 3,
-    _ => 1,
-  };
+  int fanSize(int root) {
+    final count = options?.technique.parameters['fibers_per_group'] as int?;
+    final every = options?.technique.parameters['single_every'] as int? ?? 0;
+    if (count != null) return every > 0 && root % every == 0 ? 1 : count;
+    return switch (engineTechnique) {
+      1 => 3,
+      2 => 6,
+      3 => root.isEven ? 1 : 3,
+      _ => 1,
+    };
+  }
+
   int get fiberCount => List.generate(roots, fanSize).fold(0, (a, b) => a + b);
 }
 
@@ -87,11 +154,11 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
   if (recipe.style < 0 ||
       recipe.style >= CatEyeRecipe.styleIds.length ||
       recipe.length < 0 ||
-      recipe.length > 2 ||
+      (recipe.options == null && recipe.length > 2) ||
       recipe.technique < 0 ||
-      recipe.technique > 3 ||
+      (recipe.options == null && recipe.technique > 3) ||
       recipe.thickness < 0 ||
-      recipe.thickness > 3) {
+      (recipe.options == null && recipe.thickness > 3)) {
     throw ArgumentError('Invalid Cat Eye recipe');
   }
   final p = <List<double>>[],
@@ -99,11 +166,16 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
       uv = <List<double>>[],
       ix = <int>[];
   final rng = math.Random(1101 + recipe.style * 1101);
-  final scale = [.78, 1.0, 1.23][recipe.length];
-  final diameter = [.05, .07, .10, .15][recipe.thickness];
+  final scale =
+      (recipe.options?.length.parameters['scale'] as num?)?.toDouble() ??
+      [.78, 1.0, 1.23][recipe.length];
+  final diameter =
+      (recipe.options?.thickness.parameters['diameter'] as num?)?.toDouble() ??
+      [.05, .07, .10, .15][recipe.thickness];
   void fiber(double t, double length, double angle, double jitter) {
     final x = (.5 - t) * 3, z = _rootZ(x), theta = angle * math.pi / 180;
-    final width = .028 * diameter / .15;
+    final width =
+        .028 * diameter / .15 * (recipe.profile?.widthMultiplier ?? 1);
     for (final crossed in [false, true]) {
       final start = p.length;
       for (var j = 0; j <= 9; j++) {
@@ -150,10 +222,26 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
                     ? 1.6
                     : recipe.style == 9
                     ? 5
-                    : recipe.technique == 2
+                    : recipe.engineTechnique == 2
                     ? 16
                     : 10);
-      fiber(t, length * (1 - .06 * spread.abs() / 8), angle + spread, jitter);
+      final actualSpread = recipe.profile == null || count == 1
+          ? spread
+          : (f / (count - 1) - .5) *
+                (recipe.engineTechnique == 2
+                    ? recipe.profile!.megaFanSpread
+                    : recipe.profile!.fanSpread);
+      final customSpread =
+          recipe.options?.technique.parameters['spread'] as num?;
+      final resolvedSpread = customSpread == null || count == 1
+          ? actualSpread
+          : (f / (count - 1) - .5) * customSpread;
+      fiber(
+        t,
+        length * (1 - .06 * resolvedSpread.abs() / 8),
+        angle + resolvedSpread,
+        jitter,
+      );
     }
   }
   final rail = p.length;

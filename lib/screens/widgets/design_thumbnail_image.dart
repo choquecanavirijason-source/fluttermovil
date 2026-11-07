@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'dart:convert';
 
 /// Miniatura de una opción del menú de personalización (diseño/técnica/
 /// efecto/grosor).
@@ -21,11 +22,26 @@ class DesignThumbnailImage extends StatelessWidget {
   final double size;
   final Color? color;
 
-  bool get _isNetwork => path.startsWith('http://') || path.startsWith('https://');
+  bool get _isNetwork =>
+      path.startsWith('http://') || path.startsWith('https://');
 
   @override
   Widget build(BuildContext context) {
     if (path.isEmpty) return _fallbackIcon();
+    if (path.startsWith('data:image/')) {
+      try {
+        return Image.memory(
+          base64Decode(path.substring(path.indexOf(',') + 1)),
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          color: color,
+          errorBuilder: (_, _, _) => _fallbackIcon(),
+        );
+      } catch (_) {
+        return _fallbackIcon();
+      }
+    }
     if (_isNetwork) {
       return CachedNetworkImage(
         imageUrl: path,
@@ -57,9 +73,6 @@ class DesignThumbnailImage extends StatelessWidget {
     );
   }
 
-  Widget _fallbackIcon() => Icon(
-        Icons.image_not_supported,
-        color: Colors.white54,
-        size: size,
-      );
+  Widget _fallbackIcon() =>
+      Icon(Icons.image_not_supported, color: Colors.white54, size: size);
 }

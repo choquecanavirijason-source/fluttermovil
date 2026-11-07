@@ -34,10 +34,12 @@ class HybridCameraPreview extends StatelessWidget {
     super.key,
     this.leftModelPath,
     this.rightModelPath,
+    this.onCreated,
   });
 
   final String? leftModelPath;
   final String? rightModelPath;
+  final VoidCallback? onCreated;
 
   static const String _viewType = 'eye_tracking/camera_preview';
 
@@ -64,6 +66,7 @@ class HybridCameraPreview extends StatelessWidget {
         );
         controller
           ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+          ..addOnPlatformViewCreatedListener((_) => onCreated?.call())
           ..create();
         return controller;
       },

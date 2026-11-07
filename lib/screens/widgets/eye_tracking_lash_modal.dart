@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'design_thumbnail_image.dart';
 
 class EyeTrackingLashModal extends StatelessWidget {
   final List<String> designImages;
@@ -106,16 +107,9 @@ class EyeTrackingLashModal extends StatelessWidget {
                                   shape: BoxShape.circle,
                                 ),
                                 child: Center(
-                                  child: Image.asset(
-                                    designImages[index],
-                                    width: 38,
-                                    height: 38,
-                                    fit: BoxFit.contain,
-                                    errorBuilder: (_, _, _) => const Icon(
-                                      Icons.image_not_supported,
-                                      color: Colors.grey,
-                                      size: 32,
-                                    ),
+                                  child: DesignThumbnailImage(
+                                    path: designImages[index],
+                                    size: 38,
                                   ),
                                 ),
                               ),

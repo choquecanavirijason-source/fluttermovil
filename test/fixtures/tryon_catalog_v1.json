@@ -1,0 +1,469 @@
+{
+  "schema_version": 1,
+  "engine_version": 1,
+  "revision": "c15259bfd52870731f9ce64771490e92c3a170bacc0e0605bf9f7d5726075f47",
+  "styles": [
+    {
+      "key": "cateye",
+      "name": "Cat Eye",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "cateye",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 0,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "venus-lift",
+      "name": "Venus Lift",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": null,
+      "profile": {
+        "length_profile": [
+          {
+            "t": 0.0,
+            "length": 0.18
+          },
+          {
+            "t": 0.2,
+            "length": 0.32
+          },
+          {
+            "t": 0.4,
+            "length": 0.5
+          },
+          {
+            "t": 0.6,
+            "length": 0.65
+          },
+          {
+            "t": 0.8,
+            "length": 0.7
+          },
+          {
+            "t": 1.0,
+            "length": 0.53
+          }
+        ],
+        "curl": 0.58,
+        "fan": 9.0,
+        "sweep": 20.0,
+        "roots": [
+          72,
+          48,
+          40,
+          56
+        ],
+        "spike_every": 0,
+        "spike_offset": 0,
+        "spike_multiplier": 1.0,
+        "fan_spread": 10.0,
+        "mega_fan_spread": 16.0,
+        "width_multiplier": 1.0
+      },
+      "is_active": true,
+      "sort_order": 0,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "wispy",
+      "name": "Wispy",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "wispy",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 1,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "catclassic",
+      "name": "Cat Classic",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "catclassic",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 2,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "foxyeye",
+      "name": "Foxy Eye",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "foxyeye",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 3,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "natural",
+      "name": "Natural",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "natural",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 4,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "dolleye",
+      "name": "Doll Eye",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "dolleye",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 5,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "squirrel",
+      "name": "Squirrel",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "squirrel",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 6,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "kitten",
+      "name": "Kitten",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "kitten",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 7,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "wetlook",
+      "name": "Wet Look",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "wetlook",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 8,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "anime",
+      "name": "Anime",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "anime",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 9,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    },
+    {
+      "key": "kimk",
+      "name": "Kim K",
+      "description": "",
+      "thumbnail": null,
+      "builtin_style": "kimk",
+      "profile": null,
+      "is_active": true,
+      "sort_order": 10,
+      "allowed_lengths": [
+        0,
+        1,
+        2
+      ],
+      "allowed_techniques": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "allowed_thicknesses": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "defaults": {
+        "length": 1,
+        "technique": 0,
+        "thickness": 3
+      },
+      "eye_types": [],
+      "revision": 1,
+      "engine_version": 1
+    }
+  ]
+}

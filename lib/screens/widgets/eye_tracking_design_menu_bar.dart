@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'design_thumbnail_image.dart';
 
 import 'package:Probador/core/theme/app_colors.dart';
 
@@ -123,16 +124,10 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
                                 mainAxisSize: MainAxisSize.min,
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Image.asset(
-                                    designImages[index],
-                                    width: 34,
-                                    height: 34,
+                                  DesignThumbnailImage(
+                                    path: designImages[index],
+                                    size: 34,
                                     color: isSelected ? _green : Colors.white,
-                                    errorBuilder: (_, _, _) => const Icon(
-                                      Icons.image_not_supported,
-                                      color: Colors.white54,
-                                      size: 34,
-                                    ),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(

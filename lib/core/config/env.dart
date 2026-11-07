@@ -6,14 +6,24 @@ class Env {
   static const String _localLanIp = '37.60.247.213';
 
   /// Host raíz del backend (sin `/api`).
-  static const String host =
-      kUseLocalBackend ? 'http://$_localLanIp:8000' : 'http://37.60.247.213';
+  static const String host = String.fromEnvironment(
+    'API_HOST',
+    defaultValue: kUseLocalBackend
+        ? 'http://$_localLanIp:8000'
+        : 'http://37.60.247.213',
+  );
 
   /// Base de la API REST.
-  static const String apiBaseUrl = kUseLocalBackend ? host : '$host/api';
+  static const String apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: kUseLocalBackend ? host : '$host/api',
+  );
 
   /// Compatibility field used by ApiConfig on develop.
-  static const String apiPrefix = kUseLocalBackend ? '' : '/api';
+  static const String apiPrefix = String.fromEnvironment(
+    'API_PREFIX',
+    defaultValue: kUseLocalBackend ? '' : '/api',
+  );
 
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 30);
@@ -33,10 +43,14 @@ class Env {
   // Ponlo en false antes de compilar el APK para el salón: deja el usuario y
   // la contraseña en texto plano dentro del binario.
   static const bool kDevAutoLogin = false;
-  static const String kDevAutoLoginUsername =
-      String.fromEnvironment('DEV_USER', defaultValue: 'admin');
-  static const String kDevAutoLoginPassword =
-      String.fromEnvironment('DEV_PASS', defaultValue: 'admin');
+  static const String kDevAutoLoginUsername = String.fromEnvironment(
+    'DEV_USER',
+    defaultValue: 'admin',
+  );
+  static const String kDevAutoLoginPassword = String.fromEnvironment(
+    'DEV_PASS',
+    defaultValue: 'admin',
+  );
 
   // Si el auto-login falla (backend caído, sin red, credenciales cambiadas)
   // y esto está en true, la app NO muestra la pantalla de login: abre una
@@ -52,6 +66,7 @@ class Env {
 
   static const String tokenStorageKey = '_tkn';
   static const String selectedBranchPrefsKey = 'selected_branch_id';
+
   /// Prefijo de clave; [NewAppointmentWatcher] le agrega `_<userId>` para no
   /// mezclar el estado entre operarias que comparten el dispositivo.
   static const String knownAppointmentIdsPrefsKey = 'known_appointment_ids';
