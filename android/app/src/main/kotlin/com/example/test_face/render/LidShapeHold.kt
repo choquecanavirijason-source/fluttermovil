@@ -93,6 +93,20 @@ class LidShapeHold {
         shape = measured
     }
 
+    /** Proporción alto/ancho del ojo ABIERTO (corregida por escorzo),
+     * promediada entre frames. Describe la FORMA del ojo (redondo vs
+     * rasgado) para [LashLineExtension]: solo se actualiza con el ojo
+     * abierto, así un parpadeo no la hace bajar (y la cola no crece al
+     * parpadear). `null` = todavía sin medir. */
+    var openShapeRatio: Float? = null
+        private set
+
+    fun latchOpenShapeRatio(ratio: Float) {
+        if (!ratio.isFinite() || ratio <= 0f) return
+        val prev = openShapeRatio
+        openShapeRatio = if (prev == null) ratio else prev + (ratio - prev) * 0.1f
+    }
+
     /** No-op con `null`: un frame sin curva ajustable (menos de 2 puntos
      * distinguibles) no debe BORRAR la última buena. */
     fun latchCurve(fitted: LashLineCurve?) {
@@ -105,5 +119,6 @@ class LidShapeHold {
     fun reset() {
         shape = null
         curve = null
+        openShapeRatio = null
     }
 }

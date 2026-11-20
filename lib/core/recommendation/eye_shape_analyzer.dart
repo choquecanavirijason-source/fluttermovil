@@ -2,8 +2,8 @@ import 'dart:math' as math;
 
 import '../../eye_tracking_model.dart';
 
-/// Formas de ojo reconocidas (espejo del catálogo `eye_types` del backend:
-/// Almendrado, Encapotado, Redondo, Rasgado, Asimétricos).
+/// Legacy values remain readable. Automatic classification uses contour shape;
+/// tilt and asymmetry are separate measurements, not eyelid diagnoses.
 enum EyeShape { almendrado, encapotado, redondo, rasgado, asimetricos }
 
 extension EyeShapeX on EyeShape {
@@ -44,11 +44,15 @@ class _EyeMetrics {
   final double aspectRatio; // ancho / alto
   final double tiltDeg; // + = elevado (foxy), - = caído
   final double openness; // alto / ancho
+  final double width, innerX, innerY;
 
   const _EyeMetrics({
     required this.aspectRatio,
     required this.tiltDeg,
     required this.openness,
+    required this.width,
+    required this.innerX,
+    required this.innerY,
   });
 }
 
@@ -60,6 +64,9 @@ class EyeAnalysis {
   final double openness;
   final double asymmetry; // 0..1, diferencia relativa entre ambos ojos
   final bool reliable;
+  final double separationRatio;
+  final double widthDifference;
+  final double leftAspectRatio, rightAspectRatio;
 
   /// Tilt (elevación) de cada ojo por separado — útil para detectar que un
   /// lado quedó más caído/elevado que el otro durante la aplicación.
@@ -75,6 +82,10 @@ class EyeAnalysis {
     required this.reliable,
     this.leftTiltDeg = 0,
     this.rightTiltDeg = 0,
+    this.separationRatio = 1,
+    this.widthDifference = 0,
+    this.leftAspectRatio = 0,
+    this.rightAspectRatio = 0,
   });
 
   /// Análisis vacío cuando no hay rostro/landmarks suficientes.
@@ -94,10 +105,23 @@ class EyeAnalysis {
     final tilt = canthalTiltDeg >= 4
         ? 'mirada elevada'
         : canthalTiltDeg <= -4
-            ? 'mirada con caída'
-            : 'mirada neutra';
+        ? 'mirada con caída'
+        : 'mirada neutra';
     return 'Forma ${shape.catalogName.toLowerCase()} · $tilt.';
   }
+
+  String get separationLabel => separationRatio < .85
+      ? 'Cercanos'
+      : separationRatio > 1.15
+      ? 'Separados'
+      : 'Equilibrados';
+  String get inclinationLabel => canthalTiltDeg >= 4
+      ? 'Ascendente'
+      : canthalTiltDeg <= -4
+      ? 'Descendente'
+      : 'Neutra';
+  String get symmetryLabel =>
+      asymmetry > .15 ? 'Diferencia de apertura' : 'Apertura equilibrada';
 }
 
 /// Clasifica la forma del ojo usando solo la geometría de los landmarks.
@@ -106,8 +130,6 @@ class EyeShapeAnalyzer {
   /// Umbrales heurísticos (ajustables tras pruebas en dispositivo).
   static const double _roundMaxAspect = 2.6; // por debajo → redondo (alto)
   static const double _longMinAspect = 3.6; // por encima → rasgado (alargado)
-  static const double _hoodedTiltDeg = -6.0; // caída marcada → encapotado
-  static const double _asymmetryThreshold = 0.32;
 
   static EyeAnalysis analyze(TrackingFrame? frame) {
     if (frame == null || !frame.faceDetected) return EyeAnalysis.none;
@@ -153,11 +175,7 @@ class EyeShapeAnalyzer {
         ? 0.0
         : (left.aspectRatio - right.aspectRatio).abs() / aspect;
 
-    final shape = _classify(
-      aspect: aspect,
-      tilt: tilt,
-      asymmetry: asymmetry,
-    );
+    final shape = _classify(aspect: aspect, tilt: tilt, asymmetry: asymmetry);
 
     return EyeAnalysis(
       shape: shape,
@@ -168,6 +186,16 @@ class EyeShapeAnalyzer {
       reliable: true,
       leftTiltDeg: left.tiltDeg,
       rightTiltDeg: right.tiltDeg,
+      separationRatio:
+          math.sqrt(
+            math.pow(left.innerX - right.innerX, 2) +
+                math.pow(left.innerY - right.innerY, 2),
+          ) /
+          ((left.width + right.width) / 2),
+      widthDifference:
+          (left.width - right.width).abs() / ((left.width + right.width) / 2),
+      leftAspectRatio: left.aspectRatio,
+      rightAspectRatio: right.aspectRatio,
     );
   }
 
@@ -176,8 +204,6 @@ class EyeShapeAnalyzer {
     required double tilt,
     required double asymmetry,
   }) {
-    if (asymmetry > _asymmetryThreshold) return EyeShape.asimetricos;
-    if (tilt <= _hoodedTiltDeg) return EyeShape.encapotado;
     if (aspect < _roundMaxAspect) return EyeShape.redondo;
     if (aspect > _longMinAspect) return EyeShape.rasgado;
     return EyeShape.almendrado;
@@ -200,13 +226,29 @@ class EyeShapeAnalyzer {
       if (p.y > maxY) maxY = p.y;
     }
 
-    final width = (cornerMaxX.x - cornerMinX.x).abs();
-    final height = (maxY - minY).abs();
-    if (width < 1.0 || height < 0.5) return null;
+    // Measure the contour in this eye's own axes. A slanted corner-to-corner
+    // line must not artificially increase height and change the shape label.
+    final axisX = cornerMaxX.x - cornerMinX.x;
+    final axisY = cornerMaxX.y - cornerMinX.y;
+    final width = math.sqrt(axisX * axisX + axisY * axisY);
+    if (width < 1.0) return null;
+    final perpendicularX = -axisY / width;
+    final perpendicularY = axisX / width;
+    minY = double.infinity;
+    maxY = double.negativeInfinity;
+    for (final p in eye) {
+      final projected =
+          (p.x - cornerMinX.x) * perpendicularX +
+          (p.y - cornerMinX.y) * perpendicularY;
+      minY = math.min(minY, projected);
+      maxY = math.max(maxY, projected);
+    }
+    final height = maxY - minY;
+    if (height < 0.5) return null;
 
     // Interna = esquina más cercana al centro del rostro.
-    final innerIsMaxX = (cornerMaxX.x - faceMidX).abs() <
-        (cornerMinX.x - faceMidX).abs();
+    final innerIsMaxX =
+        (cornerMaxX.x - faceMidX).abs() < (cornerMinX.x - faceMidX).abs();
     final inner = innerIsMaxX ? cornerMaxX : cornerMinX;
     final outer = innerIsMaxX ? cornerMinX : cornerMaxX;
 
@@ -219,6 +261,9 @@ class EyeShapeAnalyzer {
       aspectRatio: width / height,
       tiltDeg: tiltDeg,
       openness: height / width,
+      width: width,
+      innerX: inner.x,
+      innerY: inner.y,
     );
   }
 
@@ -229,6 +274,89 @@ class EyeShapeAnalyzer {
       sy += p.y;
     }
     return _Pt(sx / pts.length, sy / pts.length);
+  }
+}
+
+/// Collects open-eye readings before locking a session result. Blinks and
+/// missing faces do not become new eye shapes. No camera/render state changes.
+class SessionEyeAnalysis {
+  final List<({DateTime at, EyeAnalysis value})> _samples = [];
+  EyeAnalysis? result;
+  bool needsAdjustment = false;
+
+  void reset() {
+    _samples.clear();
+    result = null;
+    needsAdjustment = false;
+  }
+
+  EyeAnalysis? add(TrackingFrame frame, DateTime now) {
+    if (result != null) return result;
+    if (!frame.faceDetected) {
+      _samples.clear();
+      needsAdjustment = true;
+      return null;
+    }
+    final value = EyeShapeAnalyzer.analyze(frame);
+    if (!value.reliable ||
+        value.openness < .10 ||
+        value.openness > .65 ||
+        value.widthDifference > .30 ||
+        value.separationRatio < .3 ||
+        value.separationRatio > 2.5) {
+      needsAdjustment = true;
+      return null;
+    }
+    if (_samples.isNotEmpty &&
+        now.difference(_samples.last.at).inMilliseconds < 100) {
+      return null;
+    }
+    _samples.removeWhere(
+      (s) => now.difference(s.at) > const Duration(seconds: 3),
+    );
+    _samples.add((at: now, value: value));
+    if (_samples.length < 12 ||
+        now.difference(_samples.first.at).inMilliseconds < 2800) {
+      needsAdjustment = false;
+      return null;
+    }
+    double median(double Function(EyeAnalysis) read) {
+      final values = _samples.map((s) => read(s.value)).toList()..sort();
+      final middle = values.length ~/ 2;
+      return values.length.isOdd
+          ? values[middle]
+          : (values[middle - 1] + values[middle]) / 2;
+    }
+
+    final aspect = median((a) => a.aspectRatio);
+    final tilt = median((a) => a.canthalTiltDeg);
+    if (median((a) => (a.aspectRatio - aspect).abs()) > .25 ||
+        median((a) => (a.canthalTiltDeg - tilt).abs()) > 3 ||
+        (aspect - 2.6).abs() < .06 ||
+        (aspect - 3.6).abs() < .06) {
+      needsAdjustment = true;
+      return null;
+    }
+    result = EyeAnalysis(
+      shape: EyeShapeAnalyzer._classify(
+        aspect: aspect,
+        tilt: tilt,
+        asymmetry: 0,
+      ),
+      aspectRatio: aspect,
+      canthalTiltDeg: tilt,
+      openness: median((a) => a.openness),
+      asymmetry: median((a) => a.asymmetry),
+      reliable: true,
+      leftTiltDeg: median((a) => a.leftTiltDeg),
+      rightTiltDeg: median((a) => a.rightTiltDeg),
+      separationRatio: median((a) => a.separationRatio),
+      widthDifference: median((a) => a.widthDifference),
+      leftAspectRatio: median((a) => a.leftAspectRatio),
+      rightAspectRatio: median((a) => a.rightAspectRatio),
+    );
+    needsAdjustment = false;
+    return result;
   }
 }
 

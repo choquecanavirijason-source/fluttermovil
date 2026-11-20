@@ -5,11 +5,7 @@ class EyeTrackingHeader extends StatelessWidget {
   final String title;
   final VoidCallback? onTap;
 
-  const EyeTrackingHeader({
-    super.key,
-    required this.title,
-    this.onTap,
-  });
+  const EyeTrackingHeader({super.key, required this.title, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -21,6 +17,9 @@ class EyeTrackingHeader extends StatelessWidget {
         child: GestureDetector(
           onTap: onTap,
           child: Container(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width - 140,
+            ),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.45),
@@ -35,13 +34,17 @@ class EyeTrackingHeader extends StatelessWidget {
               children: [
                 const Icon(Icons.remove_red_eye, color: Colors.white, size: 18),
                 const SizedBox(width: 7),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.7,
+                Flexible(
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.7,
+                    ),
                   ),
                 ),
               ],

@@ -9,6 +9,13 @@ class EyeTrackingSideMenu extends StatelessWidget {
   final VoidCallback onTechniqueTap;
   final VoidCallback onEffectTap;
   final VoidCallback onThicknessTap;
+
+  /// Abre el selector de color. `null` = el estilo solo ofrece negro y el
+  /// botón no se muestra.
+  final VoidCallback? onColorTap;
+
+  /// Color elegido, para pintar el botón.
+  final Color? currentColor;
   final String? activeCategory;
 
   const EyeTrackingSideMenu({
@@ -19,8 +26,12 @@ class EyeTrackingSideMenu extends StatelessWidget {
     required this.onTechniqueTap,
     required this.onEffectTap,
     required this.onThicknessTap,
+    this.onColorTap,
+    this.currentColor,
     this.activeCategory,
   });
+
+  static const _gap = SizedBox(height: 10);
 
   @override
   Widget build(BuildContext context) {
@@ -30,77 +41,179 @@ class EyeTrackingSideMenu extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          _MenuItem(asset: 'assets/flash.png', onTap: onFlashTap),
-          const SizedBox(height: 20),
-          _MenuItem(asset: 'assets/rotar.png', onTap: onRotateTap),
-          const SizedBox(height: 20),
           _MenuItem(
-            asset: 'assets/diseño.png',
+            icon: Icons.flash_on_rounded,
+            label: 'Flash',
+            onTap: onFlashTap,
+          ),
+          _gap,
+          _MenuItem(
+            icon: Icons.cameraswitch_rounded,
+            label: 'Cámara',
+            onTap: onRotateTap,
+          ),
+          _gap,
+          _MenuItem(
+            icon: Icons.straighten_rounded,
+            label: 'Largo',
             onTap: onDesignTap,
             isActive: activeCategory == 'design',
           ),
-          const SizedBox(height: 20),
+          _gap,
           _MenuItem(
-            asset: 'assets/tecnica.png',
+            icon: Icons.grain_rounded,
+            label: 'Técnica',
             onTap: onTechniqueTap,
             isActive: activeCategory == 'tech',
           ),
-          const SizedBox(height: 20),
+          _gap,
           _MenuItem(
-            asset: 'assets/efecto.png',
+            icon: Icons.auto_awesome_rounded,
+            label: 'Efecto',
             onTap: onEffectTap,
             isActive: activeCategory == 'effect',
           ),
-          const SizedBox(height: 20),
+          _gap,
           _MenuItem(
-            asset: 'assets/grosor.png',
+            icon: Icons.line_weight_rounded,
+            label: 'Grosor',
             onTap: onThicknessTap,
             isActive: activeCategory == 'thickness',
           ),
+          if (onColorTap != null) ...[
+            _gap,
+            _ColorMenuItem(
+              color: currentColor ?? const Color(0xFF111111),
+              onTap: onColorTap!,
+              isActive: activeCategory == 'color',
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _MenuItem extends StatelessWidget {
-  final String asset;
+/// Botón del menú lateral para el color de pestaña: misma forma que los
+/// demás, con el color elegido pintado en el centro.
+class _ColorMenuItem extends StatelessWidget {
+  final Color color;
   final VoidCallback onTap;
   final bool isActive;
 
-  const _MenuItem({
-    required this.asset,
+  const _ColorMenuItem({
+    required this.color,
     required this.onTap,
     this.isActive = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(5),
-        decoration: BoxDecoration(
-          color: isActive
-              ? AppColors.actionGreen.withValues(alpha: 0.85)
-              : Colors.black.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(50),
-          border: Border.all(
-            color: isActive
-                ? AppColors.actionGreen
-                : Colors.white24,
+    return Semantics(
+      button: true,
+      label: 'Color de pestaña',
+      child: GestureDetector(
+        onTap: onTap,
+        child: _Labeled(
+          label: 'Color',
+          child: Container(
+            width: 36,
+            height: 36,
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? AppColors.actionGreen.withValues(alpha: 0.85)
+                  : Colors.black.withValues(alpha: 0.6),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: isActive ? AppColors.actionGreen : Colors.white24,
+              ),
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: color,
+                border: Border.all(color: Colors.white, width: 1.5),
+              ),
+            ),
           ),
         ),
-        child: Image.asset(
-          asset,
-          width: 24,
-          height: 24,
-          errorBuilder: (_, __, ___) => const Icon(
-            Icons.circle_outlined,
-            color: Colors.white,
-            size: 24,
+      ),
+    );
+  }
+}
+
+class _MenuItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isActive;
+
+  const _MenuItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isActive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: _Labeled(
+          label: label,
+          child: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: isActive
+                  ? AppColors.actionGreen.withValues(alpha: 0.85)
+                  : Colors.black.withValues(alpha: 0.6),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: isActive ? AppColors.actionGreen : Colors.white24,
+              ),
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Botón redondo con su nombre debajo, legible sobre la imagen de la cámara.
+class _Labeled extends StatelessWidget {
+  final String label;
+  final Widget child;
+
+  const _Labeled({required this.label, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 52,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          child,
+          const SizedBox(height: 3),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.visible,
+            softWrap: false,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
+            ),
+          ),
+        ],
       ),
     );
   }

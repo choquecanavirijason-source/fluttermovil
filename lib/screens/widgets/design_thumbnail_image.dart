@@ -10,7 +10,7 @@ import 'dart:convert';
 /// [Image.asset] cuando es un asset local empaquetado, como siguen siendo
 /// hoy las categorías que el backend todavía no expone (tech/effect/
 /// thickness, ver `LashCustomizationCatalog`).
-class DesignThumbnailImage extends StatelessWidget {
+class DesignThumbnailImage extends StatefulWidget {
   const DesignThumbnailImage({
     super.key,
     required this.path,
@@ -22,25 +22,61 @@ class DesignThumbnailImage extends StatelessWidget {
   final double size;
   final Color? color;
 
+  @override
+  State<DesignThumbnailImage> createState() => _DesignThumbnailImageState();
+}
+
+class _DesignThumbnailImageState extends State<DesignThumbnailImage> {
+  MemoryImage? _embeddedImage;
+  String get path => widget.path;
+  double get size => widget.size;
+  Color? get color => widget.color;
+
+  @override
+  void initState() {
+    super.initState();
+    _decodeEmbeddedImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant DesignThumbnailImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.path != path) _decodeEmbeddedImage();
+  }
+
+  void _decodeEmbeddedImage() {
+    _embeddedImage = null;
+    if (!path.startsWith('data:image/')) return;
+    try {
+      _embeddedImage = MemoryImage(
+        base64Decode(path.substring(path.indexOf(',') + 1)),
+      );
+    } catch (_) {
+      // Invalid embedded images use the same fallback as failed downloads.
+    }
+  }
+
   bool get _isNetwork =>
       path.startsWith('http://') || path.startsWith('https://');
+
+  /// Prefijo de las muestras del catálogo de colores (`swatch:#RRGGBB`).
+  static const swatchPrefix = 'swatch:';
 
   @override
   Widget build(BuildContext context) {
     if (path.isEmpty) return _fallbackIcon();
+    if (path.startsWith(swatchPrefix)) return _swatch();
     if (path.startsWith('data:image/')) {
-      try {
-        return Image.memory(
-          base64Decode(path.substring(path.indexOf(',') + 1)),
-          width: size,
-          height: size,
-          fit: BoxFit.contain,
-          color: color,
-          errorBuilder: (_, _, _) => _fallbackIcon(),
-        );
-      } catch (_) {
-        return _fallbackIcon();
-      }
+      final image = _embeddedImage;
+      if (image == null) return _fallbackIcon();
+      return Image(
+        image: image,
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        color: color,
+        errorBuilder: (_, _, _) => _fallbackIcon(),
+      );
     }
     if (_isNetwork) {
       return CachedNetworkImage(
@@ -70,6 +106,42 @@ class DesignThumbnailImage extends StatelessWidget {
       fit: BoxFit.contain,
       color: color,
       errorBuilder: (_, _, _) => _fallbackIcon(),
+    );
+  }
+
+  /// Muestra circular del color de pestaña, con un brillo suave para que
+  /// los tonos oscuros (negro, café) se distingan sobre el panel de cristal.
+  Widget _swatch() {
+    final hex = path.substring(swatchPrefix.length).replaceFirst('#', '');
+    final value = int.tryParse(hex, radix: 16);
+    if (hex.length != 6 || value == null) return _fallbackIcon();
+    final base = Color(0xFF000000 | value);
+    final diameter = size * .78;
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Center(
+        child: Container(
+          width: diameter,
+          height: diameter,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              center: const Alignment(-.35, -.4),
+              radius: .95,
+              colors: [Color.lerp(base, Colors.white, .28)!, base],
+            ),
+            border: Border.all(color: Colors.white.withValues(alpha: .7), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: .25),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

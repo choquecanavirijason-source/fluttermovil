@@ -17,6 +17,62 @@ object RendererConfiguration {
     /** Temporary high-contrast material for root-position comparisons. */
     const val LASH_DIAGNOSTIC_COLOR_ENABLED = false
 
+    /** Fracción del largo de la línea de pestañas que la banda del modelo
+     * sobresale en CADA punta (ver LashMeshBender, root binding). 0 = de
+     * punta a punta exacto; con 0 las fibras quedaban ~5 px antes de la
+     * comisura. Subir si sigue corto, bajar si se pasa del ojo. */
+    const val LASH_ROOT_END_OVERSHOOT = 0.0f
+
+    /** Suavizado de la línea de raíz (LashRootBinding): cuánto se acerca
+     * cada punto interior del párpado al promedio de sus vecinos antes de
+     * trazar la curva. 0 = pasa exacto por los landmarks (con su temblor);
+     * 0.5 = filtro [1,2,1]/4. Las puntas (comisuras) nunca se mueven. Subir
+     * si la curva se ve ondulada; bajar si se despega del párpado. */
+    const val LASH_ROOT_LINE_SMOOTHING = 0.5f
+
+    /** Cola de la línea de pestañas más allá del canto externo, como
+     * fracción de la distancia entre cantos, para TODOS los ojos (ver
+     * LashLineExtension). MediaPipe marca la esquina de la abertura, no el
+     * final del párpado. Bajar si las pestañas se salen del ojo. */
+    const val LASH_LINE_TAIL_BASE = 0.0f
+
+    /** Cola EXTRA para ojos rasgados (escala con la forma, ver
+     * LASH_LINE_TAIL_ROUND_RATIO / _NARROW_RATIO): su cola es más larga. */
+    const val LASH_LINE_TAIL_NARROW_EXTRA = 0.0f
+
+    /** Dirección de la cola: 0 = sigue la tangente del párpado en el canto,
+     * 1 = sigue el eje lagrimal→canto. Solo el eje formaba una "uña" en ojos
+     * redondos; solo la tangente la hundía hacia la mejilla. */
+    const val LASH_LINE_TAIL_AXIS_BLEND = 0.5f
+
+    /** Separación mínima entre puntos de la línea de raíz (fracción del
+     * largo): puntos más juntos se descartan. Casi encimados, la tangente
+     * del spline se disparaba y estiraba las fibras de la punta. */
+    const val LASH_ROOT_LINE_MIN_GAP = 0.04f
+
+    /** Afinado de las puntas de la banda (ver LashMeshBender): en este tramo
+     * final de cada extremo (fracción del largo de la línea) las fibras se
+     * acortan hasta [LASH_END_TAPER_MIN] de su altura. 0 = sin afinado
+     * (fibras largas cortadas de golpe en la esquina). */
+    const val LASH_END_TAPER_SPAN = 0.15f
+
+    /** Altura de la fibra en la punta misma, relativa a la original. */
+    const val LASH_END_TAPER_MIN = 0.5f
+
+    /** Cuánto se orienta cada fibra perpendicular al borde del párpado en
+     * vez de vertical (ver LashMeshBender, root binding). 0 = todas
+     * verticales (en la esquina externa quedaban paradas contra el borde
+     * inclinado, "forzadas"); 1 = perpendicular exacta (abanico completo). */
+    const val LASH_FIBER_FOLLOW_NORMAL = 0.0f
+
+    /** Desde esta proporción alto/ancho del ojo abierto, sin cola EXTRA
+     * (redondos; `pruebas/ojos` 04 = 0.41). */
+    const val LASH_LINE_TAIL_ROUND_RATIO = 0.38f
+
+    /** Hasta esta proporción, cola extra completa (rasgados/estrechos):
+     * 03 largos estrechos = 0.23; 02 largos = 0.31 queda a la mitad. */
+    const val LASH_LINE_TAIL_NARROW_RATIO = 0.24f
+
     // ── Modo SINCRONIZADO ("estilo TikTok") ─────────────────────────────
     //
     // `true`: la cámara se dibuja DENTRO de Filament (alta resolución, ver
@@ -981,6 +1037,15 @@ object RendererConfiguration {
      * La luminancia máxima del asset original era ≈ 0.106 para referencia.
      */
     const val LASH_BLACK_TIP_LUMINANCE = 0.04f
+
+    /** Color de pestaña (ver [RawMesh.tinted]): fracción del color que
+     * conserva la RAÍZ respecto de la punta. 1 = color plano; más bajo =
+     * raíz más oscura, como la fibra negra aprobada. */
+    const val LASH_TINT_ROOT_FACTOR = 0.55f
+
+    /** El negro aprobado del catálogo: con este color no se tiñe nada y la
+     * pestaña se ve exactamente como siempre. */
+    const val LASH_APPROVED_BLACK = "#111111"
 
     /**
      * Gira el modelo de pestañas 180° sobre su eje `right`. Ver

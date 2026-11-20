@@ -15,9 +15,20 @@ class TryOnStyle {
   final int revision, sortOrder;
   final bool active;
   final List<int> lengths, techniques, thicknesses;
+
+  /// Colores de pestaña que ofrece el estilo (ids del catálogo). Los
+  /// estilos anteriores al catálogo de colores: solo negro (0).
+  final List<int> colors;
   final List<String> eyeTypes;
-  final int defaultLength, defaultTechnique, defaultThickness;
+  final int defaultLength, defaultTechnique, defaultThickness, defaultColor;
   final LashOptionCatalog options;
+
+  /// Mapeo de la técnica definido en el admin (mm por zona, largo Medio).
+  final List<int>? lashMap;
+
+  /// Forma de referencia para calcular el mapeo cuando no hay [lashMap]
+  /// (el perfil propio o la plantilla del estilo base).
+  final List<({double t, double length})>? mapProfile;
   const TryOnStyle({
     required this.key,
     required this.name,
@@ -32,11 +43,23 @@ class TryOnStyle {
     this.lengths = const [0, 1, 2],
     this.techniques = const [0, 1, 2, 3],
     this.thicknesses = const [0, 1, 2, 3],
+    this.colors = const [0],
     this.eyeTypes = const [],
     this.defaultLength = 1,
     this.defaultTechnique = 0,
     this.defaultThickness = 3,
+    this.defaultColor = 0,
+    this.lashMap,
+    this.mapProfile,
   });
+
+  /// Opciones de color disponibles en este estilo, en el orden del catálogo.
+  List<LashOption> get colorOptions {
+    final available = options.colors.where((o) => colors.contains(o.id));
+    return available.isEmpty
+        ? const [LashOptionCatalog.blackOption]
+        : List.unmodifiable(available);
+  }
   int get engineStyle {
     final index = CatEyeRecipe.styleIds.indexOf(builtinStyle ?? '');
     return index < 0 ? 0 : index;
@@ -64,25 +87,39 @@ class TryOnStyle {
         technique: technique ?? defaultTechnique,
         thickness: thickness ?? defaultThickness,
       );
-  Map<String, dynamic> snapshot({CatEyeRecipe? applied}) => {
-    'style_key': key,
-    'style_name': name,
-    'revision': applied?.catalogRevision ?? revision,
-    'engine_version': 2,
-    'resolved_options':
+  /// [color]: id del color elegido. El negro (0) no se guarda en la receta,
+  /// así un servidor todavía sin el catálogo de colores la sigue aceptando.
+  Map<String, dynamic> snapshot({
+    CatEyeRecipe? applied,
+    Map<String, dynamic>? eyeAssessment,
+    int? color,
+  }) {
+    final chosenColor = color ?? defaultColor;
+    final resolved =
         applied?.options?.toJson() ??
         options
             .resolve(defaultLength, defaultTechnique, defaultThickness)
-            .toJson(),
-    'builtin_style': builtinStyle,
-    'profile': (applied?.profile ?? profile)?.toJson(),
-    'render_mode': applied == null ? 'original' : 'procedural',
-    'selection': {
-      'length': applied?.length ?? defaultLength,
-      'technique': applied?.technique ?? defaultTechnique,
-      'thickness': applied?.thickness ?? defaultThickness,
-    },
-  };
+            .toJson();
+    return {
+      'eye_assessment': ?eyeAssessment,
+      'style_key': key,
+      'style_name': name,
+      'revision': applied?.catalogRevision ?? revision,
+      'engine_version': 2,
+      'resolved_options': chosenColor == 0
+          ? resolved
+          : {...resolved, 'color': options.color(chosenColor).toJson()},
+      'builtin_style': builtinStyle,
+      'profile': (applied?.profile ?? profile)?.toJson(),
+      'render_mode': applied == null ? 'original' : 'procedural',
+      'selection': {
+        'length': applied?.length ?? defaultLength,
+        'technique': applied?.technique ?? defaultTechnique,
+        'thickness': applied?.thickness ?? defaultThickness,
+        if (chosenColor != 0) 'color': chosenColor,
+      },
+    };
+  }
   factory TryOnStyle.fromJson(
     Map<String, dynamic> m, {
     LashOptionCatalog options = LashOptionCatalog.bundled,
@@ -129,13 +166,19 @@ class TryOnStyle {
     final lengths = parseOptions('allowed_lengths', 4095),
         techniques = parseOptions('allowed_techniques', 4095),
         thicknesses = parseOptions('allowed_thicknesses', 4095);
+    // Colores: opcionales; los estilos anteriores son solo negro.
+    final colors = m['allowed_colors'] == null
+        ? const <int>[0]
+        : parseOptions('allowed_colors', 4095);
     final d = Map<String, dynamic>.from(m['defaults'] as Map);
     final l = integer(d['length'], 0, 4095),
         t = integer(d['technique'], 0, 4095),
-        th = integer(d['thickness'], 0, 4095);
+        th = integer(d['thickness'], 0, 4095),
+        c = d['color'] == null ? colors.first : integer(d['color'], 0, 4095);
     if (!lengths.contains(l) ||
         !techniques.contains(t) ||
-        !thicknesses.contains(th)) {
+        !thicknesses.contains(th) ||
+        !colors.contains(c)) {
       throw const FormatException('Unavailable default');
     }
     for (final id in lengths) {
@@ -149,7 +192,13 @@ class TryOnStyle {
     }
     final eyes = List<String>.from(m['eye_types'] as List);
     if (eyes.any(
-      (e) => !const ['ALMOND', 'ROUND', 'UPTURNED', 'DOWNTURNED'].contains(e),
+      (e) => !const [
+        'ALMOND',
+        'ROUND',
+        'ELONGATED',
+        'UPTURNED',
+        'DOWNTURNED',
+      ].contains(e),
     )) {
       throw const FormatException('Unknown eye shape');
     }
@@ -175,10 +224,74 @@ class TryOnStyle {
       lengths: lengths,
       techniques: techniques,
       thicknesses: thicknesses,
+      colors: colors,
       eyeTypes: eyes,
       defaultLength: l,
       defaultTechnique: t,
       defaultThickness: th,
+      defaultColor: c,
+      lashMap: _parseLashMap(m['lash_map']),
+      mapProfile: _parseMapProfile(m['map_profile']),
+    );
+  }
+
+  /// Datos opcionales del mapeo: si vienen mal se ignoran (la app calcula
+  /// o usa el patrón fijo) en vez de descartar el estilo entero.
+  static List<int>? _parseLashMap(Object? raw) {
+    if (raw is! List || raw.length < 3 || raw.length > 12) return null;
+    if (raw.any((v) => v is! int || v < 4 || v > 20)) return null;
+    return List.unmodifiable(raw.cast<int>());
+  }
+
+  static List<({double t, double length})>? _parseMapProfile(Object? raw) {
+    if (raw is! List || raw.length < 2) return null;
+    final points = <({double t, double length})>[];
+    for (final p in raw) {
+      if (p is! Map) return null;
+      final t = p['t'], length = p['length'];
+      if (t is! num || length is! num || !t.isFinite || !length.isFinite) {
+        return null;
+      }
+      points.add((t: t.toDouble(), length: length.toDouble()));
+    }
+    return List.unmodifiable(points);
+  }
+}
+
+class TryOnEyeCategory {
+  final String key, name, group, detection;
+  final List<String> styleKeys;
+  const TryOnEyeCategory(
+    this.key,
+    this.name,
+    this.group,
+    this.detection,
+    this.styleKeys,
+  );
+
+  factory TryOnEyeCategory.fromJson(Map<String, dynamic> value) {
+    final key = value['key'], name = value['name'];
+    final group = value['group'], detection = value['detection'];
+    final styles = value['style_keys'];
+    if (key is! String ||
+        key.isEmpty ||
+        key.length > 64 ||
+        name is! String ||
+        name.trim().isEmpty ||
+        name.length > 80 ||
+        !const ['shape', 'tilt', 'lid'].contains(group) ||
+        !const ['automatic', 'manual'].contains(detection) ||
+        styles is! List ||
+        styles.length > 500 ||
+        styles.any((s) => s is! String)) {
+      throw const FormatException('Invalid eye category');
+    }
+    return TryOnEyeCategory(
+      key,
+      name,
+      group as String,
+      detection as String,
+      List<String>.unmodifiable(styles),
     );
   }
 }
@@ -187,10 +300,12 @@ class TryOnCatalog {
   final List<TryOnStyle> styles;
   final String revision;
   final LashOptionCatalog options;
+  final List<TryOnEyeCategory> eyeCategories;
   TryOnCatalog(
     this.styles,
     this.revision, [
     this.options = LashOptionCatalog.bundled,
+    this.eyeCategories = const [],
   ]);
   factory TryOnCatalog.fromJson(Map<String, dynamic> m) {
     if (![1, 2].contains(m['schema_version']) ||
@@ -223,10 +338,23 @@ class TryOnCatalog {
       final sort = a.sortOrder.compareTo(b.sortOrder);
       return sort != 0 ? sort : a.key.compareTo(b.key);
     });
+    final rawEyes = m['eye_categories'] ?? const [];
+    if (rawEyes is! List || rawEyes.length > 64) {
+      throw const FormatException('Invalid eye categories');
+    }
+    final eyes = rawEyes
+        .map(
+          (e) => TryOnEyeCategory.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
+        .toList();
+    if (eyes.map((e) => e.key).toSet().length != eyes.length) {
+      throw const FormatException('Duplicate eye category');
+    }
     return TryOnCatalog(
       List.unmodifiable(all),
       m['revision'] as String,
       options,
+      List.unmodifiable(eyes),
     );
   }
 }

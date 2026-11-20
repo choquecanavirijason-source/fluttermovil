@@ -120,6 +120,25 @@ data class RawMesh(
      *
      * Costo único al cargar el modelo, no por frame.
      */
+    /**
+     * Color de pestaña elegido en el probador (catálogo de colores). Se
+     * aplica DESPUÉS de [toNeutralBlack]: cada vértice toma el color [rgb]
+     * escalado por su luminancia relativa a [tipLuminance], así se conserva
+     * el relieve de la fibra (raíz más oscura, punta más clara) pero con un
+     * único color. Solo cambia `color`; posiciones, normales y UV quedan
+     * intactas, así que no afecta el doblado ni el anclaje.
+     */
+    fun tinted(rgb: Float3, tipLuminance: Float, rootFactor: Float): RawMesh {
+        if (tipLuminance <= 1e-6f) return this
+        val adjusted = vertices.map { vertex ->
+            val c = vertex.color ?: return@map vertex
+            val lum = 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z
+            val k = rootFactor + (1f - rootFactor) * (lum / tipLuminance).coerceIn(0f, 1f)
+            vertex.copy(color = Float4(rgb.x * k, rgb.y * k, rgb.z * k, c.w))
+        }
+        return copy(vertices = adjusted)
+    }
+
     fun toNeutralBlack(tipLuminance: Float): RawMesh {
         var maxLum = 0f
         for (vertex in vertices) {

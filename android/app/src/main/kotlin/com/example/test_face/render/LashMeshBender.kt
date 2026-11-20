@@ -134,6 +134,9 @@ object LashMeshBender {
         rootDepths: FloatArray? = null,
         dropRadians: Float = 0f,
         scaleYToZ: Float = RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER,
+        /** scale.x / scale.y del nodo: para que "perpendicular a la línea"
+         * sea perpendicular EN PANTALLA y no en el espacio local estirado. */
+        scaleXToY: Float = 1f,
         /** Actual projected band width / measured eye width. Curve samples
          * must use displayed X coordinates, not the unexpanded asset width. */
         curveWidthScale: Float = 1f,
@@ -219,6 +222,8 @@ object LashMeshBender {
         var minPixelLocalX = Float.MAX_VALUE
         var maxPixelLocalX = -Float.MAX_VALUE
 
+        // Una sola asignación por doblado (no por vértice) para la raíz.
+        val rootSample = FloatArray(6)
         for (i in 0 until n) {
             // vertex.position es un Float3 EXISTENTE (parseado una única vez
             // al cargar el modelo, no por frame) — leer sus componentes acá
@@ -280,15 +285,64 @@ object LashMeshBender {
             var bentY = pos.y + rootY + correctionY
             var bentZ = pos.z - depthDropLocal + correctionZ
             if (rootBinding != null && rootDepths != null) {
-                val u = (pos.x - rootBinding.sourceMinX) / (rootBinding.sourceMaxX - rootBinding.sourceMinX)
-                val seg = rootBinding.segment(u)
-                val a = rootBinding.points[seg]
-                val b = rootBinding.points[seg + 1]
-                val interval = (rootBinding.knots[seg + 1] - rootBinding.knots[seg]).coerceAtLeast(1e-6f)
-                val k = (u - rootBinding.knots[seg]) / interval
-                bentX = a.x + (b.x - a.x) * k
-                bentY = a.y + (b.y - a.y) * k + pos.y - raw.minY
-                bentZ = a.z + (b.z - a.z) * k + pos.z - rootDepths[i]
+                // Las fibras de las puntas son las más cortas/delgadas y se
+                // inclinan hacia afuera: mapeando la banda justo de punta a
+                // punta, el último tramo de la línea (hasta la comisura) se
+                // veía vacío (~2% del ancho, medido en dispositivo). El
+                // sobrante estira la banda un poco más allá de cada punta.
+                val overshoot = RendererConfiguration.LASH_ROOT_END_OVERSHOOT
+                val u = 0.5f + ((pos.x - rootBinding.sourceMinX) /
+                    (rootBinding.sourceMaxX - rootBinding.sourceMinX) - 0.5f) * (1f + 2f * overshoot)
+                // Curva suave por los landmarks (no tramos rectos: daban
+                // esquinas en cada punto del párpado).
+                rootBinding.sampleInto(u, rootSample)
+                // Afinado de las puntas: en el último tramo de cada extremo la
+                // fibra baja de altura (Y/Z respecto de su raíz) hasta
+                // LASH_END_TAPER_MIN; el desplazamiento en X se conserva, así
+                // que queda más corta y abierta hacia afuera, como una
+                // extensión real. Sin esto la banda terminaba con fibras
+                // largas cortadas de golpe en la esquina.
+                val endDist = minOf(u, 1f - u)
+                val taperSpan = RendererConfiguration.LASH_END_TAPER_SPAN
+                val taper = if (taperSpan <= 0f) 1f else {
+                    val e = (endDist / taperSpan).coerceIn(0f, 1f)
+                    val sm = e * e * (3f - 2f * e)
+                    RendererConfiguration.LASH_END_TAPER_MIN +
+                        (1f - RendererConfiguration.LASH_END_TAPER_MIN) * sm
+                }
+                // Orientación: la fibra crece perpendicular al borde del
+                // párpado, no siempre "hacia arriba". Con la raíz pegada a la
+                // línea pero la fibra vertical, en la esquina externa (donde
+                // el párpado baja en diagonal) quedaban paradas contra el
+                // borde, cruzadas y "forzadas". Se mezcla vertical→normal con
+                // LASH_FIBER_FOLLOW_NORMAL. La normal se calcula en espacio
+                // de MUNDO (escala X≠Y del nodo) y se vuelve a local.
+                val h = (pos.y - raw.minY) * taper
+                var offX = 0f
+                var offY = h
+                val follow = RendererConfiguration.LASH_FIBER_FOLLOW_NORMAL
+                if (follow > 0f && scaleXToY.isFinite() && scaleXToY > 1e-6f) {
+                    val wx = rootSample[3] * scaleXToY // tangente en mundo (÷ scale.y)
+                    val wy = rootSample[4]
+                    val len = kotlin.math.sqrt(wx * wx + wy * wy)
+                    if (len > 1e-6f && len.isFinite()) {
+                        // Normal en mundo apuntando "hacia arriba" (+Y local).
+                        var nx = -wy / len
+                        var ny = wx / len
+                        if (ny < 0f) { nx = -nx; ny = -ny }
+                        // Mezcla con la vertical y renormaliza.
+                        var mx = nx * follow
+                        var my = 1f + (ny - 1f) * follow
+                        val ml = kotlin.math.sqrt(mx * mx + my * my).coerceAtLeast(1e-6f)
+                        mx /= ml; my /= ml
+                        // De mundo a local: X se divide por scaleXToY.
+                        offX = h * mx / scaleXToY
+                        offY = h * my
+                    }
+                }
+                bentX = rootSample[0] + offX
+                bentY = rootSample[1] + offY
+                bentZ = rootSample[2] + (pos.z - rootDepths[i]) * taper
             }
 
             val base = i * POSITION_COMPONENTS

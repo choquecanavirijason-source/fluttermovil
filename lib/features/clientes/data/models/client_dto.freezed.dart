@@ -28,6 +28,8 @@ mixin _$ClientDto {
   String? get phone => throw _privateConstructorUsedError;
   String? get email => throw _privateConstructorUsedError;
   String? get status => throw _privateConstructorUsedError;
+  @JsonKey(name: 'visit_count')
+  int get visitCount => throw _privateConstructorUsedError;
 
   /// Serializes this ClientDto to a JSON map.
   Map<String, dynamic> toJson() => throw _privateConstructorUsedError;
@@ -51,6 +53,7 @@ abstract class $ClientDtoCopyWith<$Res> {
     String? phone,
     String? email,
     String? status,
+    @JsonKey(name: 'visit_count') int visitCount,
   });
 }
 
@@ -75,6 +78,7 @@ class _$ClientDtoCopyWithImpl<$Res, $Val extends ClientDto>
     Object? phone = freezed,
     Object? email = freezed,
     Object? status = freezed,
+    Object? visitCount = null,
   }) {
     return _then(
       _value.copyWith(
@@ -102,6 +106,10 @@ class _$ClientDtoCopyWithImpl<$Res, $Val extends ClientDto>
                 ? _value.status
                 : status // ignore: cast_nullable_to_non_nullable
                       as String?,
+            visitCount: null == visitCount
+                ? _value.visitCount
+                : visitCount // ignore: cast_nullable_to_non_nullable
+                      as int,
           )
           as $Val,
     );
@@ -124,6 +132,7 @@ abstract class _$$ClientDtoImplCopyWith<$Res>
     String? phone,
     String? email,
     String? status,
+    @JsonKey(name: 'visit_count') int visitCount,
   });
 }
 
@@ -147,6 +156,7 @@ class __$$ClientDtoImplCopyWithImpl<$Res>
     Object? phone = freezed,
     Object? email = freezed,
     Object? status = freezed,
+    Object? visitCount = null,
   }) {
     return _then(
       _$ClientDtoImpl(
@@ -174,6 +184,10 @@ class __$$ClientDtoImplCopyWithImpl<$Res>
             ? _value.status
             : status // ignore: cast_nullable_to_non_nullable
                   as String?,
+        visitCount: null == visitCount
+            ? _value.visitCount
+            : visitCount // ignore: cast_nullable_to_non_nullable
+                  as int,
       ),
     );
   }
@@ -189,6 +203,7 @@ class _$ClientDtoImpl implements _ClientDto {
     this.phone,
     this.email,
     this.status,
+    @JsonKey(name: 'visit_count') this.visitCount = 0,
   });
 
   factory _$ClientDtoImpl.fromJson(Map<String, dynamic> json) =>
@@ -208,10 +223,13 @@ class _$ClientDtoImpl implements _ClientDto {
   final String? email;
   @override
   final String? status;
+  @override
+  @JsonKey(name: 'visit_count')
+  final int visitCount;
 
   @override
   String toString() {
-    return 'ClientDto(id: $id, name: $name, lastName: $lastName, phone: $phone, email: $email, status: $status)';
+    return 'ClientDto(id: $id, name: $name, lastName: $lastName, phone: $phone, email: $email, status: $status, visitCount: $visitCount)';
   }
 
   @override
@@ -225,13 +243,23 @@ class _$ClientDtoImpl implements _ClientDto {
                 other.lastName == lastName) &&
             (identical(other.phone, phone) || other.phone == phone) &&
             (identical(other.email, email) || other.email == email) &&
-            (identical(other.status, status) || other.status == status));
+            (identical(other.status, status) || other.status == status) &&
+            (identical(other.visitCount, visitCount) ||
+                other.visitCount == visitCount));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, id, name, lastName, phone, email, status);
+  int get hashCode => Object.hash(
+    runtimeType,
+    id,
+    name,
+    lastName,
+    phone,
+    email,
+    status,
+    visitCount,
+  );
 
   /// Create a copy of ClientDto
   /// with the given fields replaced by the non-null parameter values.
@@ -255,6 +283,7 @@ abstract class _ClientDto implements ClientDto {
     final String? phone,
     final String? email,
     final String? status,
+    @JsonKey(name: 'visit_count') final int visitCount,
   }) = _$ClientDtoImpl;
 
   factory _ClientDto.fromJson(Map<String, dynamic> json) =
@@ -273,6 +302,9 @@ abstract class _ClientDto implements ClientDto {
   String? get email;
   @override
   String? get status;
+  @override
+  @JsonKey(name: 'visit_count')
+  int get visitCount;
 
   /// Create a copy of ClientDto
   /// with the given fields replaced by the non-null parameter values.

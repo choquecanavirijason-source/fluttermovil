@@ -17,10 +17,19 @@ object CameraUvTransform {
         flipTextureU: Boolean, flipTextureV: Boolean,
     ): Pair<Float, Float> {
         val (s, t) = sensorUv(u, v, rotationDegrees, mirror)
-        // The horizontal correction was calibrated for the selfie path.
-        // Applying it to the unmirrored rear camera reverses panning and
-        // displays the opposite side from the analysis landmarks.
-        return (if (flipTextureU && mirror) 1f - s else s) to
+        // The horizontal correction was calibrated for the selfie path with a
+        // buffer the producer already transformed (rotation 0: rotated AND
+        // mirrored by CameraX, so the mirror above must be undone). Applying
+        // it to the unmirrored rear camera reverses panning and displays the
+        // opposite side from the analysis landmarks.
+        //
+        // In photo mode (assistant framing) the front buffer arrives
+        // untransformed (1440x1080, rotation 270): the math above already
+        // mirrors it, and this correction flipped it again along `s`, which
+        // at 90/270 is the screen's VERTICAL axis — the preview showed
+        // upside down. So it only applies to the pre-transformed buffer.
+        val producerTransformed = ((rotationDegrees % 360) + 360) % 360 == 0
+        return (if (flipTextureU && mirror && producerTransformed) 1f - s else s) to
             (if (flipTextureV) 1f - t else t)
     }
 }

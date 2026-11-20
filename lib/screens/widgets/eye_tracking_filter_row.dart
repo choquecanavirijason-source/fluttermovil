@@ -5,30 +5,37 @@ import 'package:Probador/core/theme/app_colors.dart';
 class EyeTrackingFilterRow extends StatelessWidget {
   final int selectedFilter;
   final ValueChanged<int> onSelect;
+  final bool embedded;
+  final Widget? recommendation;
 
   const EyeTrackingFilterRow({
     super.key,
     required this.selectedFilter,
     required this.onSelect,
+    this.embedded = false,
+    this.recommendation,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Positioned(
-      bottom: 150,
-      left: 20,
-      right: 0,
-      child: Center(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _chip('COMPATIBLE', 0),
-            const SizedBox(width: 8),
-            _chip('EXPLORAR', 1),
-          ],
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _chip('RECOMENDADOS', 0),
+              const SizedBox(width: 8),
+              _chip('TODOS', 1),
+            ],
+          ),
         ),
-      ),
+        ?recommendation,
+      ],
     );
+    if (embedded) return content;
+    return Positioned(bottom: 150, left: 20, right: 0, child: content);
   }
 
   Widget _chip(String text, int index) {

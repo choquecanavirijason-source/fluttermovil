@@ -38,12 +38,15 @@ class _InicioTabState extends ConsumerState<InicioTab>
     with WidgetsBindingObserver {
   StreamSubscription<AgendaWsEvent>? _wsSub;
 
+  /// Guardado en initState: Riverpod no deja usar `ref` dentro de `dispose`.
+  late final _watcher = ref.read(newAppointmentWatcherProvider);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(LocalNotificationsService.instance.initialize());
-    ref.read(newAppointmentWatcherProvider).start();
+    _watcher.start();
 
     // Conecta al WS de agenda (/ws/branch/{branchId}) para refrescar
     // "Clientes de hoy" y disparar la verificación de citas nuevas al
@@ -56,7 +59,7 @@ class _InicioTabState extends ConsumerState<InicioTab>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    ref.read(newAppointmentWatcherProvider).stop();
+    _watcher.stop();
     _wsSub?.cancel();
     super.dispose();
   }
@@ -826,6 +829,22 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
     context.push(AppRoutes.selection);
   }
 
+  // ── resumen del ticket de la cita (antes de abrir el probador) ──
+  void _showTicketSummary(MobileAppointment ticket) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => _TicketSummarySheet(
+        ticket: ticket,
+        onOpenProbador: () {
+          Navigator.of(ctx).pop();
+          _openProbador(ticket);
+        },
+      ),
+    );
+  }
+
   // ── bottom sheet con la lista completa ──────────────────────
   void _showAllClientsSheet(List<MobileAppointment> tickets) {
     final active =
@@ -907,7 +926,7 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
                           itemBuilder: (_, i) => InkWell(
                             onTap: () {
                               Navigator.of(ctx).pop();
-                              _openProbador(active[i]);
+                              _showTicketSummary(active[i]);
                             },
                             borderRadius: BorderRadius.circular(14),
                             child: _ClientRow(ticket: active[i]),
@@ -1030,7 +1049,7 @@ class _ClientListSectionState extends ConsumerState<_ClientListSection> {
             }
             // Mostramos solo el ÚLTIMO cliente asignado
             return InkWell(
-              onTap: () => _openProbador(latest),
+              onTap: () => _showTicketSummary(latest),
               borderRadius: BorderRadius.circular(14),
               child: _ClientRow(ticket: latest),
             );
@@ -1189,6 +1208,28 @@ class _ClientRow extends StatelessWidget {
                         cs.onSurfaceVariant,
                   ),
                 ),
+                if (ticket.clientAllergies != null) ...[
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded,
+                          size: 13, color: Color(0xFFB91C1C)),
+                      const SizedBox(width: 3),
+                      Expanded(
+                        child: Text(
+                          'Alergia: ${ticket.clientAllergies}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFFB91C1C),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -1276,6 +1317,154 @@ class _ClientRow extends StatelessWidget {
             Icons.chevron_right,
             size: 20,
             color: cs.onSurfaceVariant,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resumen del ticket (mismos datos que el mensaje que recibe el cliente)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TicketSummarySheet extends StatelessWidget {
+  const _TicketSummarySheet({
+    required this.ticket,
+    required this.onOpenProbador,
+  });
+
+  final MobileAppointment ticket;
+  final VoidCallback onOpenProbador;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final row = _ClientRow(ticket: ticket);
+    final start = ticket.startTime == null
+        ? null
+        : DateTime.tryParse(ticket.startTime!)?.toLocal();
+    final branch = (ticket.branchName ?? '').trim();
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.confirmation_number_outlined,
+                    size: 20, color: cs.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Resumen de la cita',
+                      style: tt.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w800)),
+                ),
+                Text(row._ticketLabel,
+                    style: tt.labelLarge?.copyWith(
+                        color: cs.primary, fontWeight: FontWeight.w800)),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: cs.outlineVariant),
+              ),
+              child: Column(
+                children: [
+                  _TicketLine(
+                      icon: Icons.person_outline,
+                      label: 'Cliente',
+                      value: row._clientName),
+                  if (start != null) ...[
+                    _TicketLine(
+                        icon: Icons.calendar_today_outlined,
+                        label: 'Fecha',
+                        value: DateFormat('dd/MM/yyyy').format(start)),
+                    _TicketLine(
+                        icon: Icons.access_time,
+                        label: 'Hora',
+                        value: DateFormat('HH:mm').format(start)),
+                  ],
+                  _TicketLine(
+                      icon: Icons.spa_outlined,
+                      label: 'Servicio',
+                      value: ticket.servicesSummary),
+                  if (ticket.clientAllergies != null)
+                    _TicketLine(
+                        icon: Icons.warning_amber_rounded,
+                        label: 'Alergias',
+                        value: ticket.clientAllergies!),
+                  if (branch.isNotEmpty)
+                    _TicketLine(
+                        icon: Icons.store_mall_directory_outlined,
+                        label: 'Sucursal',
+                        value: branch),
+                  _TicketLine(
+                      icon: Icons.flag_outlined,
+                      label: 'Estado',
+                      value: _ClientRow._statusLabel[ticket.status] ??
+                          ticket.status,
+                      last: true),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: onOpenProbador,
+              icon: const Icon(Icons.face_retouching_natural),
+              label: const Text('Abrir probador'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TicketLine extends StatelessWidget {
+  const _TicketLine({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.last = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    return Padding(
+      padding: EdgeInsets.only(bottom: last ? 0 : 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: cs.onSurfaceVariant),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 72,
+            child: Text(label,
+                style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: tt.bodyMedium?.copyWith(
+                    color: cs.onSurface, fontWeight: FontWeight.w600)),
           ),
         ],
       ),

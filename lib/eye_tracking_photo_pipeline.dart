@@ -111,6 +111,89 @@ class EyeTrackingPhotoPipeline {
     );
   }
 
+  /// Promedia varios cuadros de tracking casi simultáneos para quitar el
+  /// temblor de MediaPipe (con los ojos cerrados los puntos del párpado
+  /// saltan algunos píxeles de un cuadro a otro). Solo entran los cuadros
+  /// en que los ojos están casi donde en el último ([maxShiftRatio] del
+  /// ancho del ojo): si la cabeza se movió, promediar correría el mapeo, y
+  /// manda el cuadro más reciente. Las listas que no tienen la misma
+  /// cantidad de puntos en todos se toman del último cuadro.
+  static TrackingFrame averageFrames(
+    List<TrackingFrame> frames, {
+    double maxShiftRatio = 0.06,
+  }) {
+    final latest = frames.last;
+    if (frames.length < 2 ||
+        latest.leftEye.length < 2 ||
+        latest.rightEye.length < 2) {
+      return latest;
+    }
+    Offset centroid(List<EyePoint> pts) {
+      var x = 0.0, y = 0.0;
+      for (final p in pts) {
+        x += p.x;
+        y += p.y;
+      }
+      return Offset(x / pts.length, y / pts.length);
+    }
+
+    double width(List<EyePoint> pts) {
+      var minX = double.infinity, maxX = -double.infinity;
+      for (final p in pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+      }
+      return maxX - minX;
+    }
+
+    final refL = centroid(latest.leftEye), refR = centroid(latest.rightEye);
+    final limit =
+        maxShiftRatio * math.max(width(latest.leftEye), width(latest.rightEye));
+    final used = [
+      for (final f in frames)
+        if (f.leftEye.length == latest.leftEye.length &&
+            f.rightEye.length == latest.rightEye.length &&
+            (centroid(f.leftEye) - refL).distance <= limit &&
+            (centroid(f.rightEye) - refR).distance <= limit)
+          f,
+    ];
+    if (used.length < 2) return latest;
+
+    List<EyePoint> avg(List<EyePoint> Function(TrackingFrame) pick) {
+      final base = pick(latest);
+      if (base.isEmpty || used.any((f) => pick(f).length != base.length)) {
+        return base;
+      }
+      return List.generate(base.length, (i) {
+        var x = 0.0, y = 0.0;
+        for (final f in used) {
+          x += pick(f)[i].x;
+          y += pick(f)[i].y;
+        }
+        return EyePoint(x: x / used.length, y: y / used.length);
+      }, growable: false);
+    }
+
+    return TrackingFrame(
+      faceDetected: latest.faceDetected,
+      imageWidth: latest.imageWidth,
+      imageHeight: latest.imageHeight,
+      faceContour: avg((f) => f.faceContour),
+      leftEye: avg((f) => f.leftEye),
+      rightEye: avg((f) => f.rightEye),
+      leftIris: latest.leftIris,
+      rightIris: latest.rightIris,
+      leftOpenRatio: latest.leftOpenRatio,
+      rightOpenRatio: latest.rightOpenRatio,
+      leftUpperLid: avg((f) => f.leftUpperLid),
+      leftLowerLid: avg((f) => f.leftLowerLid),
+      rightUpperLid: avg((f) => f.rightUpperLid),
+      rightLowerLid: avg((f) => f.rightLowerLid),
+      leftLashLine: avg((f) => f.leftLashLine),
+      rightLashLine: avg((f) => f.rightLashLine),
+    );
+  }
+
   /// Rota los landmarks de una banda ya proyectada para que sigan coincidiendo
   /// con la imagen cuando el usuario la gira manualmente en resultados.
   static TrackingFrame? rotateFrame180(TrackingFrame? frame) {

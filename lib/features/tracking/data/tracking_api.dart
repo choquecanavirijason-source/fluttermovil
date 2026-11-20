@@ -11,6 +11,15 @@ class TrackingApi {
 
   final Dio _dio;
 
+  /// Las llamadas de IA pueden tardar bastante más que el resto de la API:
+  /// con una IA local (Ollama en CPU) analizar una foto lleva varios segundos,
+  /// y la primera vez además se carga el modelo en memoria. El backend corta
+  /// a los 180 s; acá se espera un poco más para recibir su mensaje de error.
+  static final Options _aiOptions = Options(
+    sendTimeout: const Duration(seconds: 60),
+    receiveTimeout: const Duration(seconds: 190),
+  );
+
   /// `POST /tracking/` — registra el seguimiento (ficha) del cliente.
   /// Devuelve el `id` creado.
   Future<int> create(Map<String, dynamic> body) async {
@@ -44,6 +53,7 @@ class TrackingApi {
     final response = await _dio.post<Map<String, dynamic>>(
       '${ApiEndpoints.tracking}ai-review',
       data: formData,
+      options: _aiOptions,
     );
     return response.data?['feedback'] as String? ?? '';
   }
@@ -61,6 +71,7 @@ class TrackingApi {
     final response = await _dio.post<Map<String, dynamic>>(
       '${ApiEndpoints.tracking}ai-compare',
       data: formData,
+      options: _aiOptions,
     );
     return response.data?['feedback'] as String? ?? '';
   }
@@ -74,6 +85,7 @@ class TrackingApi {
     final response = await _dio.post<Map<String, dynamic>>(
       '${ApiEndpoints.tracking}ai-recommend',
       data: formData,
+      options: _aiOptions,
     );
     return LashAiRecommendation.fromJson(response.data ?? const {});
   }

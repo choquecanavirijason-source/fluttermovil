@@ -1,4 +1,5 @@
 import '../../data/models/tracking_dto.dart';
+import 'saved_tryon_design.dart';
 
 /// Un registro de seguimiento (aplicación) de un cliente.
 class TrackingRecord {
@@ -10,6 +11,7 @@ class TrackingRecord {
     this.volume,
     this.lashDesign,
     this.notes,
+    this.design,
   });
 
   final int id;
@@ -19,6 +21,10 @@ class TrackingRecord {
   final String? volume;
   final String? lashDesign;
   final String? notes;
+
+  /// Diseño del probador que se puede volver a aplicar; `null` si la
+  /// aplicación no lo guardó.
+  final SavedTryOnDesign? design;
 
   static String? _name(NamedRefDto? r) {
     final n = r?.name.trim();
@@ -39,6 +45,7 @@ class TrackingRecord {
       volume: _name(d.volume),
       lashDesign: _name(d.lashDesign),
       notes: (notes != null && notes.isNotEmpty) ? notes : null,
+      design: SavedTryOnDesign.tryParse(d.tryonRecipe),
     );
   }
 }

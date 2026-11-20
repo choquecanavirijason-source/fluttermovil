@@ -74,6 +74,10 @@ class LashRenderer(
      * el resto del estado compartido entre esos dos hilos. */
     @Volatile private var currentStyleConfig: LashStyleConfig = LashStyleConfig.DEFAULT
 
+    /** Color de pestaña (RGB 0–1) o `null` = negro aprobado. Se aplica al
+     * cargar el modelo ([loadIntoSlot]); para cambiarlo Dart vuelve a
+     * cargar el mismo `.glb` después de [setLashColor]. */
+    @Volatile private var lashTint: Float3? = null
     /**
      * Corre a vsync de pantalla (~60Hz+) mientras haya un [SceneView]
      * adjuntado, INDEPENDIENTE de la frecuencia con la que llegan
@@ -578,6 +582,22 @@ class LashRenderer(
      * ancla (`EyeAnchorCalculator`) y el doblado (`LashMeshBender`) sin
      * necesidad de recargar el `.glb`.
      */
+    /** `#RRGGBB` del catálogo, o `null`/negro aprobado = sin tinte. */
+    fun setLashColor(hex: String?) {
+        val parsed = hex?.trim()?.takeIf {
+            Regex("^#[0-9A-Fa-f]{6}$").matches(it) &&
+                !it.equals(RendererConfiguration.LASH_APPROVED_BLACK, ignoreCase = true)
+        }?.let {
+            Float3(
+                it.substring(1, 3).toInt(16) / 255f,
+                it.substring(3, 5).toInt(16) / 255f,
+                it.substring(5, 7).toInt(16) / 255f,
+            )
+        }
+        Log.i(TAG, "setLashColor hex=$hex -> ${parsed ?: "negro aprobado"}")
+        lashTint = parsed
+    }
+
     fun setStyle(styleId: String?) {
         val resolved = LashStyleConfig.forStyleId(styleId)
         Log.i(TAG, "setStyle styleId=$styleId -> $resolved")
@@ -1143,6 +1163,7 @@ class LashRenderer(
                 rootDepths = slot.rootDepths,
                 dropRadians = dropRadians,
                 scaleYToZ = smoothed.scale.y / smoothed.scale.z,
+                scaleXToY = smoothed.scale.x / smoothed.scale.y,
                 curveWidthScale = RendererConfiguration.WIDTH_MULTIPLIER,
                 rootBinding = rootBinding,
                 scratch = slot.meshScratch,
@@ -1318,6 +1339,16 @@ class LashRenderer(
                     } else mirroredMesh
                         .withColorFloor(RendererConfiguration.LASH_COLOR_FLOOR)
                         .toNeutralBlack(RendererConfiguration.LASH_BLACK_TIP_LUMINANCE)
+                        .let { neutral ->
+                            // Color de pestaña elegido (solo el color de vértice).
+                            lashTint?.let {
+                                neutral.tinted(
+                                    it,
+                                    RendererConfiguration.LASH_BLACK_TIP_LUMINANCE,
+                                    RendererConfiguration.LASH_TINT_ROOT_FACTOR,
+                                )
+                            } ?: neutral
+                        }
                     val geometry = Geometry.Builder(RenderableManager.PrimitiveType.TRIANGLES)
                         .vertices(rawMesh.vertices)
                         .indices(rawMesh.indices)

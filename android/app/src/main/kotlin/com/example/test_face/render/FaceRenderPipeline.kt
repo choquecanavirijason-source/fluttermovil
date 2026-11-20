@@ -226,7 +226,12 @@ object FaceRenderPipeline {
             closedDownShiftPx,
         )
             ?: return null
-        if (lidShapeTrusted) lidShape?.latchShape(anchor.measuredShape)
+        if (lidShapeTrusted) {
+            lidShape?.latchShape(anchor.measuredShape)
+            lidShape?.latchOpenShapeRatio(
+                foreshorteningCorrectedOpenness(eyeLandmarks.opennessRatio, headPose),
+            )
+        }
         // Ver MeshEyeTransformCalculator (fix 2026-09-01): el plano/orientación
         // se calcula UNA vez acá y lo consumen los DOS caminos — el nuevo ya
         // no deriva right/up/normal de landmarks sueltos, toma esto tal cual.
@@ -331,7 +336,15 @@ object FaceRenderPipeline {
             opennessRatio = openness,
             lashLineCurve = curve,
             closedLashLineCurve = closedCurve,
-            attachmentWorldLine = eyeLandmarks.ring.drop(8).sortedBy { it.x }.map { upright ->
+            // ring[8..15] incluye solo UNO de los cantos (133 en un ojo, 263
+            // en el otro); ring[0] es el canto que falta (33 / 362). Sin él la
+            // línea —y las pestañas pegadas a ella— terminaban antes de la
+            // comisura de un lado.
+            attachmentWorldLine = LashLineExtension.withTail(
+                eyeLandmarks.ring.drop(8) + eyeLandmarks.ring.take(1),
+                anchor.medialCanthus, anchor.lateralCanthus,
+                lidShape?.openShapeRatio ?: eyeLandmarks.opennessRatio,
+            ).map { upright ->
                 val p = FaceQuarterTurn.rotate(upright, turns, cx, cy)
                 camera.unproject(
                     2f * p.x / imageWidth - 1f, 1f - 2f * p.y / imageHeight,

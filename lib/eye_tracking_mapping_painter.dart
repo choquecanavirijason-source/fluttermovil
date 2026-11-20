@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, listEquals;
 import 'package:flutter/material.dart';
 import 'eye_tracking_model.dart';
 
@@ -74,11 +74,16 @@ const _fanPivotT = 0.30;
 ///
 /// Historial 2026-09-30: 0.16 → 0 (base sobre la línea de pestañas) → 0.2
 /// (quedaba en el pliegue) → 0.1 → 0.05, punto medio entre 0 y 0.1 validado
-/// en dispositivo con la clienta de frente. Este es el número a mover si
+/// en dispositivo con la clienta de frente. 2026-11-09: de 0.1 a 0.06,
+/// más pegado a la línea de pestañas. Este es el número a mover si
 /// queda muy encima de la pestaña o demasiado separado — y SOLO ese: si el
 /// mapeo aparece del lado de las cejas, eso no se arregla acá (ver
 /// `CameraXManager.analysisRotated180`).
-const _lashLineOffsetRatio = 0.1;
+const _lashLineOffsetRatio = 0.06;
+
+/// Dibuja en verde la línea de pestañas real (referencia del anclaje).
+/// Apagada: sirvió para calibrar [_lashLineOffsetRatio].
+const _showLidLine = false;
 
 /// Tamaño de los números, como fracción del ancho del ojo.
 const _labelFontRatio = 0.16;
@@ -87,7 +92,12 @@ const _labelFontRatio = 0.16;
 /// con `OrientDebug.kt` cuando quede confirmado.
 const _kOrientDebug = false;
 
-_LashMappingPattern _patternForStyle(String? styleId) {
+/// Patrón explícito ([labels], ya resuelto por `resolveLashMap`) o, si no
+/// viene, el fijo del [styleId].
+_LashMappingPattern _patternFor(String? styleId, List<int>? labels) {
+  if (labels != null && labels.length >= 2) {
+    return _LashMappingPattern(List.unmodifiable(labels), variableLength: true);
+  }
   switch (styleId) {
     case 'cateye':
       return _catEyePattern;
@@ -107,6 +117,10 @@ class EyeMappingLayout {
   final int peakIndex;
   final double eyeWidth;
   final List<Offset> patchLine;
+
+  /// Línea de pestañas real (párpado superior de MediaPipe, la misma que usa
+  /// el motor 3D para anclar las pestañas), sin el corrimiento al parche.
+  final List<Offset> lidLine;
   final List<Offset> bases;
   final List<Offset> tips;
   final List<Offset> labelCenters;
@@ -119,6 +133,7 @@ class EyeMappingLayout {
     required this.peakIndex,
     required this.eyeWidth,
     required this.patchLine,
+    this.lidLine = const [],
     required this.bases,
     required this.tips,
     required this.labelCenters,
@@ -147,12 +162,17 @@ class LashMappingPainter extends CustomPainter {
   /// `styleId` del diseño activo (ver `_lashStyleIdFor` en
   /// `eye_tracking_page.dart`) — decide qué [_LashMappingPattern] usar.
   final String? styleId;
+
+  /// Mapeo ya resuelto (mm por zona, del lagrimal al extremo). Tiene
+  /// prioridad sobre [styleId].
+  final List<int>? labels;
   final Offset leftEyeOffset;
   final Offset rightEyeOffset;
 
   const LashMappingPainter({
     required this.frames,
     this.styleId,
+    this.labels,
     this.leftEyeOffset = Offset.zero,
     this.rightEyeOffset = Offset.zero,
   }) : super(repaint: frames);
@@ -180,6 +200,7 @@ class LashMappingPainter extends CustomPainter {
     final layouts = layoutFor(
       f,
       styleId: styleId,
+      labels: labels,
       leftEyeOffset: leftEyeOffset,
       rightEyeOffset: rightEyeOffset,
     );
@@ -211,6 +232,7 @@ class LashMappingPainter extends CustomPainter {
     TrackingFrame f,
     Size canvasSize, {
     String? styleId,
+    List<int>? labels,
     Offset leftEyeOffset = Offset.zero,
     Offset rightEyeOffset = Offset.zero,
   }) {
@@ -220,6 +242,7 @@ class LashMappingPainter extends CustomPainter {
     final layouts = layoutFor(
       f,
       styleId: styleId,
+      labels: labels,
       leftEyeOffset: leftEyeOffset,
       rightEyeOffset: rightEyeOffset,
     );
@@ -252,6 +275,7 @@ class LashMappingPainter extends CustomPainter {
   static List<EyeMappingLayout> layoutFor(
     TrackingFrame f, {
     String? styleId,
+    List<int>? labels,
     Offset leftEyeOffset = Offset.zero,
     Offset rightEyeOffset = Offset.zero,
   }) {
@@ -276,7 +300,7 @@ class LashMappingPainter extends CustomPainter {
       }
     }
 
-    final pattern = _patternForStyle(styleId);
+    final pattern = _patternFor(styleId, labels);
     return [
       if (hasLeft)
         ?_layoutEye(
@@ -398,7 +422,10 @@ class LashMappingPainter extends CustomPainter {
       final dir = rawDir / rawDir.distance;
 
       final len = pattern.variableLength
-          ? w * _maxLineLenRatio * (pattern.labels[i] / _maxMappingLabel)
+          ? w *
+                _maxLineLenRatio *
+                (pattern.labels[i] /
+                    math.max(_maxMappingLabel, pattern.labels[peakIndex]))
           : w * _maxLineLenRatio * 0.85;
 
       final tip = adjustedBase + dir * len;
@@ -412,6 +439,7 @@ class LashMappingPainter extends CustomPainter {
       peakIndex: peakIndex,
       eyeWidth: w,
       patchLine: patchLine,
+      lidLine: lashLine,
       bases: bases,
       tips: tips,
       labelCenters: labelCenters,
@@ -426,6 +454,20 @@ class LashMappingPainter extends CustomPainter {
     final tips = layout.tips;
     final numLines = layout.labels.length;
     final peakIndex = layout.peakIndex;
+
+    // Línea de pestañas en verde, como en el probador: es la referencia
+    // sobre la que se ancla el mapeo.
+    if (_showLidLine && layout.lidLine.length >= 2) {
+      canvas.drawPath(
+        _smoothPath(layout.lidLine),
+        Paint()
+          ..color = const Color(0xFF22C55E).withValues(alpha: 0.85)
+          ..strokeWidth = w * 0.016
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..isAntiAlias = true,
+      );
+    }
 
     // Línea de base, tenue: deja ver dónde anclan las medidas.
     if (patchLine.length >= 2) {
@@ -665,6 +707,7 @@ class LashMappingPainter extends CustomPainter {
   bool shouldRepaint(covariant LashMappingPainter oldDelegate) =>
       oldDelegate.frames != frames ||
       oldDelegate.styleId != styleId ||
+      !listEquals(oldDelegate.labels, labels) ||
       oldDelegate.leftEyeOffset != leftEyeOffset ||
       oldDelegate.rightEyeOffset != rightEyeOffset;
 }

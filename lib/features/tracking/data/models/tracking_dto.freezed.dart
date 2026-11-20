@@ -198,7 +198,9 @@ mixin _$TrackingDto {
   NamedRefDto? get effect => throw _privateConstructorUsedError;
   NamedRefDto? get volume => throw _privateConstructorUsedError;
   @JsonKey(name: 'lash_design')
-  NamedRefDto? get lashDesign => throw _privateConstructorUsedError;
+  NamedRefDto? get lashDesign => throw _privateConstructorUsedError; // Receta completa del probador guardada con la aplicación.
+  @JsonKey(name: 'tryon_recipe')
+  Map<String, dynamic>? get tryonRecipe => throw _privateConstructorUsedError;
 
   /// Serializes this TrackingDto to a JSON map.
   Map<String, dynamic> toJson() => throw _privateConstructorUsedError;
@@ -225,6 +227,7 @@ abstract class $TrackingDtoCopyWith<$Res> {
     NamedRefDto? effect,
     NamedRefDto? volume,
     @JsonKey(name: 'lash_design') NamedRefDto? lashDesign,
+    @JsonKey(name: 'tryon_recipe') Map<String, dynamic>? tryonRecipe,
   });
 
   $NamedRefDtoCopyWith<$Res>? get eyeType;
@@ -255,6 +258,7 @@ class _$TrackingDtoCopyWithImpl<$Res, $Val extends TrackingDto>
     Object? effect = freezed,
     Object? volume = freezed,
     Object? lashDesign = freezed,
+    Object? tryonRecipe = freezed,
   }) {
     return _then(
       _value.copyWith(
@@ -286,6 +290,10 @@ class _$TrackingDtoCopyWithImpl<$Res, $Val extends TrackingDto>
                 ? _value.lashDesign
                 : lashDesign // ignore: cast_nullable_to_non_nullable
                       as NamedRefDto?,
+            tryonRecipe: freezed == tryonRecipe
+                ? _value.tryonRecipe
+                : tryonRecipe // ignore: cast_nullable_to_non_nullable
+                      as Map<String, dynamic>?,
           )
           as $Val,
     );
@@ -365,6 +373,7 @@ abstract class _$$TrackingDtoImplCopyWith<$Res>
     NamedRefDto? effect,
     NamedRefDto? volume,
     @JsonKey(name: 'lash_design') NamedRefDto? lashDesign,
+    @JsonKey(name: 'tryon_recipe') Map<String, dynamic>? tryonRecipe,
   });
 
   @override
@@ -398,6 +407,7 @@ class __$$TrackingDtoImplCopyWithImpl<$Res>
     Object? effect = freezed,
     Object? volume = freezed,
     Object? lashDesign = freezed,
+    Object? tryonRecipe = freezed,
   }) {
     return _then(
       _$TrackingDtoImpl(
@@ -429,6 +439,10 @@ class __$$TrackingDtoImplCopyWithImpl<$Res>
             ? _value.lashDesign
             : lashDesign // ignore: cast_nullable_to_non_nullable
                   as NamedRefDto?,
+        tryonRecipe: freezed == tryonRecipe
+            ? _value._tryonRecipe
+            : tryonRecipe // ignore: cast_nullable_to_non_nullable
+                  as Map<String, dynamic>?,
       ),
     );
   }
@@ -445,7 +459,8 @@ class _$TrackingDtoImpl implements _TrackingDto {
     this.effect,
     this.volume,
     @JsonKey(name: 'lash_design') this.lashDesign,
-  });
+    @JsonKey(name: 'tryon_recipe') final Map<String, dynamic>? tryonRecipe,
+  }) : _tryonRecipe = tryonRecipe;
 
   factory _$TrackingDtoImpl.fromJson(Map<String, dynamic> json) =>
       _$$TrackingDtoImplFromJson(json);
@@ -468,10 +483,22 @@ class _$TrackingDtoImpl implements _TrackingDto {
   @override
   @JsonKey(name: 'lash_design')
   final NamedRefDto? lashDesign;
+  // Receta completa del probador guardada con la aplicación.
+  final Map<String, dynamic>? _tryonRecipe;
+  // Receta completa del probador guardada con la aplicación.
+  @override
+  @JsonKey(name: 'tryon_recipe')
+  Map<String, dynamic>? get tryonRecipe {
+    final value = _tryonRecipe;
+    if (value == null) return null;
+    if (_tryonRecipe is EqualUnmodifiableMapView) return _tryonRecipe;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableMapView(value);
+  }
 
   @override
   String toString() {
-    return 'TrackingDto(id: $id, lastApplicationDate: $lastApplicationDate, designNotes: $designNotes, eyeType: $eyeType, effect: $effect, volume: $volume, lashDesign: $lashDesign)';
+    return 'TrackingDto(id: $id, lastApplicationDate: $lastApplicationDate, designNotes: $designNotes, eyeType: $eyeType, effect: $effect, volume: $volume, lashDesign: $lashDesign, tryonRecipe: $tryonRecipe)';
   }
 
   @override
@@ -488,7 +515,11 @@ class _$TrackingDtoImpl implements _TrackingDto {
             (identical(other.effect, effect) || other.effect == effect) &&
             (identical(other.volume, volume) || other.volume == volume) &&
             (identical(other.lashDesign, lashDesign) ||
-                other.lashDesign == lashDesign));
+                other.lashDesign == lashDesign) &&
+            const DeepCollectionEquality().equals(
+              other._tryonRecipe,
+              _tryonRecipe,
+            ));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
@@ -502,6 +533,7 @@ class _$TrackingDtoImpl implements _TrackingDto {
     effect,
     volume,
     lashDesign,
+    const DeepCollectionEquality().hash(_tryonRecipe),
   );
 
   /// Create a copy of TrackingDto
@@ -527,6 +559,7 @@ abstract class _TrackingDto implements TrackingDto {
     final NamedRefDto? effect,
     final NamedRefDto? volume,
     @JsonKey(name: 'lash_design') final NamedRefDto? lashDesign,
+    @JsonKey(name: 'tryon_recipe') final Map<String, dynamic>? tryonRecipe,
   }) = _$TrackingDtoImpl;
 
   factory _TrackingDto.fromJson(Map<String, dynamic> json) =
@@ -549,7 +582,10 @@ abstract class _TrackingDto implements TrackingDto {
   NamedRefDto? get volume;
   @override
   @JsonKey(name: 'lash_design')
-  NamedRefDto? get lashDesign;
+  NamedRefDto? get lashDesign; // Receta completa del probador guardada con la aplicación.
+  @override
+  @JsonKey(name: 'tryon_recipe')
+  Map<String, dynamic>? get tryonRecipe;
 
   /// Create a copy of TrackingDto
   /// with the given fields replaced by the non-null parameter values.

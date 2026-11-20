@@ -13,6 +13,7 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
   final String? helperText;
   final String resetLabel;
   final VoidCallback? onReset;
+  final Widget? filters;
 
   const EyeTrackingDesignMenuBar({
     super.key,
@@ -25,6 +26,7 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
     this.helperText,
     this.resetLabel = 'Restaurar original',
     this.onReset,
+    this.filters,
   });
 
   static const _green = AppColors.actionGreen;
@@ -32,148 +34,170 @@ class EyeTrackingDesignMenuBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 65,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Pestaña ──────────────────────────
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            decoration: const BoxDecoration(
-              color: _green,
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(10),
-                topRight: Radius.circular(10),
-              ),
-            ),
-            child: Text(
-              categoryTitle,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.8,
-              ),
-            ),
-          ),
-          if (helperText != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+      left: 10,
+      right: 10,
+      bottom: 62,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.38),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Cabecera compacta: categoría · estado · restablecer ──
+            SizedBox(
+              height: 28,
               child: Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      helperText!,
-                      style: const TextStyle(color: Colors.white, fontSize: 11),
+                  Text(
+                    categoryTitle,
+                    style: const TextStyle(
+                      color: Color(0xFFF3E6C8),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
+                  if (helperText != null) ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          helperText!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const Spacer(),
                   if (onReset != null)
-                    TextButton(
-                      onPressed: onReset,
-                      child: Text(
-                        resetLabel,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
+                    Tooltip(
+                      message: resetLabel,
+                      child: InkWell(
+                        onTap: onReset,
+                        borderRadius: BorderRadius.circular(14),
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(
+                            Icons.restart_alt_rounded,
+                            color: Color(0xFFD8C79E),
+                            size: 20,
+                          ),
                         ),
                       ),
                     ),
                 ],
               ),
             ),
-          // ── Panel de opciones ─────────────────────────────
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: List.generate(designOptions.length, (index) {
-                        final isSelected = index == selectedDesign;
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 6),
-                          child: GestureDetector(
-                            onTap: () => onSelectDesign?.call(index),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              width: 76,
-                              height: 80,
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 4,
-                                horizontal: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? Colors.white
-                                    : Colors.white.withValues(alpha: 0.07),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
+            if (filters != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 2),
+                child: filters,
+              ),
+            // ── Opciones ─────────────────────────────
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: List.generate(designOptions.length, (index) {
+                          final isSelected = index == selectedDesign;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: GestureDetector(
+                              onTap: () => onSelectDesign?.call(index),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                width: 66,
+                                height: 62,
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
                                   color: isSelected
                                       ? Colors.white
-                                      : Colors.white.withValues(alpha: 0.15),
-                                  width: 1.1,
+                                      : Colors.white.withValues(alpha: 0.07),
+                                  borderRadius: BorderRadius.circular(11),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Colors.white
+                                        : Colors.white.withValues(alpha: 0.15),
+                                    width: 1.1,
+                                  ),
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    DesignThumbnailImage(
+                                      path: designImages[index],
+                                      size: 28,
+                                      color: isSelected ? _green : Colors.white,
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      designOptions[index],
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: isSelected
+                                            ? _green
+                                            : Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 9.5,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  DesignThumbnailImage(
-                                    path: designImages[index],
-                                    size: 34,
-                                    color: isSelected ? _green : Colors.white,
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    designOptions[index],
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: isSelected ? _green : Colors.white,
-                                      fontWeight: FontWeight.w500,
-                                      fontSize: 9,
-                                    ),
-                                  ),
-                                ],
-                              ),
                             ),
-                          ),
-                        );
-                      }),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                GestureDetector(
-                  onTap: onOpenGrid,
-                  child: Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.15),
+                          );
+                        }),
                       ),
                     ),
-                    child: const Icon(
-                      Icons.grid_view,
-                      color: Colors.white70,
-                      size: 18,
+                  ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: onOpenGrid,
+                    child: Container(
+                      width: 30,
+                      height: 62,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.15),
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.grid_view,
+                        color: Colors.white70,
+                        size: 16,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

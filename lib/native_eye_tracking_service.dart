@@ -226,6 +226,19 @@ class NativeEyeTrackingService {
   /// no es un error bloqueante, el modelo se sigue viendo (solo sin el
   /// ajuste particular de ese diseño), a diferencia de que el `.glb` en sí
   /// no cargue.
+  /// Color de pestaña (`#RRGGBB`) que Kotlin aplica al CARGAR el modelo;
+  /// `null` = negro aprobado. Para verlo en un modelo ya cargado hay que
+  /// volver a llamar a [loadEyeModels]. Solo cambia el color de las fibras.
+  Future<void> setLashColor(String? color) async {
+    try {
+      await _methodChannel.invokeMethod<void>('setLashColor', <String, dynamic>{
+        'color': color,
+      });
+    } catch (e) {
+      debugPrint('[EyeTracking] setLashColor error: $e');
+    }
+  }
+
   Future<void> setLashStyle(String? styleId) async {
     try {
       await _methodChannel.invokeMethod<void>('setLashStyle', <String, dynamic>{

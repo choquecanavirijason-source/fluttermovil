@@ -32,6 +32,7 @@ _$TrackingDtoImpl _$$TrackingDtoImplFromJson(Map<String, dynamic> json) =>
       lashDesign: json['lash_design'] == null
           ? null
           : NamedRefDto.fromJson(json['lash_design'] as Map<String, dynamic>),
+      tryonRecipe: json['tryon_recipe'] as Map<String, dynamic>?,
     );
 
 Map<String, dynamic> _$$TrackingDtoImplToJson(_$TrackingDtoImpl instance) =>
@@ -43,4 +44,5 @@ Map<String, dynamic> _$$TrackingDtoImplToJson(_$TrackingDtoImpl instance) =>
       'effect': instance.effect,
       'volume': instance.volume,
       'lash_design': instance.lashDesign,
+      'tryon_recipe': instance.tryonRecipe,
     };

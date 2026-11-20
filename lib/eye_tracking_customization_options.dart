@@ -58,6 +58,7 @@ class LashCustomizationCatalog {
     'tech' => 'Técnica',
     'effect' => 'Efecto',
     'thickness' => 'Grosor',
+    'color' => 'Color',
     _ => '',
   };
 

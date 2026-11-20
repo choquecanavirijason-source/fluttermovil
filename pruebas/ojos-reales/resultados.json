@@ -1,0 +1,707 @@
+{
+  "runtime": "1.2.2",
+  "model_sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+  "running_mode": "IMAGE / CPU / independent photographs",
+  "rows": [
+    {
+      "archivo": "1_redondos/redondos_01.jpg",
+      "grupo_provisional": "redondos",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/fzqpnxB1sK0",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\1_redondos\\redondos_01.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.6274933098761517,
+        "tilt_deg": 5.587208757390442,
+        "openness": 0.38126499083167753,
+        "asymmetry": 0.08409711178416455
+      },
+      "uso_recomendado": "comparación",
+      "nota_revision": "Apertura amplia. La medición está junto al límite actual; revisar la etiqueta de forma.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/1_redondos/redondos_01.jpg",
+      "ratio": 2.6275,
+      "inclinacion": 5.59,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "1_redondos/redondos_02.jpg",
+      "grupo_provisional": "redondos",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/FODRyogbNU0",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\1_redondos\\redondos_02.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.774459712104932,
+        "tilt_deg": 8.701136224423,
+        "openness": 0.3604677155452032,
+        "asymmetry": 0.02031193294161154
+      },
+      "uso_recomendado": "comparación",
+      "nota_revision": "Delineado visible. El ancho/alto se solapa con referencias del grupo almendrado.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/1_redondos/redondos_02.jpg",
+      "ratio": 2.7745,
+      "inclinacion": 8.7,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "1_redondos/redondos_03_DUDOSO.jpg",
+      "grupo_provisional": "redondos",
+      "estado": "DUDOSO",
+      "nota": "entre redondo y almendrado",
+      "enlace_original": "https://unsplash.com/photos/w1ktfW7s3oU",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\1_redondos\\redondos_03_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Rasgado",
+        "aspect_ratio": 3.718853707798436,
+        "tilt_deg": 2.3221111524283002,
+        "openness": 0.26890016444405507,
+        "asymmetry": 0.0012224078593549572
+      },
+      "uso_recomendado": "gesto",
+      "nota_revision": "Apertura reducida y gesto en la zona de las cejas. Revisar antes de usar para calibrar la forma.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/1_redondos/redondos_03_DUDOSO.jpg",
+      "ratio": 3.7189,
+      "inclinacion": 2.32,
+      "forma_app": "Rasgado"
+    },
+    {
+      "archivo": "1_redondos/redondos_04_DUDOSO.jpg",
+      "grupo_provisional": "redondos",
+      "estado": "DUDOSO",
+      "nota": "labial oscuro; forma clara",
+      "enlace_original": "https://unsplash.com/photos/E0xmM33td1w",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\1_redondos\\redondos_04_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        1067
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Redondo",
+        "aspect_ratio": 2.525931860027443,
+        "tilt_deg": 8.865934510251128,
+        "openness": 0.3962227467860816,
+        "asymmetry": 0.057653055125126085
+      },
+      "uso_recomendado": "encuadre",
+      "nota_revision": "Rostro parcialmente recortado y maquillaje de ojos visible. Útil como prueba de encuadre.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/1_redondos/redondos_04_DUDOSO.jpg",
+      "ratio": 2.5259,
+      "inclinacion": 8.87,
+      "forma_app": "Redondo"
+    },
+    {
+      "archivo": "1_redondos/redondos_05_DUDOSO.jpg",
+      "grupo_provisional": "redondos",
+      "estado": "DUDOSO",
+      "nota": "sonrie y la sonrisa estrecha el ojo",
+      "enlace_original": "https://unsplash.com/photos/nkRvJgdnc5c",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\1_redondos\\redondos_05_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        1067
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.8280498919770345,
+        "tilt_deg": 9.374372926036475,
+        "openness": 0.35361680467696344,
+        "asymmetry": 0.013559373901463787
+      },
+      "uso_recomendado": "gesto",
+      "nota_revision": "Sonrisa y orientación de la mirada. Útil para comprobar cambios por expresión.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/1_redondos/redondos_05_DUDOSO.jpg",
+      "ratio": 2.828,
+      "inclinacion": 9.37,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "2_almendrados/almendrados_01.jpg",
+      "grupo_provisional": "almendrados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/byfNhh81CWU",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\2_almendrados\\almendrados_01.jpg",
+      "original_size": [
+        1600,
+        1067
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.7616428102265713,
+        "tilt_deg": 11.234235571201326,
+        "openness": 0.36210889615308833,
+        "asymmetry": 0.007856040271851357
+      },
+      "uso_recomendado": "maquillaje",
+      "nota_revision": "Delineado/sombra visibles alrededor de los ojos. Revisar como caso de maquillaje.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/2_almendrados/almendrados_01.jpg",
+      "ratio": 2.7616,
+      "inclinacion": 11.23,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "2_almendrados/almendrados_02.jpg",
+      "grupo_provisional": "almendrados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/Wg52NDKBW1Y",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\2_almendrados\\almendrados_02.jpg",
+      "original_size": [
+        1600,
+        1143
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.834072191063311,
+        "tilt_deg": 6.066492457554579,
+        "openness": 0.3529656568544468,
+        "asymmetry": 0.036334200246602305
+      },
+      "uso_recomendado": "comparación",
+      "nota_revision": "Mirada frontal y contorno visible. Candidata para comparar mediciones; etiqueta pendiente de revisión.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/2_almendrados/almendrados_02.jpg",
+      "ratio": 2.8341,
+      "inclinacion": 6.07,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "2_almendrados/almendrados_03.jpg",
+      "grupo_provisional": "almendrados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/2BJwlRZaR5M",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\2_almendrados\\almendrados_03.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Rasgado",
+        "aspect_ratio": 3.9433675818940195,
+        "tilt_deg": -1.5423293098516582,
+        "openness": 0.25361736188809847,
+        "asymmetry": 0.020637028620748538
+      },
+      "uso_recomendado": "gesto",
+      "nota_revision": "Apertura ocular reducida. El analizador devuelve alargado; la forma natural requiere otra toma.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/2_almendrados/almendrados_03.jpg",
+      "ratio": 3.9434,
+      "inclinacion": -1.54,
+      "forma_app": "Rasgado"
+    },
+    {
+      "archivo": "2_almendrados/almendrados_04.jpg",
+      "grupo_provisional": "almendrados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/exRvCGSbc-k",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\2_almendrados\\almendrados_04.jpg",
+      "original_size": [
+        1600,
+        1019
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.675469370277372,
+        "tilt_deg": 7.819564716579196,
+        "openness": 0.37389233234219543,
+        "asymmetry": 0.036735220526660735
+      },
+      "uso_recomendado": "comparación",
+      "nota_revision": "Contorno visible con maquillaje en los bordes. Candidata para comparar apertura.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/2_almendrados/almendrados_04.jpg",
+      "ratio": 2.6755,
+      "inclinacion": 7.82,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "2_almendrados/almendrados_05.jpg",
+      "grupo_provisional": "almendrados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/--VGE4S8ZWg",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\2_almendrados\\almendrados_05.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 3.092026111207666,
+        "tilt_deg": 6.254476553252863,
+        "openness": 0.3235849200497417,
+        "asymmetry": 0.046162236764066375
+      },
+      "uso_recomendado": "postura",
+      "nota_revision": "Inclinación visible del rostro. Útil para verificar invariancia a la rotación.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/2_almendrados/almendrados_05.jpg",
+      "ratio": 3.092,
+      "inclinacion": 6.25,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "2_almendrados/almendrados_06_DUDOSO.jpg",
+      "grupo_provisional": "almendrados",
+      "estado": "DUDOSO",
+      "nota": "labial rojo y cejas marcadas",
+      "enlace_original": "https://unsplash.com/photos/xOjzehJ49Hk",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\2_almendrados\\almendrados_06_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        2034
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.84279191455476,
+        "tilt_deg": 7.068290087466689,
+        "openness": 0.3520038966344472,
+        "asymmetry": 0.051899036652963755
+      },
+      "uso_recomendado": "comparación",
+      "nota_revision": "Priorizar contorno y postura al revisar. El labial por sí solo no indica que falle la medida del ojo.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/2_almendrados/almendrados_06_DUDOSO.jpg",
+      "ratio": 2.8428,
+      "inclinacion": 7.07,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "3_alargados/alargados_01_DUDOSO.jpg",
+      "grupo_provisional": "alargados",
+      "estado": "DUDOSO",
+      "nota": "posible sombra suave en el parpado",
+      "enlace_original": "https://unsplash.com/photos/gPZ8vbwdV5A",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\3_alargados\\alargados_01_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        2397
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.792871365787535,
+        "tilt_deg": 9.520159939672425,
+        "openness": 0.3580553291119263,
+        "asymmetry": 0.003147086398673027
+      },
+      "uso_recomendado": "etiqueta",
+      "nota_revision": "Maquillaje alrededor del ojo. El contorno medido cae en el intervalo intermedio; revisar el grupo.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/3_alargados/alargados_01_DUDOSO.jpg",
+      "ratio": 2.7929,
+      "inclinacion": 9.52,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "3_alargados/alargados_02_DUDOSO.jpg",
+      "grupo_provisional": "alargados",
+      "estado": "DUDOSO",
+      "nota": "encuadre muy cerrado, frente cortada",
+      "enlace_original": "https://unsplash.com/photos/78_p_aaeE74",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\3_alargados\\alargados_02_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        2844
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 3.028540468331993,
+        "tilt_deg": 4.314868092424135,
+        "openness": 0.3303722034562626,
+        "asymmetry": 0.04670290250473387
+      },
+      "uso_recomendado": "etiqueta",
+      "nota_revision": "Encuadre cerrado. El contorno medido cae en el intervalo intermedio; revisar el grupo.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/3_alargados/alargados_02_DUDOSO.jpg",
+      "ratio": 3.0285,
+      "inclinacion": 4.31,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "3_alargados/alargados_03.jpg",
+      "grupo_provisional": "alargados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/i5R8hbZFDdc",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\3_alargados\\alargados_03.jpg",
+      "original_size": [
+        1600,
+        1067
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.706174888425925,
+        "tilt_deg": 7.047484093666166,
+        "openness": 0.3709963610687662,
+        "asymmetry": 0.12594046558181082
+      },
+      "uso_recomendado": "etiqueta",
+      "nota_revision": "El ancho/alto medido se solapa con las referencias almendradas. La etiqueta alargado necesita revisión.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/3_alargados/alargados_03.jpg",
+      "ratio": 2.7062,
+      "inclinacion": 7.05,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "3_alargados/alargados_04_DUDOSO.jpg",
+      "grupo_provisional": "alargados",
+      "estado": "DUDOSO",
+      "nota": "cabeza un poco girada",
+      "enlace_original": "https://unsplash.com/photos/KcKrLpHmYjI",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\3_alargados\\alargados_04_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        1067
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Redondo",
+        "aspect_ratio": 2.265065158503063,
+        "tilt_deg": 11.192428868919784,
+        "openness": 0.44857647492252317,
+        "asymmetry": 0.2514060936958166
+      },
+      "uso_recomendado": "postura",
+      "nota_revision": "Cabeza girada y mirada oblicua. Útil como caso de pose, pendiente de una toma frontal para calibración.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/3_alargados/alargados_04_DUDOSO.jpg",
+      "ratio": 2.2651,
+      "inclinacion": 11.19,
+      "forma_app": "Redondo"
+    },
+    {
+      "archivo": "4_encapotados/encapotados_01.jpg",
+      "grupo_provisional": "encapotados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/okxFqy9p3BE",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\4_encapotados\\encapotados_01.jpg",
+      "original_size": [
+        1600,
+        1067
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Rasgado",
+        "aspect_ratio": 3.970418069762724,
+        "tilt_deg": 0.14822161642487547,
+        "openness": 0.2519244471490255,
+        "asymmetry": 0.03132519626674103
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Referencia de párpado y apertura reducida. La forma del contorno se evalúa por separado.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/4_encapotados/encapotados_01.jpg",
+      "ratio": 3.9704,
+      "inclinacion": 0.15,
+      "forma_app": "Rasgado"
+    },
+    {
+      "archivo": "4_encapotados/encapotados_02.jpg",
+      "grupo_provisional": "encapotados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/epU7_jnQ01E",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\4_encapotados\\encapotados_02.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.6415064671667814,
+        "tilt_deg": 1.1572882839505456,
+        "openness": 0.3788081194101939,
+        "asymmetry": 0.04994829257881472
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Referencia de párpado con iluminación cálida y direccional; revisar también calidad de luz.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/4_encapotados/encapotados_02.jpg",
+      "ratio": 2.6415,
+      "inclinacion": 1.16,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "4_encapotados/encapotados_03_DUDOSO.jpg",
+      "grupo_provisional": "encapotados",
+      "estado": "DUDOSO",
+      "nota": "ojo hundido, puede ser encapotado leve",
+      "enlace_original": "https://unsplash.com/photos/Zp2BrSj9oTw",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\4_encapotados\\encapotados_03_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        1069
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.603510253121831,
+        "tilt_deg": 8.367346065579898,
+        "openness": 0.38410439193402357,
+        "asymmetry": 0.008881954825518975
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "La relación entre pliegue, sombra y contorno necesita revisión manual.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/4_encapotados/encapotados_03_DUDOSO.jpg",
+      "ratio": 2.6035,
+      "inclinacion": 8.37,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "4_encapotados/encapotados_04.jpg",
+      "grupo_provisional": "encapotados",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/hr_feH2URs0",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\4_encapotados\\encapotados_04.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 3.1901504563100334,
+        "tilt_deg": 0.18398206743890388,
+        "openness": 0.31348656221675325,
+        "asymmetry": 0.016648687726152096
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Referencia frontal de párpado. Su etiqueta es independiente de la forma del contorno.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/4_encapotados/encapotados_04.jpg",
+      "ratio": 3.1902,
+      "inclinacion": 0.18,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "4_encapotados/encapotados_05_DUDOSO.jpg",
+      "grupo_provisional": "encapotados",
+      "estado": "DUDOSO",
+      "nota": "sonrisa leve; parpado con piel caida por edad",
+      "enlace_original": "https://unsplash.com/photos/exSbVjfRXTo",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\4_encapotados\\encapotados_05_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        1067
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 3.1636307183047316,
+        "tilt_deg": 5.364327729081602,
+        "openness": 0.3162716638143538,
+        "asymmetry": 0.04759957763312913
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Expresión y pliegues visibles; requiere revisión manual de la característica del párpado.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/4_encapotados/encapotados_05_DUDOSO.jpg",
+      "ratio": 3.1636,
+      "inclinacion": 5.36,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "5_monolidos/monolidos_01.jpg",
+      "grupo_provisional": "monolidos",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/KRBHTbLTMDs",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\5_monolidos\\monolidos_01.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.9564924635437437,
+        "tilt_deg": 5.163800243000227,
+        "openness": 0.33827300819170647,
+        "asymmetry": 0.020158275489143777
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Revisar el pliegue superior a resolución completa. La medida del contorno es independiente.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/5_monolidos/monolidos_01.jpg",
+      "ratio": 2.9565,
+      "inclinacion": 5.16,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "5_monolidos/monolidos_02.jpg",
+      "grupo_provisional": "monolidos",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/n4KewLKFOZw",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\5_monolidos\\monolidos_02.jpg",
+      "original_size": [
+        1600,
+        1600
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 3.148347616462888,
+        "tilt_deg": 4.25978092061253,
+        "openness": 0.3179225347845853,
+        "asymmetry": 0.06098489308657318
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Referencia frontal para revisar el pliegue superior y el contorno por separado.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/5_monolidos/monolidos_02.jpg",
+      "ratio": 3.1483,
+      "inclinacion": 4.26,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "5_monolidos/monolidos_03.jpg",
+      "grupo_provisional": "monolidos",
+      "estado": "ok",
+      "nota": "",
+      "enlace_original": "https://unsplash.com/photos/ntLkvt6OZvQ",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\5_monolidos\\monolidos_03.jpg",
+      "original_size": [
+        1600,
+        2844
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.856783104566771,
+        "tilt_deg": 5.919799835005261,
+        "openness": 0.35125292754458426,
+        "asymmetry": 0.11732934351945175
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Revisar cada párpado por separado; la etiqueta provisional requiere confirmación.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/5_monolidos/monolidos_03.jpg",
+      "ratio": 2.8568,
+      "inclinacion": 5.92,
+      "forma_app": "Almendrado"
+    },
+    {
+      "archivo": "5_monolidos/monolidos_04_DUDOSO.jpg",
+      "grupo_provisional": "monolidos",
+      "estado": "DUDOSO",
+      "nota": "pliegue muy bajo, puede ser monolido o pliegue fino",
+      "enlace_original": "https://unsplash.com/photos/5yo65pSHp50",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\5_monolidos\\monolidos_04_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Redondo",
+        "aspect_ratio": 2.5871993164407248,
+        "tilt_deg": 11.153217138151907,
+        "openness": 0.3874500733937153,
+        "asymmetry": 0.09807687166718314
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Pliegue bajo o poco visible. Conservar como referencia ambigua para revisión.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/5_monolidos/monolidos_04_DUDOSO.jpg",
+      "ratio": 2.5872,
+      "inclinacion": 11.15,
+      "forma_app": "Redondo"
+    },
+    {
+      "archivo": "5_monolidos/monolidos_05_DUDOSO.jpg",
+      "grupo_provisional": "monolidos",
+      "estado": "DUDOSO",
+      "nota": "rostro pequeno en el encuadre",
+      "enlace_original": "https://unsplash.com/photos/JCLH7JXSeZs",
+      "licencia": "Unsplash License (https://unsplash.com/license)",
+      "source_path": "D:\\proyectos\\referencias_ojos\\5_monolidos\\monolidos_05_DUDOSO.jpg",
+      "original_size": [
+        1600,
+        2400
+      ],
+      "face_count": 1,
+      "analysis": {
+        "reliable": true,
+        "shape": "Almendrado",
+        "aspect_ratio": 2.904186448606522,
+        "tilt_deg": 6.035969590342987,
+        "openness": 0.3531440984744838,
+        "asymmetry": 0.31595876802037226
+      },
+      "uso_recomendado": "párpado",
+      "nota_revision": "Comprobar el detalle de ambos párpados en la imagen original y revisar la etiqueta.",
+      "photo_uri": "file:///D:/proyectos/referencias_ojos/5_monolidos/monolidos_05_DUDOSO.jpg",
+      "ratio": 2.9042,
+      "inclinacion": 6.04,
+      "forma_app": "Almendrado"
+    }
+  ]
+}

@@ -10,6 +10,9 @@ class MobileAppointment {
   final String servicesSummary;
   final String? branchName;
 
+  /// Alergias de la clienta a algún producto (texto libre); null si no tiene.
+  final String? clientAllergies;
+
   const MobileAppointment({
     required this.id,
     this.clientId,
@@ -21,12 +24,19 @@ class MobileAppointment {
     required this.primaryServiceName,
     required this.servicesSummary,
     required this.branchName,
+    this.clientAllergies,
   });
 
   factory MobileAppointment.fromApi(Map<String, dynamic> json) {
     final client = json['client'] is Map
         ? Map<String, dynamic>.from(json['client'] as Map)
         : null;
+    // Alergias de ESTA atención: la API ya elige las del ticket (clienta de
+    // mostrador) o las de la ficha; se cae a la ficha si el servidor es anterior.
+    final allergiesRaw = (json['ticket_allergies'] ?? client?['allergies'])
+            ?.toString()
+            .trim() ??
+        '';
     final name = client?['name']?.toString().trim() ?? '';
     final last = client?['last_name']?.toString().trim() ?? '';
     final clientDisplayName = [name, last].where((s) => s.isNotEmpty).join(' ');
@@ -64,6 +74,7 @@ class MobileAppointment {
       primaryServiceName: primaryServiceName,
       servicesSummary: servicesSummary,
       branchName: branch?['name']?.toString(),
+      clientAllergies: allergiesRaw.isEmpty ? null : allergiesRaw,
     );
   }
 }

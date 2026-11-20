@@ -770,6 +770,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
                     painter: LashMappingPainter(
                       frames: _mappingFrames,
                       styleId: widget.args?.mappingStyleId ?? 'cateye',
+                      labels: widget.args?.mappingLabels,
                       leftEyeOffset: _leftEyeOffset,
                       rightEyeOffset: _rightEyeOffset,
                     ),
@@ -788,6 +789,19 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
                 strokeWidth: 3,
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
               ),
+            ),
+          ),
+        if (prefBytes != null &&
+            _mappingFrames.value != null &&
+            !_showManualControls &&
+            widget.args?.mappingStyleName != null)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: 40,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _MappingInfoChip(args: widget.args!),
             ),
           ),
         if (prefBytes != null &&
@@ -868,6 +882,7 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
       frame,
       panel,
       styleId: widget.args?.mappingStyleId ?? 'cateye',
+      labels: widget.args?.mappingLabels,
       leftEyeOffset: _leftEyeOffset,
       rightEyeOffset: _rightEyeOffset,
     );
@@ -1371,6 +1386,84 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Qué mapeo se está viendo: estilo, origen del patrón y resumen de la
+/// combinación elegida en el probador.
+class _MappingInfoChip extends StatelessWidget {
+  const _MappingInfoChip({required this.args});
+
+  final WorkAssistantArgs args;
+
+  @override
+  Widget build(BuildContext context) {
+    final fromSalon = args.mappingFromSalon && args.mappingLabels != null;
+    final summary = args.mappingSummary;
+    return IgnorePointer(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 6, 12, 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    args.mappingStyleName!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 1,
+                  ),
+                  decoration: BoxDecoration(
+                    color: fromSalon
+                        ? const Color(0xFF0D5C41)
+                        : const Color(0xFF9F8351),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    fromSalon ? 'Patrón del salón' : 'Patrón calculado',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (summary != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                summary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+            ],
+          ],
         ),
       ),
     );

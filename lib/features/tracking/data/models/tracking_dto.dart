@@ -6,10 +6,8 @@ part 'tracking_dto.g.dart';
 
 @freezed
 class NamedRefDto with _$NamedRefDto {
-  const factory NamedRefDto({
-    required int id,
-    @Default('') String name,
-  }) = _NamedRefDto;
+  const factory NamedRefDto({required int id, @Default('') String name}) =
+      _NamedRefDto;
 
   factory NamedRefDto.fromJson(Map<String, dynamic> json) =>
       _$NamedRefDtoFromJson(json);
@@ -25,6 +23,8 @@ class TrackingDto with _$TrackingDto {
     NamedRefDto? effect,
     NamedRefDto? volume,
     @JsonKey(name: 'lash_design') NamedRefDto? lashDesign,
+    // Receta completa del probador guardada con la aplicación.
+    @JsonKey(name: 'tryon_recipe') Map<String, dynamic>? tryonRecipe,
   }) = _TrackingDto;
 
   factory TrackingDto.fromJson(Map<String, dynamic> json) =>

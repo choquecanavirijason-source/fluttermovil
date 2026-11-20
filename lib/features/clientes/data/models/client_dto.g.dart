@@ -14,6 +14,7 @@ _$ClientDtoImpl _$$ClientDtoImplFromJson(Map<String, dynamic> json) =>
       phone: json['phone'] as String?,
       email: json['email'] as String?,
       status: json['status'] as String?,
+      visitCount: (json['visit_count'] as num?)?.toInt() ?? 0,
     );
 
 Map<String, dynamic> _$$ClientDtoImplToJson(_$ClientDtoImpl instance) =>
@@ -24,4 +25,5 @@ Map<String, dynamic> _$$ClientDtoImplToJson(_$ClientDtoImpl instance) =>
       'phone': instance.phone,
       'email': instance.email,
       'status': instance.status,
+      'visit_count': instance.visitCount,
     };

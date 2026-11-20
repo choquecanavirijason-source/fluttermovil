@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data' show Uint8List;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'core/network/dio_client.dart';
 import 'core/perf/flutter_timings_diag.dart';
 import 'core/recommendation/eye_shape_analyzer.dart';
+import 'core/recommendation/lash_consultation.dart';
+import 'screens/widgets/eye_consultation_sheet.dart';
 import 'core/theme/app_colors.dart';
 import 'features/catalogo/domain/entities/catalog_item.dart';
 import 'features/catalogo/presentation/providers/catalogo_provider.dart';
@@ -21,6 +23,8 @@ import 'lid_landmark_debug_painter.dart';
 import 'lashes/cat_eye_recipe.dart';
 import 'lashes/cat_eye_recipe_cache.dart';
 import 'lashes/tryon_catalog.dart';
+import 'lashes/lash_options.dart';
+import 'lashes/lash_style_recommender.dart';
 import 'eye_tracking_model.dart';
 import 'eye_tracking_photo_pipeline.dart';
 import 'native_eye_tracking_service.dart';
@@ -34,11 +38,13 @@ import 'screens/widgets/eye_tracking_filter_row.dart';
 import 'screens/widgets/eye_tracking_lash_modal.dart';
 import 'screens/widgets/eye_tracking_overlay.dart';
 import 'screens/widgets/eye_tracking_work_assistant_button.dart';
-import 'screens/widgets/eye_type_picker_sheet.dart';
 import 'screens/widgets/hybrid_camera_preview.dart';
 import 'screens/widgets/save_options_sheet.dart';
 import 'recommendation_args.dart';
+import 'lashes/lash_mapping.dart';
 import 'work_assistant_args.dart';
+import 'features/tracking/domain/entities/saved_tryon_design.dart';
+import 'features/tracking/presentation/providers/pending_design_provider.dart';
 
 /// Diseño de pestañas empaquetado en la app (bundle), con modelos .glb
 /// reales por ojo (no espejados como los que suben desde el admin, que solo
@@ -158,8 +164,77 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   late final EyeTrackingPhotoPipeline _photoPipeline;
 
   StreamSubscription<TrackingFrame>? _sub;
-  StreamSubscription<String>? _catalogShapeSubscription;
-  String? _catalogEyeShapeCode;
+  late final StateController<Client?> _sessionController;
+
+  /// `true` desde el inicio de [dispose]. Las tareas asíncronas (arranque,
+  /// re-enlace del preview, regreso del asistente) lo revisan después de
+  /// cada `await` para no volver a encender la cámara tras salir.
+  bool _disposed = false;
+  bool get _alive => mounted && !_disposed;
+  final SessionEyeAnalysis _sessionEyeAnalysis = SessionEyeAnalysis();
+  final _analysisView =
+      ValueNotifier<({EyeAnalysis? analysis, bool needsAdjustment})>((
+        analysis: null,
+        needsAdjustment: false,
+      ));
+  EyeAnalysis? get _stableEyeAnalysis => _analysisView.value.analysis;
+  LashConsultation _consultation = const LashConsultation();
+  List<int>? _rankedStyleIndices;
+  List<TryOnEyeCategory> _eyeRecommendationCategories = const [];
+  String? _manualEyeRecommendation;
+
+  Widget? get _eyeRecommendationSelector {
+    if (!_eyeRecommendationCategories.any(
+          (c) => c.detection == 'manual' && c.styleKeys.isNotEmpty,
+        ) ||
+        _selectedFilter != 0) {
+      return null;
+    }
+    final selected = _eyeRecommendationCategories
+        .where((c) => c.key == _manualEyeRecommendation)
+        .firstOrNull;
+    return PopupMenuButton<String>(
+      tooltip: 'Elegir característica del ojo',
+      initialValue: _manualEyeRecommendation ?? 'auto',
+      onSelected: (key) => setState(() {
+        _manualEyeRecommendation = key == 'auto' ? null : key;
+      }),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'auto', child: Text('Detección automática')),
+        ..._eyeRecommendationCategories
+            .where((c) => c.detection == 'manual')
+            .map(
+              (category) => PopupMenuItem(
+                value: category.key,
+                enabled: category.styleKeys.isNotEmpty,
+                child: Text(
+                  '${category.name}${category.detection == 'manual' ? ' · manual' : ''}${category.styleKeys.isEmpty ? ' · sin estilos' : ''}',
+                ),
+              ),
+            ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.tune, color: Colors.white, size: 14),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                selected?.name ?? 'Detección automática',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+              ),
+            ),
+            const Icon(Icons.expand_more, color: Colors.white, size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
   TrackingFrame? _frame;
 
   /// Canal de repintado de los overlays de landmarks (puntos del párpado y
@@ -181,6 +256,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// misma pose.
   static const Duration _mappableFrameMaxAge = Duration(milliseconds: 1500);
 
+  /// Ventana de cuadros que se promedian para el mapeo (ver
+  /// [EyeTrackingPhotoPipeline.averageFrames]): ~6-9 cuadros a 25-30 fps.
+  static const Duration _mappingAverageWindow = Duration(milliseconds: 300);
+  final List<({DateTime at, TrackingFrame frame})> _recentMappable = [];
+
   String _status = 'Inicializando...';
   String? _startupFailure;
   Timer? _startupWatchdog;
@@ -196,6 +276,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// único que hace falta cambiar; el painter sigue enchufado al
   /// `_frameNotifier` y se repinta a la cadencia real del tracking).
   static const bool _showLidLandmarkDebug = false;
+
+  /// `false` = Cat Eye se genera con el motor (receta del estilo 0), igual
+  /// que los demás estilos. El `.glb` empaquetado (`cateyeleft/right.glb`)
+  /// no tiene la base de punta a punta, así que con el pegado a la línea de
+  /// pestañas quedaba corto en las comisuras. `true` vuelve a usarlo.
+  static const bool _useBundledCatEyeModel = false;
 
   /// DIAGNÓSTICO: `flutter_overlays` de `perf_flags.properties`. `false`
   /// saca los painters que van encima de la cámara (guía de ojos y puntos de
@@ -281,7 +367,104 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       return;
     }
     _catalogLoadStarted = true;
-    unawaited(_loadPublishedCatalog());
+    unawaited(_loadPublishedCatalog().whenComplete(_applyPendingDesign));
+  }
+
+  int _pendingDesignAttempts = 0;
+
+  /// Aplica el diseño elegido en la ficha de la clienta ("Aplicar diseño").
+  /// Usa la copia de parámetros guardada, así se ve igual aunque el estilo
+  /// haya cambiado después en el administrador.
+  void _applyPendingDesign() {
+    if (!mounted) return;
+    final design = ref.read(pendingTryOnDesignProvider);
+    if (design == null) return;
+    // El primer modelo todavía se está cargando: reintenta en un momento.
+    if (_switchingDesignModel || _buildingRecipe) {
+      if (++_pendingDesignAttempts <= 25) {
+        Timer(const Duration(milliseconds: 400), _applyPendingDesign);
+      }
+      return;
+    }
+    final index = _availableLashPresets.indexWhere(
+      (p) => p.stableKey == design.styleKey,
+    );
+    if (index < 0 && _publishedPresets == null && _pendingDesignAttempts < 25) {
+      // El catálogo publicado no llegó a cargarse: se pide otra vez.
+      _pendingDesignAttempts++;
+      unawaited(_loadPublishedCatalog().whenComplete(_applyPendingDesign));
+      return;
+    }
+    ref.read(pendingTryOnDesignProvider.notifier).state = null;
+    if (index < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'El estilo "${design.styleName}" ya no está disponible en el probador.',
+          ),
+        ),
+      );
+      return;
+    }
+    _loadSavedDesign(index, design);
+  }
+
+  void _loadSavedDesign(int index, SavedTryOnDesign design) {
+    final preset = _availableLashPresets[index];
+    final style = preset.definition;
+    _catalogUserInteracted = true;
+    _recipeTimer?.cancel();
+    final request = ++_recipeRequest;
+    setState(() {
+      _selectedLashIndex = index;
+      _appliedRecipe = null;
+      _appliedCatalogStyle = null;
+      _selectedDesignIndex = design.length;
+      _selectedTechIndex = design.technique;
+      _selectedThicknessIndex = design.thickness;
+      _selectedColorId = design.colorId;
+      _savedColorHex = design.colorHex ?? LashOptionCatalog.approvedBlack;
+      _activeCategory = null;
+      _showTransparentMenu = true;
+    });
+    if (_useBundledCatEyeModel && design.original && preset.originalCatEye) {
+      unawaited(_switchLocalPreset(preset));
+    } else {
+      setState(() => _buildingRecipe = true);
+      ResolvedLashOptions? options = design.options;
+      try {
+        options ??= style.options.resolve(
+          design.length,
+          design.technique,
+          design.thickness,
+        );
+      } catch (_) {
+        options = null;
+      }
+      unawaited(
+        _applyRecipe(
+          options == null
+              ? style.recipe()
+              : CatEyeRecipe(
+                  style: style.engineStyle,
+                  options: options,
+                  profile: design.profile ?? style.profile,
+                  catalogStyleKey: style.key,
+                  catalogRevision: design.revision,
+                  length: design.length,
+                  technique: design.technique,
+                  thickness: design.thickness,
+                ),
+          request,
+        ),
+      );
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Diseño guardado aplicado: ${design.styleName}'),
+        backgroundColor: AppColors.actionGreen,
+      ),
+    );
   }
 
   List<_LocalLashPreset>? _publishedPresets;
@@ -323,12 +506,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final matching = presets.indexWhere((p) => p.stableKey == previousKey);
     setState(() {
       _publishedPresets = presets;
+      _rankedStyleIndices = null;
+      _eyeRecommendationCategories = catalog.eyeCategories;
       _selectedLashIndex = matching < 0 ? 0 : matching;
       _currentCarouselDesigns = const [];
     });
     // Keep the approved Cat Eye original only when its published definition
     // remains original; other published defaults are applied through the cache.
-    if (_appliedRecipe == null &&
+    if (_useBundledCatEyeModel &&
+        _appliedRecipe == null &&
         _selectedPreset!.originalCatEye &&
         previousKey == _selectedPreset!.stableKey) {
       _resetRecipeSelection();
@@ -351,6 +537,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         _appliedRecipe?.technique ?? style?.defaultTechnique ?? 0;
     _selectedThicknessIndex =
         _appliedRecipe?.thickness ?? style?.defaultThickness ?? 3;
+    _selectedColorId = style?.defaultColor ?? 0;
+    _savedColorHex = null;
   }
 
   Future<void> _applyRecipe(CatEyeRecipe recipe, int request) async {
@@ -363,6 +551,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         return;
       }
       setState(() => _switchingDesignModel = true);
+      await _service.setLashColor(_selectedColorHex);
       await _service.loadEyeModels(
         leftPath: paths.left,
         rightPath: paths.right,
@@ -406,6 +595,31 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   int _selectedDesignIndex = 1;
   int _selectedTechIndex = 0;
   int _selectedThicknessIndex = 3;
+
+  /// Color de pestaña elegido (id del catálogo; 0 = negro aprobado).
+  int _selectedColorId = 0;
+
+  /// `#RRGGBB` del color elegido, o `null` para el negro aprobado.
+  /// Color de un diseño guardado: se respeta aunque el catálogo ya no lo
+  /// ofrezca. Se descarta al elegir otro color o estilo.
+  String? _savedColorHex;
+
+  String? get _selectedColorHex {
+    final saved = _savedColorHex;
+    if (saved != null) {
+      return saved == LashOptionCatalog.approvedBlack ? null : saved;
+    }
+    final hex =
+        _selectedPreset?.definition.options
+                .color(_selectedColorId)
+                .parameters['color']
+            as String?;
+    return hex == null || hex == LashOptionCatalog.approvedBlack ? null : hex;
+  }
+
+  /// El estilo elegido ofrece más de un color (si no, no hay selector).
+  bool get _hasColorChoices =>
+      (_selectedPreset?.definition.colors.length ?? 0) > 1;
   bool _showTransparentMenu = true;
 
   /// Categoría activa del menú inferior: 'design', 'tech', 'effect', 'thickness', o null.
@@ -444,7 +658,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     _onCameraFacingChanged(isFront);
   }
 
-  /// Modo "clienta echada" (botón de la guía de captura, sólo con la
+  /// Modo "clienta echada" (botón de la guía de captura, con la frontal o la
   /// trasera): cambia la FORMA DE DETECTAR el rostro, no la cámara. El
   /// análisis de MediaPipe se rota 180° en nativo (ver
   /// `CameraXManager.analysisRotated180`) para que vea la cara derecha, y
@@ -454,9 +668,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// encuadre (ver [EyePositionGuidePainter.inverted]).
   ///
   /// Dura mientras dura la sesión de cámara de esta pantalla (incluido el
-  /// ida y vuelta al asistente) y se apaga al CAMBIAR DE CÁMARA: sólo tiene
-  /// sentido con la trasera apuntando a una clienta acostada — una selfie
-  /// nunca llega cabeza abajo — y con la cámara nueva el rostro es otro.
+  /// ida y vuelta al asistente) y se apaga al CAMBIAR DE CÁMARA: con la
+  /// cámara nueva el rostro llega en otra posición. Funciona con las dos
+  /// cámaras: en nativo el giro se aplica DESPUÉS del espejo de la frontal y
+  /// se deshace igual (ver `CameraXManager.analysisRotated180`), así que el
+  /// celular puede quedar del lado que le resulte cómodo a la operaria.
   bool _cameraInverted180 = false;
 
   /// Aplica [_cameraInverted180] en nativo. `photoMode` sigue a la guía de
@@ -476,7 +692,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   }
 
   void _toggleInvertedFaceMode() {
-    if (_usingFrontCamera || _workAssistantOpening) return;
+    if (_workAssistantOpening) return;
     setState(() {
       _cameraInverted180 = !_cameraInverted180;
       // El rostro cambia de lugar en la vista: el encuadre se reevalúa.
@@ -494,7 +710,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// true una vez que el usuario elige el tipo de ojo manualmente desde la
   /// hoja de selección; a partir de ahí deja de sobreescribirse con el
   /// resultado del escaneo automático.
-  bool _eyeTypeSetManually = false;
 
   /// true mientras se muestra la guía de alineación (esperando que el usuario
   /// ubique sus ojos en el marco antes de capturar).
@@ -563,6 +778,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // SceneView que ya está vivo. Usar _rebindPreview aquí (como se hacía
       // antes) filtraba un motor gráfico por cada diseño tocado — con el
       // tiempo/varios cambios de diseño terminaba tronando la app.
+      await _service.setLashColor(null);
       await _service.loadEyeModels(leftPath: path, rightPath: path);
       final styleId = _lashStyleIdFor(design.name);
       await _service.setLashStyle(styleId);
@@ -594,6 +810,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       if (!mounted) return;
       _leftModelPath = leftPath;
       _rightModelPath = rightPath;
+      await _service.setLashColor(_selectedColorHex);
       await _service.loadEyeModels(leftPath: leftPath, rightPath: rightPath);
       final styleId = CatEyeRecipe.styleIds[preset.engineStyle];
       await _service.setLashStyle(styleId);
@@ -643,6 +860,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   @override
   void initState() {
     super.initState();
+    _enterImmersive();
+    // Se lee acá y no en `dispose`: Riverpod no deja usar `ref` mientras el
+    // widget se desmonta, y ese error cortaba `dispose` a la mitad (la
+    // pantalla quedaba "viva" y sus tareas pendientes volvían a encender la
+    // cámara después de salir).
+    _sessionController = ref.read(sessionClientProvider.notifier);
     _photoPipeline = EyeTrackingPhotoPipeline(
       previewCaptureKey: _previewCaptureKey,
     );
@@ -700,8 +923,27 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _sub = null;
       _service.stopTracking();
     } else if (state == AppLifecycleState.resumed) {
+      // Android puede volver a mostrar las barras al regresar a la app.
+      _enterImmersive();
       unawaited(_restartCameraFromLifecycle());
     }
+  }
+
+  /// Pantalla completa en la cámara: oculta la barra de navegación (atrás,
+  /// inicio, multitarea) y la de estado. Con `immersiveSticky` deslizar
+  /// desde el borde las muestra un momento y se vuelven a ocultar solas.
+  void _enterImmersive() {
+    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
+  }
+
+  /// Restaura las barras del sistema como en el resto de la app.
+  void _exitImmersive() {
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      ),
+    );
   }
 
   Future<void> _restartCameraFromLifecycle() => _rebindPreview();
@@ -722,7 +964,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// más fresco posible); solo el `setState` que dispara el rebuild se
   /// limita, salvo que el estado de detección de rostro recién cambie.
   void _handleTrackingFrame(TrackingFrame frame) {
-    if (!mounted) return;
+    if (!_alive) return;
     // El badge "Rostro detectado"/"Sin rostro" se quitó: era redundante con
     // la guía de encuadre (ver `EyePositionGuidePainter`) y quedaba
     // desactualizado/engañoso fuera del flujo del asistente. `_status` ahora
@@ -743,8 +985,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (frame.faceDetected &&
         frame.leftEye.length >= 4 &&
         frame.rightEye.length >= 4) {
+      final now = DateTime.now();
       _lastMappableFrame = frame;
-      _lastMappableAt = DateTime.now();
+      _lastMappableAt = now;
+      _recentMappable.add((at: now, frame: frame));
+      _recentMappable.removeWhere(
+        (e) => now.difference(e.at) > _mappingAverageWindow,
+      );
     }
     if (_alignmentGuideActive) _evaluateAlignment(frame);
     _detectEyeTypeFromFrame(frame);
@@ -766,6 +1013,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await Future<void>.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
     _sub?.cancel();
+    if (!_alive) return;
     _sub = _service.trackingStream.listen(
       _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
@@ -777,6 +1025,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       },
     );
     await _service.startTracking();
+    if (_disposed) {
+      await _sub?.cancel();
+      _sub = null;
+      _service.stopTracking();
+      return;
+    }
     await Future<void>.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     await _service.refreshPreviewBind();
@@ -800,6 +1054,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
     setState(() => _status = 'Iniciando cámara…');
 
+    if (!_alive) return;
     _sub = _service.trackingStream.listen(
       _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
@@ -811,12 +1066,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       },
     );
 
-    _catalogShapeSubscription ??= _service.eyeShapeStream.listen((shape) {
-      if (mounted && shape != _catalogEyeShapeCode) {
-        setState(() => _catalogEyeShapeCode = shape);
-      }
-    });
     await _service.startTracking();
+    if (_disposed) {
+      await _sub?.cancel();
+      _sub = null;
+      _service.stopTracking();
+      return;
+    }
     if (!mounted) return;
     // La cámara activa vive en Kotlin y puede haber quedado en la trasera
     // desde otra pantalla: el botón "Invertir" sólo se muestra con ella.
@@ -844,13 +1100,16 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   @override
   void dispose() {
+    _disposed = true;
+    _exitImmersive();
     _startupWatchdog?.cancel();
-    _catalogShapeSubscription?.cancel();
+    _analysisView.dispose();
     _recipeTimer?.cancel();
     _recipeRequest++;
     _timingsDiag.stop();
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
+    _sub = null;
     // Fin de la sesión de cámara de esta pantalla: [_cameraInverted180]
     // muere con el State, así que el nativo vuelve al modo normal en vez de
     // heredarle el análisis rotado a la próxima pantalla que use la cámara.
@@ -859,7 +1118,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     _frameNotifier.dispose();
     // Route disposal may run during build: notify other consumers only after
     // their current frame has finished, never from this element's teardown.
-    final sessionController = ref.read(sessionClientProvider.notifier);
+    final sessionController = _sessionController;
     final departingClient = sessionController.state;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (identical(sessionController.state, departingClient)) {
@@ -910,6 +1169,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       'design' => style?.lengths ?? const [0, 1, 2],
       'tech' => style?.techniques ?? const [0, 1, 2, 3],
       'thickness' => style?.thicknesses ?? const [0, 1, 2, 3],
+      'color' => style?.colorOptions.map((o) => o.id).toList() ?? const [0],
       _ => const [],
     };
   }
@@ -917,12 +1177,51 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   String _optionKind(String? category) => switch (category) {
     'design' => 'length',
     'tech' => 'technique',
+    'color' => 'color',
     _ => 'thickness',
   };
-  String _optionLabel(String kind, int id) =>
-      _selectedPreset!.definition.options.get(kind, id).name;
+  String _optionLabel(String kind, int id) => kind == 'color'
+      ? _selectedPreset!.definition.options.color(id).name
+      : _selectedPreset!.definition.options.get(kind, id).name;
+  List<int> get _recommendedPresetIndices {
+    var presetIndices = List.generate(_availableLashPresets.length, (i) => i);
+    if (_selectedFilter == 0 && _manualEyeRecommendation != null) {
+      final selectedCategory = _eyeRecommendationCategories
+          .where((c) => c.key == _manualEyeRecommendation)
+          .firstOrNull;
+      if (selectedCategory != null) {
+        final recommended = presetIndices
+            .where(
+              (i) => selectedCategory.styleKeys.contains(
+                _availableLashPresets[i].stableKey,
+              ),
+            )
+            .toList();
+        if (recommended.isNotEmpty) presetIndices = recommended;
+      }
+    } else if (_selectedFilter == 0 &&
+        (_stableEyeAnalysis != null || _consultation.shapeOverride != null)) {
+      _rankedStyleIndices ??= LashStyleRecommender.rank(
+        _availableLashPresets.map((p) => p.definition).toList(),
+        _stableEyeAnalysis ?? EyeAnalysis.none,
+        consultation: _consultation,
+      );
+      presetIndices = _rankedStyleIndices!.take(5).toList();
+    }
+    return presetIndices;
+  }
+
   List<String> get _activeCategoryImages => _activeCategory == 'effect'
-      ? _availableLashPresets.map((p) => p.thumbnailAsset).toList()
+      ? _recommendedPresetIndices
+            .map((i) => _availableLashPresets[i].thumbnailAsset)
+            .toList()
+      : _activeCategory == 'color'
+      ? _activeOptionValues
+            .map(
+              (id) =>
+                  'swatch:${_selectedPreset!.definition.options.color(id).parameters['color']}',
+            )
+            .toList()
       : _activeOptionValues.map((id) {
           final images = LashCustomizationCatalog.imagesFor(_activeCategory);
           final option = _selectedPreset!.definition.options.get(
@@ -935,7 +1234,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           return images[index.clamp(0, images.length - 1)];
         }).toList();
   List<String> get _activeCategoryOptions => _activeCategory == 'effect'
-      ? _availableLashPresets.map((p) => p.name).toList()
+      ? _recommendedPresetIndices
+            .map((i) => _availableLashPresets[i].name)
+            .toList()
       : _activeOptionValues
             .map((id) => _optionLabel(_optionKind(_activeCategory), id))
             .toList();
@@ -944,10 +1245,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       'design' => _selectedDesignIndex,
       'tech' => _selectedTechIndex,
       'thickness' => _selectedThicknessIndex,
+      'color' => _selectedColorId,
       _ => -1,
     };
     return _activeCategory == 'effect'
-        ? (_selectedPreset == null ? -1 : _selectedLashIndex)
+        ? _recommendedPresetIndices.indexOf(_selectedLashIndex)
         : _activeOptionValues.indexOf(value);
   }
 
@@ -955,7 +1257,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     if (_switchingDesignModel || _hidingLashesForAlignmentGuide) return;
     _catalogUserInteracted = true;
     if (_activeCategory == 'effect') {
-      _onLashSelect(index);
+      _onLashSelect(_recommendedPresetIndices[index]);
+      return;
+    }
+    if (_activeCategory == 'color') {
+      unawaited(_onColorSelect(_activeOptionValues[index]));
       return;
     }
     if (_selectedLashIndex >= _availableLashPresets.length) {
@@ -995,6 +1301,36 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     );
   }
 
+  /// Cambia solo el color de las fibras: mismo modelo y misma geometría,
+  /// recargados con el color nuevo (como al cambiar de estilo).
+  Future<void> _onColorSelect(int colorId) async {
+    if ((colorId == _selectedColorId && _savedColorHex == null) ||
+        _leftModelPath == null) {
+      return;
+    }
+    setState(() {
+      _selectedColorId = colorId;
+      _savedColorHex = null;
+      _switchingDesignModel = true;
+    });
+    try {
+      await _service.setLashColor(_selectedColorHex);
+      await _service.loadEyeModels(
+        leftPath: _leftModelPath,
+        rightPath: _rightModelPath,
+      );
+    } catch (e) {
+      debugPrint('[EyeTracking] no se pudo aplicar el color: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No se pudo aplicar el color')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _switchingDesignModel = false);
+    }
+  }
+
   Future<void> _resumeEyePreviewAfterAssistant() async {
     // Espera extra para que el plugin `camera` libere el hardware completamente.
     await Future<void>.delayed(const Duration(milliseconds: 800));
@@ -1009,6 +1345,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     _frameNotifier.value = null;
     _lastMappableFrame = null;
     _lastMappableAt = null;
+    _recentMappable.clear();
     setState(() {
       _previewSession++;
       _frame = null;
@@ -1027,6 +1364,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // en null). Se re-suscribe siempre: el stream es broadcast y compartido,
     // así que cancelar y volver a escuchar es seguro.
     await _sub?.cancel();
+    if (!_alive) return;
     _sub = _service.trackingStream.listen(
       _handleTrackingFrame,
       onError: (Object e, StackTrace st) {
@@ -1038,6 +1376,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       },
     );
     await _service.startTracking();
+    if (_disposed) {
+      await _sub?.cancel();
+      _sub = null;
+      _service.stopTracking();
+      return;
+    }
 
     // refreshPreviewBind() es no-op si previewView==null.
     // Múltiples intentos cubren la variación de tiempo del AndroidView.
@@ -1080,7 +1424,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // operaria ve a la clienta, por el mismo camino que el modo normal.
       final inverted = _cameraInverted180;
       final timing = Stopwatch()..start(); // TEMPORAL — ver CaptureTiming.
-      final mappingFrame = _freezeMappingFrame();
       // Si el overlay saldría transparente (ver [_captureOverlayIsEmpty]) no
       // se captura: de él sólo se usaban sus medidas, y capturarlo,
       // codificarlo en PNG, decodificarlo y mezclarlo era buena parte de la
@@ -1095,16 +1438,6 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           ? EyeTrackingPhotoPipeline.overlayPixelSize(previewSize)
           : null;
       final overlayMs = timing.elapsedMilliseconds;
-      final assistantFrame =
-          (overlayBytes == null && overlaySize == null) || previewSize == null
-          ? null
-          : EyeTrackingPhotoPipeline.frameForCapturedBand(
-              mappingFrame,
-              previewSize,
-              // Con la guía girada los ojos quedan más abajo en pantalla:
-              // franja de recorte reflejada (ver `_cropEyeBand`).
-              flipEyeBand: inverted,
-            );
 
       // Qué cámara está usando el tracking AHORA, preguntándoselo a Kotlin
       // (ver [_syncCameraFacing]). Se consulta acá, sobre el final, para que
@@ -1112,6 +1445,19 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // desde otra pantalla o esta se haya recreado en el medio.
       await _syncCameraFacing();
       if (!mounted) return;
+      // El mapeo se congela JUSTO antes de la foto (y no al tocar el botón):
+      // mientras se capturaba el overlay la mano o la cabeza pueden haberse
+      // movido, y el mapeo quedaba corrido respecto del ojo de la foto.
+      final assistantFrame =
+          (overlayBytes == null && overlaySize == null) || previewSize == null
+          ? null
+          : EyeTrackingPhotoPipeline.frameForCapturedBand(
+              _freezeMappingFrame(),
+              previewSize,
+              // Con la guía girada los ojos quedan más abajo en pantalla:
+              // franja de recorte reflejada (ver `_cropEyeBand`).
+              flipEyeBand: inverted,
+            );
 
       // 3. Foto por la MISMA sesión de cámara, sin detener el tracking: sale
       // a los ~200 ms del overlay en vez de 1-2 s, que es lo que hacía que
@@ -1208,13 +1554,40 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       // navegación a `/work-assistant`).
       setState(() => _capturingPhoto = false);
 
+      // Mapeo del estilo y largo que la operaria tiene armados ahora.
+      final mapStyle = _selectedPreset?.definition;
+      var mapOptions = _appliedRecipe?.options;
+      if (mapOptions == null && mapStyle != null) {
+        try {
+          mapOptions = mapStyle.options.resolve(
+            _selectedDesignIndex,
+            _selectedTechIndex,
+            _selectedThicknessIndex,
+          );
+        } catch (_) {
+          mapOptions = null;
+        }
+      }
+      final lashMap = resolveLashMap(
+        style: mapStyle,
+        applied: _appliedRecipe,
+        length: mapOptions?.length,
+      );
+      if (!mounted) return;
       await context.push(
         '/work-assistant',
         extra: WorkAssistantArgs(
           panelPngBytes: finalPhoto,
           panelBytesFuture: pendingPhoto,
           mappingFrame: assistantFrame,
-          mappingStyleId: 'cateye',
+          mappingStyleId: mapStyle?.builtinStyle ?? 'cateye',
+          mappingLabels: lashMap?.labels,
+          mappingFromSalon: lashMap?.source == LashMapSource.salon,
+          mappingStyleName: _selectedPreset?.name,
+          mappingSummary: mapOptions == null
+              ? null
+              : '${mapOptions.length.name} · ${mapOptions.technique.name} · '
+                    '${mapOptions.thickness.name}',
           cropOverlayBytes: overlayBytes,
           cropOverlaySize: overlaySize,
           mappingPreviewSize: previewSize,
@@ -1326,12 +1699,19 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     await _onSwitchCamera();
   }
 
-  /// Selecciona el frame que recibe el asistente, usando el último frame
-  /// válido reciente si el actual perdió el rostro.
+  /// Selecciona el frame que recibe el asistente: el promedio de los
+  /// cuadros de los últimos [_mappingAverageWindow] (quita el temblor de los
+  /// puntos del párpado). Si no hay cuadros tan recientes, el último válido
+  /// de hasta [_mappableFrameMaxAge]; si tampoco, el actual.
   TrackingFrame? _freezeMappingFrame() {
+    final now = DateTime.now();
+    final window = [
+      for (final e in _recentMappable)
+        if (now.difference(e.at) <= _mappingAverageWindow) e.frame,
+    ];
+    if (window.isNotEmpty) return EyeTrackingPhotoPipeline.averageFrames(window);
     final at = _lastMappableAt;
-    final recent =
-        at != null && DateTime.now().difference(at) <= _mappableFrameMaxAge;
+    final recent = at != null && now.difference(at) <= _mappableFrameMaxAge;
     return recent ? _lastMappableFrame : _frame;
   }
 
@@ -1360,27 +1740,35 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
-  /// Detecta la forma del ojo en vivo con [EyeShapeAnalyzer] y actualiza el
-  /// pill "tipo de ojo" con el item del catálogo correspondiente, mientras
-  /// el usuario no haya elegido uno manualmente.
+  // One stable geometry analysis drives the label and recommendation ranking.
   void _detectEyeTypeFromFrame(TrackingFrame frame) {
-    if (_eyeTypeSetManually) return;
-    final types = _eyeTypes;
-    if (types == null || types.isEmpty) return;
-
-    final analysis = EyeShapeAnalyzer.analyze(frame);
-    if (!analysis.reliable) return;
-
-    final catalogName = analysis.shape.catalogName;
-    CatalogItem? match;
-    for (final item in types) {
-      if (item.name.trim().toLowerCase() == catalogName.toLowerCase()) {
-        match = item;
-        break;
+    if (_stableEyeAnalysis != null) return;
+    final analysis = _sessionEyeAnalysis.add(frame, DateTime.now());
+    if (analysis == null) {
+      if (_analysisView.value.needsAdjustment !=
+          _sessionEyeAnalysis.needsAdjustment) {
+        setState(
+          () => _analysisView.value = (
+            analysis: null,
+            needsAdjustment: _sessionEyeAnalysis.needsAdjustment,
+          ),
+        );
       }
+      return;
     }
-    if (match == null || match.id == _selectedEyeType?.id) return;
-    setState(() => _selectedEyeType = match);
+    final match = _eyeTypes
+        ?.where(
+          (item) =>
+              item.name.trim().toLowerCase() ==
+              (_consultation.shapeOverride ?? analysis.shape).catalogName
+                  .toLowerCase(),
+        )
+        .firstOrNull;
+    setState(() {
+      _analysisView.value = (analysis: analysis, needsAdjustment: false);
+      _rankedStyleIndices = null;
+      _selectedEyeType = match;
+    });
   }
 
   /// Dispara la captura. Lo llama el botón de captura de la guía — no se
@@ -1432,28 +1820,67 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     unawaited(_finishWorkAssistantOpen());
   }
 
-  /// Botón "Voltear cámara" de la guía — ver [_switchCameraFromGuide].
-  Widget _flipCameraButton() {
-    return GestureDetector(
-      onTap: () => unawaited(_switchCameraFromGuide()),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.45),
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: Colors.white24),
+  /// Botón redondo de la barra superior de la guía.
+  Widget _guideRoundButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.5),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
         ),
-        child: const Row(
+      ),
+    );
+  }
+
+  /// Acción secundaria de la guía (ícono + texto), a los lados de la captura.
+  /// Verde = activa (p. ej. "Clienta echada").
+  Widget _guideAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    bool active = false,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: 72,
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.flip_camera_android, color: Colors.white, size: 16),
-            SizedBox(width: 6),
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: active
+                    ? AppColors.actionGreen.withValues(alpha: 0.9)
+                    : Colors.black.withValues(alpha: 0.5),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: active ? Colors.white70 : Colors.white24,
+                ),
+              ),
+              child: Icon(icon, color: Colors.white, size: 22),
+            ),
+            const SizedBox(height: 4),
             Text(
-              'Voltear cámara',
-              style: TextStyle(
+              label,
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 11,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w600,
+                shadows: [Shadow(color: Colors.black54, blurRadius: 4)],
               ),
             ),
           ],
@@ -1462,32 +1889,80 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     );
   }
 
-  /// Botón "Clienta echada" de la guía — ver [_cameraInverted180]. Verde =
-  /// activo (guía girada y detección ajustada a la cara cabeza abajo).
-  Widget _lyingClientButton() {
-    final active = _cameraInverted180;
+  /// Disparo manual. Atenuado hasta que los ojos están cerrados Y sobre la
+  /// línea de la guía: antes de eso [_beginWorkAssistantFlow] no deja
+  /// capturar.
+  Widget _guideCaptureButton() {
     return GestureDetector(
-      onTap: _toggleInvertedFaceMode,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      onTap: _beginWorkAssistantFlow,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: _eyesClosedOk && _eyesOnGuideLine ? 1 : 0.4,
+        child: Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            color: _eyesAligned ? const Color(0xFF2ECC71) : Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 4),
+            boxShadow: const [
+              BoxShadow(color: Colors.black45, blurRadius: 10),
+            ],
+          ),
+          child: Icon(
+            Icons.camera_alt_rounded,
+            color: _eyesAligned ? Colors.white : AppColors.brandPrimary,
+            size: 30,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Mensaje de estado de la guía (qué falta para poder capturar).
+  Widget _guideStatusPill() {
+    return IgnorePointer(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        margin: const EdgeInsets.symmetric(horizontal: 40),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: active
-              ? AppColors.actionGreen.withValues(alpha: 0.9)
-              : Colors.black.withValues(alpha: 0.45),
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: active ? Colors.white70 : Colors.white24),
+          color: _eyesAligned
+              ? const Color(0xDD1FA24A)
+              : const Color(0xDD0D5C41),
+          borderRadius: BorderRadius.circular(14),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.airline_seat_flat, color: Colors.white, size: 16),
+            Icon(
+              _eyesAligned
+                  ? Icons.check_circle
+                  : (!_faceFramed
+                        ? Icons.crop_free
+                        : !_eyesOnGuideLine
+                        ? Icons.horizontal_rule
+                        : Icons.remove_red_eye_outlined),
+              color: Colors.white,
+              size: 15,
+            ),
             const SizedBox(width: 6),
-            Text(
-              active ? 'Clienta echada: activo' : 'Clienta echada',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
+            Flexible(
+              child: Text(
+                _eyesAligned
+                    ? 'Listo para capturar'
+                    : (!_faceFramed
+                          ? 'Encuadra el rostro dentro de la guía'
+                          : !_eyesOnGuideLine
+                          ? 'Encuadre bien la posición de los ojos'
+                          : 'Ojos cerrados para ver la línea de pestañas'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
               ),
             ),
           ],
@@ -1500,20 +1975,44 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => EyeTypePickerSheet(
-        selected: _selectedEyeType,
-        preloadedItems: _eyeTypes,
-        onSelect: (item) {
-          setState(() {
-            _selectedEyeType = item;
-            _eyeTypeSetManually = true;
-          });
-          Navigator.of(context).pop();
-        },
+      showDragHandle: true,
+      builder: (sheetContext) => ValueListenableBuilder(
+        valueListenable: _analysisView,
+        builder: (context, view, _) => EyeConsultationSheet(
+          analysis: view.analysis,
+          needsAdjustment: view.needsAdjustment,
+          initial: _consultation,
+          onApply: (selection) {
+            final shape = selection.shapeOverride ?? _stableEyeAnalysis?.shape;
+            final match = _eyeTypes
+                ?.where(
+                  (item) =>
+                      item.name.trim().toLowerCase() ==
+                      shape?.catalogName.toLowerCase(),
+                )
+                .firstOrNull;
+            setState(() {
+              _catalogUserInteracted = true;
+              _consultation = selection;
+              _selectedEyeType = match;
+              _manualEyeRecommendation = null;
+              _rankedStyleIndices = null;
+              _selectedFilter = 0;
+            });
+            Navigator.of(sheetContext).pop();
+          },
+          onReanalyze: () {
+            Navigator.of(sheetContext).pop();
+            setState(() {
+              _sessionEyeAnalysis.reset();
+              _analysisView.value = (analysis: null, needsAdjustment: false);
+              _consultation = LashConsultation(goal: _consultation.goal);
+              _rankedStyleIndices = null;
+              _manualEyeRecommendation = null;
+              _selectedEyeType = null;
+            });
+          },
+        ),
       ),
     );
   }
@@ -1605,12 +2104,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final recipe = _appliedRecipe;
     final notes = [
       'Efecto: $effect',
+      _consultation.notes(_stableEyeAnalysis),
       if (recipe == null) 'Modelo: original',
       if (recipe != null) ...[
         'Largo: ${recipe.options?.length.name ?? LashCustomizationCatalog.designOptionAt(recipe.length)}',
         'Técnica: ${recipe.options?.technique.name ?? LashCustomizationCatalog.techOptionAt(recipe.technique)}',
         'Grosor: ${recipe.options?.thickness.name ?? LashCustomizationCatalog.thicknessOptionAt(recipe.thickness)}',
       ],
+      if (_selectedColorId != 0 && _selectedPreset != null)
+        'Color: ${_selectedPreset!.definition.options.color(_selectedColorId).name}',
     ].join(' | ');
 
     try {
@@ -1619,9 +2121,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           .create(
             clientId: client.id,
             eyeTypeId: _selectedEyeType?.id,
-            designNotes: notes,
+            designNotes: notes.runes.length > 255
+                ? '${String.fromCharCodes(notes.runes.take(252))}…'
+                : notes,
             tryOnRecipe: (_appliedCatalogStyle ?? _selectedPreset?.definition)
-                ?.snapshot(applied: recipe),
+                ?.snapshot(
+                  applied: recipe,
+                  eyeAssessment: _consultation.toMap(_stableEyeAnalysis),
+                  color: _selectedColorId,
+                ),
           );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1656,7 +2164,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // Los presets locales van primero en el carrusel (ver build()), así que
     // los primeros _availableLashPresets.length índices son locales y el resto
     // corresponde a _currentCarouselDesigns (catálogo remoto).
-    if (index < _availableLashPresets.length &&
+    if (_useBundledCatEyeModel &&
+        index < _availableLashPresets.length &&
         _availableLashPresets[index].originalCatEye) {
       // Keep the original Cat Eye entry and its current configurable behavior.
       unawaited(_switchLocalPreset(_availableLashPresets[index]));
@@ -1680,21 +2189,31 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
 
   @override
   Widget build(BuildContext context) {
-    // "Compatible": diseños del catálogo filtrados en vivo por la forma de
-    // ojo detectada (universales + los que coincidan), ya resuelto por
-    // filteredCatalogProvider. "Explorar": el catálogo completo sin filtrar.
-    final compatibleAsync = ref.watch(filteredDesignCatalogProvider);
+    // Recommendations use the stable shape locked for this page session.
+    // Explore always offers the complete catalog.
     final allAsync = ref.watch(designCatalogListProvider);
-    final activeAsyncError =
-        (_selectedFilter == 0 ? compatibleAsync : allAsync).error;
+    final activeAsyncError = allAsync.error;
     if (activeAsyncError != null) {
       debugPrint('[lash-designs] error cargando catálogo: $activeAsyncError');
     }
+    final allDesigns = allAsync.valueOrNull ?? const <CatalogItem>[];
+    final compatibleDesigns = allDesigns.where((item) {
+      final compatible = item.tipoOjoCompatible?.toUpperCase();
+      return compatible == null ||
+          compatible ==
+              switch (_stableEyeAnalysis?.shape) {
+                EyeShape.redondo => 'ROUND',
+                EyeShape.rasgado => 'ELONGATED',
+                EyeShape.almendrado => 'ALMOND',
+                _ => '',
+              };
+    }).toList();
     final rawDesigns =
-        (_selectedFilter == 0
-            ? compatibleAsync.valueOrNull
-            : allAsync.valueOrNull) ??
-        const [];
+        _selectedFilter == 0 &&
+            _stableEyeAnalysis != null &&
+            compatibleDesigns.isNotEmpty
+        ? compatibleDesigns
+        : allDesigns;
     // Solo diseños con imagen entran al carrusel — se mantiene esta MISMA
     // lista (filtrada) en _currentCarouselDesigns para que el índice tocado
     // en el carrusel siga correspondiendo al diseño correcto en _onLashSelect.
@@ -1706,14 +2225,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     // Presets locales primero (siempre disponibles, no dependen del
     // catálogo remoto), después los del admin — ver _onLashSelect para el
     // mapeo de índice a diseño.
-    var presetIndices = List.generate(_availableLashPresets.length, (i) => i);
-    if (_selectedFilter == 0 && _catalogEyeShapeCode != null) {
-      final compatible = presetIndices.where((i) {
-        final eyes = _availableLashPresets[i].definition.eyeTypes;
-        return eyes.isEmpty || eyes.contains(_catalogEyeShapeCode);
-      }).toList();
-      if (compatible.isNotEmpty) presetIndices = compatible;
-    }
+    final presetIndices = _recommendedPresetIndices;
     final carouselImagePaths = [
       ...presetIndices.map((i) => _availableLashPresets[i].thumbnailAsset),
       ...carousel.map((d) => d.imageUrl!),
@@ -1737,6 +2249,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       canPop: false,
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
+        if (_alignmentGuideActive) {
+          if (!_capturingPhoto) _toggleAlignmentGuide();
+          return;
+        }
         _goHome(context);
       },
       child: Scaffold(
@@ -1786,10 +2302,15 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 ),
               ),
             ),
-            ...EyeTrackingOverlay.buildSiblings(
+            if (!_alignmentGuideActive) ...EyeTrackingOverlay.buildSiblings(
               onBack: () => _goHome(context),
               status: _frame == null ? _status : null,
-              title: _selectedEyeType?.name ?? '',
+              title:
+                  _analysisView.value.needsAdjustment &&
+                      _consultation.shapeOverride == null &&
+                      _stableEyeAnalysis == null
+                  ? 'Ajusta la posición'
+                  : _consultation.title(_stableEyeAnalysis),
               onEyeTypeTap: _showEyeTypeSheet,
               onSwitchCamera: () => unawaited(_onSwitchCamera()),
               onFlashTap: () {},
@@ -1797,15 +2318,28 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
               onTechniqueTap: () => _onCategoryTap('tech'),
               onEffectTap: () => _onCategoryTap('effect'),
               onThicknessTap: () => _onCategoryTap('thickness'),
+              onColorTap: _hasColorChoices
+                  ? () => _onCategoryTap('color')
+                  : null,
+              currentColor: Color(
+                0xFF000000 |
+                    int.parse(
+                      (_selectedColorHex ?? LashOptionCatalog.approvedBlack)
+                          .substring(1),
+                      radix: 16,
+                    ),
+              ),
               activeCategory: _activeCategory,
             ),
-            EyeTrackingWorkAssistantButton(onTap: _toggleAlignmentGuide),
+            if (!_alignmentGuideActive)
+              EyeTrackingWorkAssistantButton(onTap: _toggleAlignmentGuide),
 
             // Chips y carrusel se ocultan con la guía de captura activa: ocupan
             // la misma franja inferior que el botón de disparo y el mensaje de
             // la guía, y durante la captura no se usan.
-            if (!_alignmentGuideActive)
+            if (!_alignmentGuideActive && _activeCategory == null)
               EyeTrackingFilterRow(
+                recommendation: _eyeRecommendationSelector,
                 selectedFilter: _selectedFilter,
                 onSelect: _onFilterSelect,
               ),
@@ -1857,8 +2391,14 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         ),
                 ),
               ),
-            if (_activeCategory != null)
+            if (_activeCategory != null && !_alignmentGuideActive)
               EyeTrackingDesignMenuBar(
+                filters: EyeTrackingFilterRow(
+                  recommendation: _eyeRecommendationSelector,
+                  selectedFilter: _selectedFilter,
+                  onSelect: _onFilterSelect,
+                  embedded: true,
+                ),
                 designImages: _activeCategoryImages,
                 designOptions: _activeCategoryOptions,
                 selectedDesign:
@@ -1871,8 +2411,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 helperText: _buildingRecipe
                     ? 'Aplicando…'
                     : _selectedLashIndex < _availableLashPresets.length
-                    ? '${_availableLashPresets[_selectedLashIndex].name} · ${_appliedRecipe == null ? 'original' : 'personalizado'}'
-                    : 'Selecciona un estilo del probador para ver sus ajustes',
+                    ? (_appliedRecipe == null ? 'Original' : 'Personalizado')
+                    : 'Elige un estilo del probador',
                 resetLabel: _selectedPreset?.originalCatEye == true
                     ? 'Restaurar original'
                     : 'Restablecer',
@@ -1895,17 +2435,19 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 },
                 onClose: () => setState(() => _showLashModal = false),
               ),
-            if (!_showLashModal)
+            if (!_showLashModal && !_alignmentGuideActive)
               EyeTrackingPremiumOjoButton(
                 // Nombre del diseño de pestaña seleccionado en el carrusel
                 // — antes se mostraba debajo de cada miniatura, ahora vive
                 // acá (ver BottomCarousel más abajo, sin `labels`).
                 label: selectedLabel,
               ),
-            if (!_showLashModal)
+            if (!_showLashModal && !_alignmentGuideActive)
               Positioned(
                 top: 35,
-                right: 12,
+                // A la izquierda del robot (esquina, right 12): 46 de ancho
+                // del robot + 10 de separación.
+                right: 68,
                 child: GestureDetector(
                   onTap: () {
                     final sessionClient = ref.read(sessionClientProvider);
@@ -1924,7 +2466,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                       border: Border.all(color: Colors.white24),
                     ),
                     child: const Icon(
-                      Icons.save_alt_rounded,
+                      Icons.bookmark_add_rounded,
                       color: Colors.white,
                       size: 26,
                     ),
@@ -1957,112 +2499,103 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             // Queda FUERA del `IgnorePointer` de la guía para que el botón
             // reciba toques. La captura es manual a propósito — ver
             // [_toggleAlignmentGuide].
-            if (_alignmentGuideActive)
+            if (_alignmentGuideActive && !_capturingPhoto)
               Positioned(
-                bottom: 62,
+                top: 0,
                 left: 0,
                 right: 0,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (!_capturingPhoto) ...[
-                      _flipCameraButton(),
-                      // Aparece sólo tras cambiar a la cámara trasera — ver
-                      // [_cameraInverted180].
-                      if (!_usingFrontCamera) ...[
-                        const SizedBox(height: 8),
-                        _lyingClientButton(),
-                      ],
-                      const SizedBox(height: 12),
-                    ],
-                    if (!_capturingPhoto)
-                      GestureDetector(
-                        onTap: _beginWorkAssistantFlow,
-                        // Atenuado hasta que los ojos están cerrados Y sobre
-                        // la línea de la guía: antes de eso
-                        // [_beginWorkAssistantFlow] no deja capturar.
-                        child: AnimatedOpacity(
-                          duration: const Duration(milliseconds: 200),
-                          opacity: _eyesClosedOk && _eyesOnGuideLine ? 1 : 0.4,
-                          child: Container(
-                            width: 68,
-                            height: 68,
-                            decoration: BoxDecoration(
-                              color: _eyesAligned
-                                  ? const Color(0xFF2ECC71)
-                                  : Colors.white,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 4),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Colors.black45,
-                                  blurRadius: 10,
-                                ),
-                              ],
-                            ),
-                            child: Icon(
-                              Icons.camera_alt_rounded,
-                              color: _eyesAligned
-                                  ? Colors.white
-                                  : AppColors.brandPrimary,
-                              size: 30,
-                            ),
+                child: SafeArea(
+                  bottom: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                    child: Row(
+                      children: [
+                        _guideRoundButton(
+                          icon: Icons.close_rounded,
+                          tooltip: 'Salir del asistente',
+                          onTap: _toggleAlignmentGuide,
+                        ),
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 7,
                           ),
-                        ),
-                      ),
-                    const SizedBox(height: 12),
-                    IgnorePointer(
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        margin: const EdgeInsets.symmetric(horizontal: 56),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _eyesAligned
-                              ? const Color(0xDD1FA24A)
-                              : const Color(0xDD0D5C41),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _eyesAligned
-                                  ? Icons.check_circle
-                                  : (!_faceFramed
-                                        ? Icons.crop_free
-                                        : !_eyesOnGuideLine
-                                        ? Icons.horizontal_rule
-                                        : Icons.remove_red_eye_outlined),
-                              color: Colors.white,
-                              size: 14,
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                _eyesAligned
-                                    ? 'Listo para capturar'
-                                    : (!_faceFramed
-                                          ? 'Encuadra el rostro dentro de la guía'
-                                          : !_eyesOnGuideLine
-                                          ? 'Encuadre bien la posición de los ojos'
-                                          : 'Ojos cerrados para ver la línea de pestañas'),
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white24),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.smart_toy_outlined,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                              SizedBox(width: 6),
+                              Text(
+                                'Asistente · Encuadre',
+                                style: TextStyle(
                                   color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                  height: 1.2,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
+                            ],
+                          ),
+                        ),
+                        const Spacer(),
+                        // Mismo ancho que el botón de cerrar: título centrado.
+                        const SizedBox(width: 44),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // Mensaje de la guía arriba de una sola fila de controles:
+            // Voltear · Capturar · Clienta echada. Fuera del `IgnorePointer`
+            // de la guía para que los botones reciban toques. La captura es
+            // manual a propósito — ver [_toggleAlignmentGuide].
+            if (_alignmentGuideActive && !_capturingPhoto)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _guideStatusPill(),
+                        const SizedBox(height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            _guideAction(
+                              icon: Icons.flip_camera_android,
+                              label: 'Voltear',
+                              onTap: () => unawaited(_switchCameraFromGuide()),
+                            ),
+                            _guideCaptureButton(),
+                            // Con cualquiera de las dos cámaras — ver
+                            // [_cameraInverted180].
+                            _guideAction(
+                              icon: Icons.airline_seat_flat,
+                              label: 'Echada',
+                              active: _cameraInverted180,
+                              onTap: _toggleInvertedFaceMode,
                             ),
                           ],
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
 

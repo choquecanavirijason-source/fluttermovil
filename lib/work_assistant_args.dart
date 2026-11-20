@@ -11,6 +11,10 @@ class WorkAssistantArgs {
     this.mirrorTopPanel = false,
     this.mappingFrame,
     this.mappingStyleId,
+    this.mappingLabels,
+    this.mappingFromSalon = false,
+    this.mappingStyleName,
+    this.mappingSummary,
     this.cropOverlayBytes,
     this.cropOverlaySize,
     this.mappingPreviewSize,
@@ -33,6 +37,20 @@ class WorkAssistantArgs {
   /// Landmarks proyectados al mismo eye band que la captura del panel.
   final TrackingFrame? mappingFrame;
   final String? mappingStyleId;
+
+  /// Mapeo ya resuelto para el estilo y largo elegidos (mm por zona, del
+  /// lagrimal al extremo). `null`: el painter usa el patrón fijo de
+  /// [mappingStyleId].
+  final List<int>? mappingLabels;
+
+  /// `true` si [mappingLabels] es el patrón del salón; `false` si se calculó
+  /// desde la forma del estilo.
+  final bool mappingFromSalon;
+
+  /// Nombre del estilo y resumen "Largo · Técnica · Grosor" para mostrar
+  /// junto al mapeo.
+  final String? mappingStyleName;
+  final String? mappingSummary;
   final Uint8List? cropOverlayBytes;
 
   /// Medidas del overlay cuando no se capturó porque habría salido vacío

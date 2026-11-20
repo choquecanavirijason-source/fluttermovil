@@ -16,59 +16,53 @@ class EyeTrackingPremiumOjoButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Positioned(
       left: 64,
-      // Deja libre la columna del botón del robot (right: 16 + ~46 de ancho)
-      // con margen, para que no se solapen en pantallas angostas.
+      // Deja libre la columna del botón del robot (right: 16 + ~46 de ancho).
       right: 82,
-      bottom: 24,
+      bottom: 22,
       child: IgnorePointer(
         child: SafeArea(
           top: false,
-          child: Container(
-            height: 28,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(25),
-            ),
-            // Stack en vez de Row: con Row, el círculo de la izquierda corre
-            // el texto hacia la derecha (el Expanded del texto arranca
-            // DESPUÉS del ícono, así que su propio centro no coincide con el
-            // centro real del botón). Acá el texto se centra respecto al
-            // ancho completo del botón, y el círculo flota aparte, pegado a
-            // la izquierda, sin empujarlo.
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 30),
-                  child: Text(
-                    label,
-                    style: const TextStyle(
-                      color: AppColors.actionGreen,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                    ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Positioned(
-                  left: 0,
-                  child: Container(
-                    width: 28,
-                    height: 28,
+          child: Center(
+            child: Container(
+              height: 32,
+              padding: const EdgeInsets.only(left: 4, right: 14),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 24,
+                    height: 24,
                     decoration: const BoxDecoration(
                       color: AppColors.actionGreen,
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
-                      Icons.bookmark,
+                      Icons.auto_awesome_rounded,
                       color: Colors.white,
-                      size: 16,
+                      size: 13,
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

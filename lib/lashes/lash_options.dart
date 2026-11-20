@@ -36,6 +36,14 @@ class LashOption {
     final values = <String, dynamic>{};
     if (kind == 'length') {
       values['scale'] = number('scale', .4, 1.8);
+      // Desplazamiento del mapeo de la técnica (opcional, ver lash_mapping).
+      final offset = p['map_offset_mm'];
+      if (offset != null) {
+        if (offset is! int || offset < -10 || offset > 10) {
+          throw const FormatException('Invalid map offset');
+        }
+        values['map_offset_mm'] = offset;
+      }
     } else if (kind == 'thickness') {
       values['diameter'] = number('diameter', .03, .25);
     } else if (kind == 'technique') {
@@ -58,6 +66,12 @@ class LashOption {
         'density': p['density'] == null ? 1.0 : number('density', .25, 1.5),
         'spread': p['spread'] == null ? null : number('spread', 0, 24),
       });
+    } else if (kind == 'color') {
+      final color = p['color'];
+      if (color is! String || !RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(color)) {
+        throw const FormatException('Invalid lash color');
+      }
+      values['color'] = color.toUpperCase();
     } else {
       throw const FormatException('Unknown option kind');
     }
@@ -118,6 +132,20 @@ class ResolvedLashOptions {
 class LashOptionCatalog {
   final Map<String, List<LashOption>> groups;
   const LashOptionCatalog(this.groups);
+
+  /// El negro aprobado: con este color la pestaña se ve como siempre.
+  static const approvedBlack = '#111111';
+  static const blackOption = LashOption(0, 'Negro', {'color': approvedBlack});
+
+  /// Colores publicados. Un catálogo anterior al de colores (servidor sin
+  /// actualizar o caché vieja) ofrece solo el negro aprobado.
+  List<LashOption> get colors => groups['color'] ?? const [blackOption];
+
+  /// Color de la opción [id]; si no existe, el negro aprobado.
+  LashOption color(int id) => colors.firstWhere(
+    (o) => o.id == id,
+    orElse: () => blackOption,
+  );
   static const bundled = LashOptionCatalog({
     'length': [
       LashOption(0, 'Corto', {'scale': .78}),
@@ -136,6 +164,7 @@ class LashOptionCatalog {
       LashOption(2, 'Megavolumen', {'base_technique': 2, 'density': 1.0}),
       LashOption(3, 'Híbrida', {'base_technique': 3, 'density': 1.0}),
     ],
+    'color': [blackOption],
   });
   factory LashOptionCatalog.fromJson(Map<String, dynamic> m) {
     final groups = <String, List<LashOption>>{};
@@ -154,6 +183,22 @@ class LashOptionCatalog {
         throw const FormatException('Duplicate option');
       }
       groups[kind] = List.unmodifiable(options);
+    }
+    // Colores: opcionales (los servidores anteriores no los publican).
+    final colorList = m['color'];
+    if (colorList is List && colorList.isNotEmpty && colorList.length <= 64) {
+      final colors = colorList
+          .map(
+            (e) => LashOption.fromJson(
+              Map<String, dynamic>.from(e as Map),
+              'color',
+            ),
+          )
+          .toList();
+      if (colors.map((e) => e.id).toSet().length != colors.length) {
+        throw const FormatException('Duplicate option');
+      }
+      groups['color'] = List.unmodifiable(colors);
     }
     return LashOptionCatalog(Map.unmodifiable(groups));
   }

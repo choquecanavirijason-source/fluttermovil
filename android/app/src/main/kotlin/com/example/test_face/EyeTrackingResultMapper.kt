@@ -3,6 +3,7 @@ package com.example.test_face
 import android.graphics.Bitmap
 import com.example.test_face.render.ImagePoint
 import com.example.test_face.render.LashEdgeDetector
+import com.example.test_face.render.LashLineExtension
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 
 /**
@@ -145,16 +146,36 @@ class EyeTrackingResultMapper {
             return mapOf("x" to xs.average(), "y" to ys.average())
         }
 
-        fun ringPoints(ring: IntArray): Pair<List<Map<String, Double>>, List<Map<String, Double>>> {
+        /** [lateralFirst]: el anillo empieza en el canto EXTERNO (izquierdo,
+         * 33) en vez del interno (derecho, 362). */
+        fun ringPoints(ring: IntArray, lateralFirst: Boolean): Pair<List<Map<String, Double>>, List<Map<String, Double>>> {
             val valid = ring.filter { it < landmarks.size }
             val all = valid.map { point(it) }
             val lower = all.take(8)
-            val upper = if (all.size > 8) all.drop(8) else emptyList()
+            // drop(8) trae un solo canto; se agrega all[0] (el otro canto) al
+            // final, que es contiguo al último punto del arco en ambos ojos.
+            var upper = if (all.size > 8) all.drop(8) + all.take(1) else emptyList()
+            // Cola externa del párpado (ver LashLineExtension), en la punta
+            // del canto externo: al final si el anillo empieza por él, al
+            // principio si no.
+            if (all.size == ring.size && all.size > 8) {
+                fun ip(m: Map<String, Double>) = ImagePoint(m.getValue("x").toFloat(), m.getValue("y").toFloat())
+                val lateral = ip(if (lateralFirst) all[0] else all[8])
+                val medial = ip(if (lateralFirst) all[8] else all[0])
+                // Sin estado acá (overlay de diagnóstico): proporción del
+                // anillo de este frame, la misma medida que usa el motor.
+                val xs = all.map { it.getValue("x") }
+                val ys = all.map { it.getValue("y") }
+                val w = xs.max() - xs.min()
+                val ratio = if (w > 0.0) ((ys.max() - ys.min()) / w).toFloat() else 1f
+                upper = LashLineExtension.withTail(upper.map { ip(it) }, medial, lateral, ratio)
+                    .map { mapOf("x" to it.x.toDouble(), "y" to it.y.toDouble()) }
+            }
             return Pair(upper, lower)
         }
 
-        val (leftUpper, leftLower) = ringPoints(leftEyeRing)
-        val (rightUpper, rightLower) = ringPoints(rightEyeRing)
+        val (leftUpper, leftLower) = ringPoints(leftEyeRing, lateralFirst = true)
+        val (rightUpper, rightLower) = ringPoints(rightEyeRing, lateralFirst = false)
 
         fun toImagePoints(pts: List<Map<String, Double>>) =
             pts.map { ImagePoint(it.getValue("x").toFloat(), it.getValue("y").toFloat()) }

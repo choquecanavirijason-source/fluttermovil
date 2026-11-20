@@ -589,6 +589,12 @@ class CameraXManager(
         lashRenderer.loadEyeModels(leftPath, rightPath)
     }
 
+    /** Ver [LashRenderer.setLashColor]. */
+    fun setLashColor(hex: String?) {
+        Log.i(TAG, "setLashColor manager=${System.identityHashCode(this)} hex=$hex")
+        lashRenderer.setLashColor(hex)
+    }
+
     /** Ver [LashRenderer.setStyle]. */
     fun setLashStyle(styleId: String?) {
         Log.i(TAG, "setLashStyle manager=${System.identityHashCode(this)} styleId=$styleId")

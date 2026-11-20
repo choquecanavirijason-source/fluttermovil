@@ -13,6 +13,7 @@ class ClientDto with _$ClientDto {
     String? phone,
     String? email,
     String? status,
+    @JsonKey(name: 'visit_count') @Default(0) int visitCount,
   }) = _ClientDto;
 
   factory ClientDto.fromJson(Map<String, dynamic> json) =>

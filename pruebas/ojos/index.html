@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Referencias para probar la mirada</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101814; color: #f4f0e5; font: 15px system-ui,sans-serif; }
+  main { display: grid; grid-template-columns: 310px 1fr; min-height: 100vh; }
+  aside { padding: 28px; border-right: 1px solid #34453b; }
+  h1 { font-size: 23px; font-weight: 550; }
+  p, li { line-height: 1.6; color: #c2cec6; }
+  li { margin-bottom: 14px; }
+  button { border: 1px solid #9f8351; background: transparent; color: #f4f0e5; padding: 12px 16px; border-radius: 8px; cursor: pointer; }
+  nav { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
+  figure { margin: 0; display: flex; flex-direction: column; align-items: center; height: 100vh; padding: 14px; }
+  img { min-height: 0; flex: 1; width: 100%; object-fit: contain; }
+  figcaption { padding: 10px; text-align: center; }
+  .muted { font-size: 12px; color: #a3b6aa; }
+  body.focus main { grid-template-columns: 1fr; }
+  body.focus aside { display: none; }
+  #restore { display: none; position: fixed; top: 10px; left: 10px; background: #101814; }
+  body.focus #restore { display: block; }
+  @media(max-width: 700px) { main { grid-template-columns: 1fr; } figure { height: 85vh; } }
+</style>
+<main>
+  <aside>
+    <p class="muted">ELASHES · PRUEBA VISUAL</p>
+    <h1>Una referencia a la vez</h1>
+    <ol>
+      <li>Muestra un rostro completo en la pantalla y apunta la cámara hacia él.</li>
+      <li>Toca la etiqueta superior del probador y pulsa «Volver a analizar» al cambiar de rostro.</li>
+      <li>Mantén el teléfono quieto unos 3 segundos. Lee la forma y las medidas en la etiqueta.</li>
+      <li>Comprueba «Recomendados» y «Todos». Luego repite con la otra cámara.</li>
+    </ol>
+    <nav><button id="previous">Anterior</button><button id="next">Siguiente</button></nav>
+    <button id="focus">Mostrar solo el rostro</button>
+    <p id="goal"></p>
+    <p class="muted">Son retratos sintéticos generados con IA. Sus objetivos visuales son referencias aproximadas y deben contrastarse con las medidas del detector. La validación final requiere rostros reales.</p>
+    <details class="muted"><summary>Cómo se generaron</summary><p>Herramienta integrada de generación de imágenes. Tres prompts de retrato adulto frontal, expresión neutra, ojos abiertos, iluminación uniforme, sin maquillaje ni extensiones. Se variaron la apertura redondeada, el contorno almendrado y el contorno alargado.</p></details>
+  </aside>
+  <figure><img id="portrait" alt="Retrato sintético para probar la clasificación"><figcaption id="caption"></figcaption></figure>
+</main>
+<button id="restore">Volver a la guía</button>
+<script>
+  const examples = [
+    ['01-mayor-apertura.png', 'A · Mayor apertura', 'Objetivo visual de generación — ojos más redondos.'],
+    ['02-apertura-intermedia.png', 'B · Apertura intermedia', 'Objetivo visual de generación — contorno almendrado.'],
+    ['03-contorno-alargado.png', 'C · Contorno alargado', 'Objetivo visual de generación — ojos alargados o rasgados.']
+  ];
+  let index = 0;
+  function show(next) {
+    index = (next + examples.length) % examples.length;
+    document.getElementById('portrait').src = examples[index][0];
+    document.getElementById('caption').textContent = examples[index][1];
+    document.getElementById('goal').textContent = examples[index][2];
+  }
+  document.getElementById('previous').onclick = () => show(index - 1);
+  document.getElementById('next').onclick = () => show(index + 1);
+  document.getElementById('focus').onclick = () => document.body.classList.add('focus');
+  document.getElementById('restore').onclick = () => document.body.classList.remove('focus');
+  document.addEventListener('keydown', event => {
+    if (event.key === 'ArrowRight') show(index + 1);
+    if (event.key === 'ArrowLeft') show(index - 1);
+    if (event.key === 'Escape') document.body.classList.remove('focus');
+  });
+  show(0);
+</script>
+</html>

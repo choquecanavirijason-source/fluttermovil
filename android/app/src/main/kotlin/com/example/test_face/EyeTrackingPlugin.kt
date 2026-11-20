@@ -123,6 +123,10 @@ class EyeTrackingPlugin(
                 cameraXManager?.setLashStyle(styleId)
                 result.success(null)
             }
+            "setLashColor" -> {
+                cameraXManager?.setLashColor(call.argument<String>("color"))
+                result.success(null)
+            }
             // DIAGNÓSTICO: los flags de perf_flags.properties que aplica
             // Dart. Se parsea el archivo en el momento (es chico) en vez de
             // leer [PerfFlags.config], que recién se publica cuando el
