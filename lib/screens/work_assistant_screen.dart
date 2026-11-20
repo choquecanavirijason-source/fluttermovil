@@ -222,21 +222,24 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
         frame.rightEye.length >= 4) {
       _latestMappableFrame = frame;
     }
+    final now = DateTime.now();
     final holdUntil = _aiMessageHoldUntil;
-    if (holdUntil != null && DateTime.now().isBefore(holdUntil)) {
+    if (holdUntil != null && now.isBefore(holdUntil)) {
       return; // no pisar un consejo de IA reciente.
     }
-    final analysis = EyeShapeAnalyzer.analyze(frame);
-    final message = _buildGuidanceMessage(analysis);
-    if (message == _assistantMessage) return;
-
-    final now = DateTime.now();
+    // El mensaje cambia como mucho cada 1.2 s: se comprueba ANTES de
+    // analizar. Antes `EyeShapeAnalyzer.analyze` corría en el hilo de UI en
+    // CADA frame de cámara y casi todo se descartaba (la pantalla de la
+    // plantilla se sentía lenta).
     final last = _lastMessageUpdate;
     if (last != null &&
         now.difference(last) < const Duration(milliseconds: 1200)) {
       return;
     }
+    final analysis = EyeShapeAnalyzer.analyze(frame);
+    final message = _buildGuidanceMessage(analysis);
     _lastMessageUpdate = now;
+    if (message == _assistantMessage) return;
     setState(() => _assistantMessage = message);
   }
 
@@ -765,14 +768,18 @@ class _WorkAssistantScreenState extends ConsumerState<WorkAssistantScreen>
                   ),
                 ),
                 if (_mappingFrames.value != null)
-                  CustomPaint(
-                    isComplex: true,
-                    painter: LashMappingPainter(
-                      frames: _mappingFrames,
-                      styleId: widget.args?.mappingStyleId ?? 'cateye',
-                      labels: widget.args?.mappingLabels,
-                      leftEyeOffset: _leftEyeOffset,
-                      rightEyeOffset: _rightEyeOffset,
+                  // Capa propia: la plantilla no se vuelve a pintar por cada
+                  // setState de la pantalla (mensaje, contador de grabación).
+                  RepaintBoundary(
+                    child: CustomPaint(
+                      isComplex: true,
+                      painter: LashMappingPainter(
+                        frames: _mappingFrames,
+                        styleId: widget.args?.mappingStyleId ?? 'cateye',
+                        labels: widget.args?.mappingLabels,
+                        leftEyeOffset: _leftEyeOffset,
+                        rightEyeOffset: _rightEyeOffset,
+                      ),
                     ),
                   ),
               ],

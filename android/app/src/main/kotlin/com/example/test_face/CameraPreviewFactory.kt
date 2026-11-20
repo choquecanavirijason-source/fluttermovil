@@ -12,6 +12,12 @@ import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import io.github.sceneview.SceneView
+import io.github.sceneview.safeDestroy
+import io.github.sceneview.safeDestroyMaterialLoader
+import io.github.sceneview.safeDestroyModelLoader
+import io.github.sceneview.safeDestroyRenderer
+import io.github.sceneview.safeDestroyScene
+import io.github.sceneview.safeDestroyView
 
 class CameraPreviewFactory(
     private val activity: Activity,
@@ -126,6 +132,12 @@ class CameraPreviewFactory(
                 }
                 manager.detachPreview(previewView)
                 manager.detachSceneView(sceneView)
+                // Recién ahora, con los renderers ya desconectados (soltaron
+                // sus nodos/fondo de forma síncrona), se completa la
+                // destrucción que la librería deja a medias. Antes de esto
+                // sería use-after-free: destruir el engine mientras
+                // LashRenderer todavía tenía nodos vivos.
+                sceneView.completeTeardown()
             }
         }
     }
@@ -159,10 +171,17 @@ private class CrashSafeSceneView(
     sharedLifecycle: Lifecycle?,
     isOpaque: Boolean,
 ) : SceneView(context = context, sharedLifecycle = sharedLifecycle, isOpaque = isOpaque) {
+    /** La destrucción de la librería lanzó a mitad de camino. */
+    private var libraryTeardownFailed = false
+
+    /** [completeTeardown] ya corrió: nunca destruir el engine dos veces. */
+    private var teardownCompleted = false
+
     override fun onDetachedFromWindow() {
         try {
             super.onDetachedFromWindow()
         } catch (e: Throwable) {
+            libraryTeardownFailed = true
             Log.e(
                 "CameraPreviewFactory",
                 "onDetachedFromWindow: excepción ignorada (bug conocido de " +
@@ -170,5 +189,51 @@ private class CrashSafeSceneView(
                 e,
             )
         }
+    }
+
+    /**
+     * FUGA DE MEMORIA (bug de SceneView 2.1.1): `SceneView.destroy()` libera,
+     * en orden, cámara → luz → renderer → view → scene → loaders → ENGINE →
+     * contexto EGL; pero `CameraNode.destroy()` llama a `Node.destroy()` (que
+     * borra el entity y con él el componente de cámara) y DESPUÉS pide
+     * `getCamera()` → NullPointerException SIEMPRE. Todo lo que seguía
+     * quedaba vivo: cada entrada a la cámara o al robot dejaba un engine de
+     * Filament entero con su memoria de GPU. Visto en dispositivo: 3 engines
+     * creados y 0 destruidos, y `lmkd` mató la app con ~430 MB de RAM + 1.3 GB
+     * de swap.
+     *
+     * Completa esos pasos con la misma API `safeDestroy*` de la librería.
+     * Debe llamarse DESPUÉS de que los renderers propios se desconectaron
+     * (ver `dispose()`), nunca desde [onDetachedFromWindow].
+     */
+    fun completeTeardown() {
+        if (!libraryTeardownFailed || teardownCompleted) return
+        teardownCompleted = true
+        val eng = engine
+        fun step(name: String, block: () -> Unit) {
+            try {
+                block()
+            } catch (e: Throwable) {
+                Log.e("CameraPreviewFactory", "completeTeardown: falló $name (ignorado)", e)
+            }
+        }
+        step("luz") { mainLightNode?.destroy() }
+        step("renderer") { eng.safeDestroyRenderer(renderer) }
+        step("view") { eng.safeDestroyView(view) }
+        step("scene") { eng.safeDestroyScene(scene) }
+        step("environmentLoader") { environmentLoader.destroy() }
+        step("materialLoader") { eng.safeDestroyMaterialLoader(materialLoader) }
+        step("modelLoader") { eng.safeDestroyModelLoader(modelLoader) }
+        step("engine") { eng.safeDestroy() }
+        step("eglContext") {
+            // Privado en la librería: se lee por reflexión.
+            val field = SceneView::class.java.getDeclaredField("defaultEglContext")
+            field.isAccessible = true
+            (field.get(this) as? android.opengl.EGLContext)?.let {
+                io.github.sceneview.utils.OpenGL.destroyEglContext(it)
+            }
+        }
+        isDestroyed = true
+        Log.i("CameraPreviewFactory", "completeTeardown: engine y recursos de SceneView liberados")
     }
 }

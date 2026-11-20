@@ -374,8 +374,14 @@ class LashMappingPainter extends CustomPainter {
     final w = (outer - inner).distance;
     if (w < 5) return null;
 
-    // Línea de pestañas, ordenada interna → externa.
-    final lashLine = _orderedLashLine(upperLid, inner, outer);
+    // Línea de pestañas, ordenada interna → externa, como CURVA SUAVE (ver
+    // [_smoothLashLine]): con tramos rectos entre landmarks la plantilla
+    // copiaba el ruido de MediaPipe con el ojo cerrado y salía torcida.
+    final lashLine = _smoothLashLine(
+      _orderedLashLine(upperLid, inner, outer),
+      inner,
+      outer,
+    );
 
     // Ejes locales del ojo: `axis` recorre interna → externa, `toCheek` es su
     // perpendicular apuntando hacia la mejilla (donde va el parche).
@@ -658,6 +664,57 @@ class LashMappingPainter extends CustomPainter {
 
     return upperLid.map((p) => Offset(p.x, p.y)).toList()
       ..sort((a, b) => projection(a).compareTo(projection(b)));
+  }
+
+  /// Ajusta una curva suave a la línea de pestañas [raw] (ya ordenada
+  /// interna → externa) y la devuelve muestreada.
+  ///
+  /// Con el ojo cerrado MediaPipe ubica el párpado superior con ruido (se
+  /// junta con el inferior) y la polilínea por los landmarks zigzagueaba, así
+  /// que la plantilla del asistente salía "movida" o sin la forma de la
+  /// pestaña. Se ajusta por mínimos cuadrados, en el eje del ojo, una cúbica
+  /// que pasa EXACTO por las dos esquinas:
+  ///   v(s) = w · (a·s(1−s) + b·s²(1−s)),  s = 0 interna … 1 externa
+  /// `a` da el arco y `b` su asimetría (más alto hacia un lado), sin poder
+  /// copiar el temblor de cada punto. Sin datos suficientes, devuelve [raw].
+  static List<Offset> _smoothLashLine(
+    List<Offset> raw,
+    Offset inner,
+    Offset outer,
+  ) {
+    final span = outer - inner;
+    final w = span.distance;
+    if (raw.length < 3 || w < 1e-3) return raw;
+    final axis = span / w;
+    final normal = Offset(-axis.dy, axis.dx);
+    // Normales de mínimos cuadrados para (a, b).
+    var s11 = 0.0, s12 = 0.0, s22 = 0.0, r1 = 0.0, r2 = 0.0;
+    for (final p in raw) {
+      final d = p - inner;
+      final s = ((d.dx * axis.dx + d.dy * axis.dy) / w).clamp(0.0, 1.0);
+      final v = (d.dx * normal.dx + d.dy * normal.dy) / w;
+      final g1 = s * (1 - s);
+      final g2 = s * s * (1 - s);
+      s11 += g1 * g1;
+      s12 += g1 * g2;
+      s22 += g2 * g2;
+      r1 += g1 * v;
+      r2 += g2 * v;
+    }
+    final det = s11 * s22 - s12 * s12;
+    if (det.abs() < 1e-12) return raw;
+    final a = (r1 * s22 - r2 * s12) / det;
+    final b = (s11 * r2 - s12 * r1) / det;
+    if (!a.isFinite || !b.isFinite) return raw;
+    const samples = 32;
+    return [
+      for (var i = 0; i <= samples; i++)
+        () {
+          final s = i / samples;
+          final v = w * (a * s * (1 - s) + b * s * s * (1 - s));
+          return inner + axis * (s * w) + normal * v;
+        }(),
+    ];
   }
 
   /// Punto sobre la polilínea [pts] a la fracción [t] de su largo total.

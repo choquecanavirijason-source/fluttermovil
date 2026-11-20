@@ -1336,9 +1336,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     }
   }
 
+  /// La última captura usó el respaldo con el plugin `camera` (segunda
+  /// sesión de cámara) en vez de la foto nativa.
+  bool _lastCaptureUsedPluginFallback = false;
+
   Future<void> _resumeEyePreviewAfterAssistant() async {
-    // Espera extra para que el plugin `camera` libere el hardware completamente.
-    await Future<void>.delayed(const Duration(milliseconds: 800));
+    // Espera para que el plugin `camera` libere el hardware: solo hace
+    // falta si la foto usó ese respaldo. Con la foto nativa (lo normal) la
+    // espera fija de 800 ms era lo que hacía lento el cierre del robot.
+    await Future<void>.delayed(
+      Duration(milliseconds: _lastCaptureUsedPluginFallback ? 800 : 150),
+    );
     if (!mounted) return;
     // El asistente puede haber cambiado de cámara: si cambió, se apaga
     // "Invertir" (ver [_cameraInverted180]) antes de reaplicarlo.
@@ -1423,6 +1431,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   Future<void> _finishWorkAssistantOpen() async {
     if (_workAssistantOpening) return;
     _workAssistantOpening = true;
+    _lastCaptureUsedPluginFallback = false;
     try {
       // Con "Clienta echada" la cámara NO se gira: foto, overlay y landmarks
       // (ya desrotados en nativo) quedan en la orientación en que la
@@ -1542,6 +1551,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
           '[EyeTracking] takePhoto nativo no disponible — usando el '
           'camino de respaldo con el plugin camera',
         );
+        _lastCaptureUsedPluginFallback = true;
         await _service.stopTracking();
         await Future<void>.delayed(const Duration(milliseconds: 450));
         if (!mounted) return;
