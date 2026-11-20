@@ -63,7 +63,21 @@ object RendererConfiguration {
      * vez de vertical (ver LashMeshBender, root binding). 0 = todas
      * verticales (en la esquina externa quedaban paradas contra el borde
      * inclinado, "forzadas"); 1 = perpendicular exacta (abanico completo). */
-    const val LASH_FIBER_FOLLOW_NORMAL = 0.0f
+    const val LASH_FIBER_FOLLOW_NORMAL = 0.6f
+
+    /** Inclinación hacia adelante (hacia la cámara) de la fibra en la RAÍZ,
+     * en grados; baja hacia la punta (ver LashMeshBender y
+     * [LASH_PROJECTION_TIP_FRACTION]). Una pestaña
+     * natural sale del párpado hacia adelante y se curva hacia arriba; con 0
+     * las fibras nacen verticales y se ven "paradas" a 90°. Subir = más
+     * proyectada (y más corta vista de frente). */
+    const val LASH_PROJECTION_DEG = 70f
+
+    /** Fracción de [LASH_PROJECTION_DEG] que conserva la PUNTA de la fibra.
+     * 0 = la punta vuelve a vertical (la fibra termina justo encima de la
+     * raíz y de frente se ve igual de recta: probado, no se notaba); 1 = la
+     * fibra entera inclinada sin curva. */
+    const val LASH_PROJECTION_TIP_FRACTION = 0.5f
 
     /** Desde esta proporción alto/ancho del ojo abierto, sin cola EXTRA
      * (redondos; `pruebas/ojos` 04 = 0.41). */

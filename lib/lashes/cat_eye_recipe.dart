@@ -37,7 +37,7 @@ class CatEyeRecipe {
   String get styleId => styleIds[style];
   String get key {
     if (catalogStyleKey == null && profile == null && options == null) {
-      return '${styleId}_${style == 0 ? 'v1' : 'v2'}_${length}_${technique}_$thickness';
+      return '${styleId}_${style == 0 ? 'v1' : 'v2'}${_geometryTag}_${length}_${technique}_$thickness';
     }
     var hash = 0x811c9dc5;
     for (final byte in utf8.encode(
@@ -49,7 +49,7 @@ class CatEyeRecipe {
       RegExp('[^a-z0-9_-]'),
       '_',
     );
-    return 'remote_${safe}_${catalogRevision}_${hash.toRadixString(16)}_${length}_${technique}_$thickness';
+    return 'remote_${_geometryTag}_${safe}_${catalogRevision}_${hash.toRadixString(16)}_${length}_${technique}_$thickness';
   }
 
   Map<String, dynamic> toMap() => {
@@ -141,6 +141,11 @@ class CatEyeRecipe {
   int get fiberCount => List.generate(roots, fanSize).fold(0, (a, b) => a + b);
 }
 
+/// Versión de la geometría generada: entra en [CatEyeRecipe.key] para que
+/// los .glb ya guardados en caché se regeneren al cambiar la receta.
+/// g2: fibras irregulares (largo/ángulo) y curvas.
+const _geometryTag = 'g2';
+
 double _smooth(double t) {
   t = t.clamp(0.0, 1.0);
   return t * t * (3 - 2 * t);
@@ -180,9 +185,11 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
       final start = p.length;
       for (var j = 0; j <= 9; j++) {
         final s = j / 9;
+        // La inclinación crece hacia la punta (+ s²): la fibra se curva en
+        // vez de ser una recta, como una pestaña natural.
         final cx =
             x +
-            math.sin(theta) * length * math.pow(s, 1.12) +
+            math.sin(theta) * length * (math.pow(s, 1.12) + .18 * s * s) +
             jitter * length * math.sin(math.pi * s);
         final cy = math.cos(theta) * length * s;
         final cz = z + recipe.curl * length * (1.15 * s * s - .15 * s * s * s);
@@ -207,12 +214,14 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
 
   for (var i = 0; i < recipe.roots; i++) {
     final t = i / (recipe.roots - 1);
-    final length = recipe.lengthAt(t, i) * scale * (.9 + .2 * rng.nextDouble());
+    // Irregularidad natural (antes ±10% de largo y ±3°: se veía como un
+    // peine, todas iguales y paralelas).
+    final length = recipe.lengthAt(t, i) * scale * (.82 + .36 * rng.nextDouble());
     final angle =
         (.5 - t) * recipe.fan -
         recipe.sweep * _smooth((t - .35) / .65) +
-        (rng.nextDouble() - .5) * 6;
-    final jitter = (rng.nextDouble() - .5) * .064;
+        (rng.nextDouble() - .5) * 16;
+    final jitter = (rng.nextDouble() - .5) * .14;
     final count = recipe.fanSize(i);
     for (var f = 0; f < count; f++) {
       final spread = count == 1
@@ -238,8 +247,10 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
           : (f / (count - 1) - .5) * customSpread;
       fiber(
         t,
-        length * (1 - .06 * resolvedSpread.abs() / 8),
-        angle + resolvedSpread,
+        length *
+            (1 - .06 * resolvedSpread.abs() / 8) *
+            (.9 + .2 * rng.nextDouble()),
+        angle + resolvedSpread + (rng.nextDouble() - .5) * 5,
         jitter,
       );
     }

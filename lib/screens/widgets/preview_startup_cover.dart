@@ -1,25 +1,64 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'lash_loading_eye.dart';
 
 /// Covers startup work until an actual camera analysis frame is available.
 /// No timer reveals the preview; the timer in the page only reports failure.
-class PreviewStartupCover extends StatelessWidget {
+///
+/// Se muestra SIEMPRE completo y al menos [minVisible]: cuando la cámara
+/// arranca rápido (segunda entrada) el loader no aparece y desaparece de
+/// golpe, sino que se ve entero y se desvanece suave.
+class PreviewStartupCover extends StatefulWidget {
   const PreviewStartupCover({
     super.key,
     required this.ready,
     required this.onBack,
     this.error,
+    this.minVisible = const Duration(seconds: 3),
+    this.message = 'Preparando el probador…',
   });
   final bool ready;
   final String? error;
   final VoidCallback onBack;
+  final Duration minVisible;
+
+  /// Texto bajo el ojo animado mientras carga.
+  final String message;
+
+  @override
+  State<PreviewStartupCover> createState() => _PreviewStartupCoverState();
+}
+
+class _PreviewStartupCoverState extends State<PreviewStartupCover> {
+  Timer? _minTimer;
+  bool _minElapsed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _minTimer = Timer(widget.minVisible, () {
+      if (mounted) setState(() => _minElapsed = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _minTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Listo = hay frame de cámara Y ya pasó el tiempo mínimo en pantalla.
+  bool get ready => widget.ready && _minElapsed;
+  String? get error => widget.error;
+  VoidCallback get onBack => widget.onBack;
 
   @override
   Widget build(BuildContext context) => Positioned.fill(
     child: IgnorePointer(
       ignoring: ready,
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 350),
         child: ready
             ? const SizedBox.shrink(key: ValueKey('preview-ready'))
             : Material(
@@ -92,7 +131,7 @@ class PreviewStartupCover extends StatelessWidget {
                                   ),
                                 const SizedBox(height: 20),
                                 Text(
-                                  error ?? 'Preparando el probador…',
+                                  error ?? widget.message,
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(
                                     color: Colors.white,

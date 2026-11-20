@@ -977,6 +977,11 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _startupFailure = null;
     }
     _frame = frame;
+    // El primer frame tiene que redibujar SIEMPRE: quita la portada de
+    // carga (`PreviewStartupCover`, `ready: _frame != null`). Antes solo se
+    // redibujaba si ese frame traía rostro, y la portada quedaba hasta que
+    // otro cambio cualquiera redibujara (aparecía/desaparecía al azar).
+    if (isFirstFrame && mounted) setState(() {});
     _maybeLoadPublishedCatalog();
     // Repintado de los overlays: independiente del throttle de `setState`
     // (ver [_frameNotifier]) — aquí no hay límite, cada frame que llega se
@@ -1661,6 +1666,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// [_beginWorkAssistantFlow]). Auto-disparar obligaba a sostener los ojos
   /// cerrados durante todo el procesamiento posterior, y además la foto
   /// salía de un instante distinto al que se estaba viendo.
+  /// Cuenta las entradas al asistente de encuadre; 0 = todavía ninguna.
+  /// Cada entrada muestra el loader (ver `PreviewStartupCover` en build()).
+  int _guideLoaderSession = 0;
+
   void _toggleAlignmentGuide() {
     if (_workAssistantOpening || _buildingRecipe || _switchingDesignModel) {
       return;
@@ -1668,6 +1677,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     final activating = !_alignmentGuideActive;
     setState(() {
       _alignmentGuideActive = activating;
+      // Nueva sesión del loader del asistente (key nueva = su tiempo mínimo
+      // vuelve a contar desde cero en cada entrada).
+      if (activating) _guideLoaderSession++;
       // Lying-client analysis belongs to the guide. Restore the regular
       // preview mode when returning to the lash try-on screen.
       if (!activating) _cameraInverted180 = false;
@@ -2651,6 +2663,16 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                     ),
                   ),
                 ),
+              ),
+            // Loader al entrar al asistente (botón del robot): el mismo de la
+            // cámara, con mínimo 2 s; "volver" cierra el asistente.
+            if (_alignmentGuideActive && _guideLoaderSession > 0)
+              PreviewStartupCover(
+                key: ValueKey('guide-loader-$_guideLoaderSession'),
+                ready: _frame != null,
+                minVisible: const Duration(seconds: 2),
+                message: 'Preparando el asistente…',
+                onBack: _toggleAlignmentGuide,
               ),
             PreviewStartupCover(
               ready: _frame != null,

@@ -284,6 +284,10 @@ object LashMeshBender {
                 (dropCos - 1f) * rootZ - dropSin * rootY * scaleYToZ else 0f
             var bentY = pos.y + rootY + correctionY
             var bentZ = pos.z - depthDropLocal + correctionZ
+            // Giros que el root binding aplica a la fibra; se repiten en la
+            // tangente (iluminación) más abajo.
+            var fanAngle = 0f
+            var projAngle = 0f
             if (rootBinding != null && rootDepths != null) {
                 // Las fibras de las puntas son las más cortas/delgadas y se
                 // inclinan hacia afuera: mapeando la banda justo de punta a
@@ -338,11 +342,37 @@ object LashMeshBender {
                         // De mundo a local: X se divide por scaleXToY.
                         offX = h * mx / scaleXToY
                         offY = h * my
+                        fanAngle = kotlin.math.atan2(-mx, my)
                     }
+                }
+                var offZ = (pos.z - rootDepths[i]) * taper
+                // Proyección hacia adelante: una pestaña natural sale del
+                // párpado HACIA ADELANTE (hacia quien mira) y se curva hacia
+                // arriba; las fibras del modelo nacían verticales (≈90°) y se
+                // veían "paradas". Se gira el desplazamiento de la fibra hacia
+                // +Z con un ángulo máximo en la raíz que baja hacia la punta
+                // (uv.x = 0 raíz … 1 punta en los modelos del motor), así queda
+                // en "J": nace hacia adelante y termina más vertical. El giro se
+                // hace en espacio de MUNDO (escala Y≠Z del nodo).
+                val projRad = RendererConfiguration.LASH_PROJECTION_DEG * (Math.PI.toFloat() / 180f)
+                if (projRad != 0f && scaleYToZ.isFinite() && scaleYToZ > 1e-6f) {
+                    val along = (vertices[i].uvCoordinate?.x ?: 1f).coerceIn(0f, 1f)
+                    // En la punta queda LASH_PROJECTION_TIP_FRACTION del ángulo:
+                    // si bajara a 0, la punta volvía justo encima de la raíz y
+                    // de frente la fibra se veía igual de vertical.
+                    val tipFraction = RendererConfiguration.LASH_PROJECTION_TIP_FRACTION
+                    val a = projRad * (1f - (1f - tipFraction) * along)
+                    val ca = cos(a)
+                    val sa = sin(a)
+                    val yw = offY
+                    val zw = offZ / scaleYToZ
+                    offY = yw * ca - zw * sa
+                    offZ = (yw * sa + zw * ca) * scaleYToZ
+                    projAngle = a
                 }
                 bentX = rootSample[0] + offX
                 bentY = rootSample[1] + offY
-                bentZ = rootSample[2] + (pos.z - rootDepths[i]) * taper
+                bentZ = rootSample[2] + offZ
             }
 
             val base = i * POSITION_COMPONENTS
@@ -380,15 +410,28 @@ object LashMeshBender {
             // base tangente/bitangente/normal desde cero. q_tilt = rotación
             // alrededor de Z: (x=0, y=0, z=sin(angle/2), w=cos(angle/2)) —
             // con x=y=0 el producto de Hamilton se simplifica a esto:
-            val angle = atan(slope)
+            // + el abanico (giro en Z) y la proyección hacia adelante (giro en
+            // X) del root binding: sin esto la fibra se giraba pero su
+            // iluminación seguía la de la fibra vertical y se veía gris/lavada.
+            val angle = atan(slope) + fanAngle
             val half = angle * 0.5f
             val sinHalf = sin(half)
             val cosHalf = cos(half)
             val tb = i * TANGENT_COMPONENTS
-            val rx = restTangents[tb]
-            val ry = restTangents[tb + 1]
-            val rz = restTangents[tb + 2]
-            val rw = restTangents[tb + 3]
+            var rx = restTangents[tb]
+            var ry = restTangents[tb + 1]
+            var rz = restTangents[tb + 2]
+            var rw = restTangents[tb + 3]
+            if (projAngle != 0f) {
+                // q_x(projAngle) * q_rest (producto de Hamilton con y=z=0).
+                val sx = sin(projAngle * 0.5f)
+                val cx = cos(projAngle * 0.5f)
+                val nx = cx * rx + sx * rw
+                val ny = cx * ry - sx * rz
+                val nz = cx * rz + sx * ry
+                val nw = cx * rw - sx * rx
+                rx = nx; ry = ny; rz = nz; rw = nw
+            }
             if (tangentOutput != null) {
                 tangentOutput[tb] = cosHalf * rx - sinHalf * ry
                 tangentOutput[tb + 1] = cosHalf * ry + sinHalf * rx
