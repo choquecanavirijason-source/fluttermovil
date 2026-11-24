@@ -71,7 +71,18 @@ class LashOption {
         'layer_split': p['layer_split'] == null
             ? 0.0
             : number('layer_split', 0, 40),
+        // Forma del grupo: tramo en que van juntas antes de abrirse, cuánto
+        // se vuelven a unir las puntas y curva extra del nivel de arriba.
       });
+      // Solo si se usan: las técnicas sin forma de grupo se guardan como siempre.
+      for (final (key, min, max) in const [
+        ('stem', 0.0, .6),
+        ('tip_merge', 0.0, 1.0),
+        ('layer_curl', -40.0, 40.0),
+      ]) {
+        final v = p[key] == null ? 0.0 : number(key, min, max);
+        if (v != 0) values[key] = v;
+      }
     } else if (kind == 'curl') {
       values.addAll(LashCurl.fromParameters(p).toParameters());
     } else if (kind == 'color') {
@@ -80,6 +91,10 @@ class LashOption {
         throw const FormatException('Invalid lash color');
       }
       values['color'] = color.toUpperCase();
+      // Brillo del material (0 mate … 1 brillante).
+      // Solo si hay brillo: los colores mate se guardan como siempre.
+      final gloss = p['gloss'] == null ? 0.0 : number('gloss', 0, 1);
+      if (gloss > 0) values['gloss'] = gloss;
     } else {
       throw const FormatException('Unknown option kind');
     }

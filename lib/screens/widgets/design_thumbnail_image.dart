@@ -29,6 +29,10 @@ class DesignThumbnailImage extends StatefulWidget {
   /// fibra en vista lateral con el mismo modelo del motor ([LashCurl]).
   static const curlPrefix = 'curl:';
 
+  /// Prefijo de los niveles de intensidad (`fill:0|1|2`): una tira de
+  /// pestañas más rala o más tupida.
+  static const fillPrefix = 'fill:';
+
   @override
   State<DesignThumbnailImage> createState() => _DesignThumbnailImageState();
 }
@@ -69,13 +73,30 @@ class _DesignThumbnailImageState extends State<DesignThumbnailImage> {
   /// Prefijo de las muestras del catálogo de colores (`swatch:#RRGGBB`).
   static const swatchPrefix = 'swatch:';
 
-
   @override
   Widget build(BuildContext context) {
     if (path.isEmpty) return _fallbackIcon();
     if (path.startsWith(swatchPrefix)) return _swatch();
+    if (path.startsWith(DesignThumbnailImage.fillPrefix)) {
+      final level = int.tryParse(
+        path.substring(DesignThumbnailImage.fillPrefix.length),
+      );
+      if (level == null) return _fallbackIcon();
+      return SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(
+          painter: _FillGlyphPainter(
+            level.clamp(0, 2),
+            color ?? const Color(0xFF1B1B1B),
+          ),
+        ),
+      );
+    }
     if (path.startsWith(DesignThumbnailImage.curlPrefix)) {
-      final parts = path.substring(DesignThumbnailImage.curlPrefix.length).split(',');
+      final parts = path
+          .substring(DesignThumbnailImage.curlPrefix.length)
+          .split(',');
       final values = parts.map(double.tryParse).toList();
       if (values.length != 3 || values.contains(null)) return _fallbackIcon();
       return SizedBox(
@@ -226,4 +247,41 @@ class _CurlGlyphPainter extends CustomPainter {
   @override
   bool shouldRepaint(_CurlGlyphPainter old) =>
       old.curl != curl || old.color != color;
+}
+
+/// Tira de pestañas para los niveles de intensidad: más fibras y más
+/// marcadas en cada nivel.
+class _FillGlyphPainter extends CustomPainter {
+  _FillGlyphPainter(this.level, this.color);
+  final int level;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final count = const [6, 10, 15][level];
+    final w = size.width, h = size.height;
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = math.max(1.0, size.shortestSide * (.035 + .012 * level))
+      ..isAntiAlias = true;
+    // Línea del párpado (arco suave) y fibras que nacen de ella en abanico.
+    for (var i = 0; i < count; i++) {
+      final t = i / (count - 1);
+      final x = w * (.14 + .72 * t);
+      final y = h * (.74 - .12 * math.sin(math.pi * t));
+      final angle = (t - .5) * 1.1;
+      final len = h * (.38 + .14 * math.sin(math.pi * t));
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x + math.sin(angle) * len, y - math.cos(angle) * len),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FillGlyphPainter old) =>
+      old.level != level || old.color != color;
 }

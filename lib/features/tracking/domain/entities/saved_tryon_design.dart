@@ -21,6 +21,7 @@ class SavedTryOnDesign {
     this.curlId,
     this.curlName,
     this.curl,
+    this.fillLevel = 1,
     this.options,
     this.profile,
   });
@@ -30,6 +31,9 @@ class SavedTryOnDesign {
   final int? curlId;
   final String? curlName;
   final LashCurl? curl;
+
+  /// Intensidad elegida en el probador (0 suave, 1 normal, 2 intenso).
+  final int fillLevel;
 
   final String styleKey, styleName;
   final int revision;
@@ -92,6 +96,7 @@ class SavedTryOnDesign {
         curlId: curl?.id,
         curlName: curl?.name,
         curl: curl == null ? null : LashCurl.fromParameters(curl.parameters),
+        fillLevel: ((selection['fill'] as int?) ?? 1).clamp(0, 2),
         options: options,
         profile: profileRaw is Map
             ? LashRenderProfile.fromJson(Map<String, dynamic>.from(profileRaw))

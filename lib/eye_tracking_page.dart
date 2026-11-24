@@ -426,6 +426,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _selectedColorId = design.colorId;
       _savedColorHex = design.colorHex ?? LashOptionCatalog.approvedBlack;
       _selectedCurlId = design.curlId;
+      _selectedFillLevel = design.fillLevel;
       _activeCategory = null;
       _showTransparentMenu = true;
     });
@@ -458,6 +459,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   thickness: design.thickness,
                   curlShape: design.curl,
                   curlId: design.curlId,
+                  fillLevel: design.fillLevel,
                 ),
           request,
         ),
@@ -544,6 +546,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     _selectedColorId = style?.defaultColor ?? 0;
     _savedColorHex = null;
     _selectedCurlId = _appliedRecipe?.curlId ?? style?.defaultCurl;
+    _selectedFillLevel = _appliedRecipe?.fillLevel ?? 1;
   }
 
   Future<void> _applyRecipe(CatEyeRecipe recipe, int request) async {
@@ -556,7 +559,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         return;
       }
       setState(() => _switchingDesignModel = true);
-      await _service.setLashColor(_selectedColorHex);
+      await _service.setLashColor(_selectedColorHex, gloss: _selectedGloss);
       await _service.loadEyeModels(
         leftPath: paths.left,
         rightPath: paths.right,
@@ -604,6 +607,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// Curvatura elegida (`null` = curva propia del estilo).
   int? _selectedCurlId;
 
+  /// Intensidad del relleno elegida (0 suave, 1 normal, 2 intenso).
+  int _selectedFillLevel = 1;
+
   /// Color de pestaña elegido (id del catálogo; 0 = negro aprobado).
   int _selectedColorId = 0;
 
@@ -623,6 +629,17 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 .parameters['color']
             as String?;
     return hex == null || hex == LashOptionCatalog.approvedBlack ? null : hex;
+  }
+
+  /// Brillo del material del color elegido (0 mate … 1 brillante). Un color
+  /// guardado que el catálogo ya no ofrece queda mate.
+  double get _selectedGloss {
+    final option = _selectedPreset?.definition.options.color(_selectedColorId);
+    if (_savedColorHex != null &&
+        option?.parameters['color'] != _savedColorHex) {
+      return 0;
+    }
+    return (option?.parameters['gloss'] as num?)?.toDouble() ?? 0;
   }
 
   /// El estilo elegido ofrece más de un color (si no, no hay selector).
@@ -818,7 +835,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       if (!mounted) return;
       _leftModelPath = leftPath;
       _rightModelPath = rightPath;
-      await _service.setLashColor(_selectedColorHex);
+      await _service.setLashColor(_selectedColorHex, gloss: _selectedGloss);
       await _service.loadEyeModels(leftPath: leftPath, rightPath: rightPath);
       final styleId = CatEyeRecipe.styleIds[preset.engineStyle];
       await _service.setLashStyle(styleId);
@@ -1186,6 +1203,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       'thickness' => style?.thicknesses ?? const [0, 1, 2, 3],
       'color' => style?.colorOptions.map((o) => o.id).toList() ?? const [0],
       'curl' => style?.curlOptions.map((o) => o.id).toList() ?? const [],
+      'fill' => const [0, 1, 2],
       _ => const [],
     };
   }
@@ -1195,9 +1213,12 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     'tech' => 'technique',
     'color' => 'color',
     'curl' => 'curl',
+    'fill' => 'fill',
     _ => 'thickness',
   };
-  String _optionLabel(String kind, int id) => kind == 'color'
+  String _optionLabel(String kind, int id) => kind == 'fill'
+      ? CatEyeRecipe.fillLevelNames[id]
+      : kind == 'color'
       ? _selectedPreset!.definition.options.color(id).name
       : _selectedPreset!.definition.options.get(kind, id).name;
   List<int> get _recommendedPresetIndices {
@@ -1239,6 +1260,10 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   'swatch:${_selectedPreset!.definition.options.color(id).parameters['color']}',
             )
             .toList()
+      : _activeCategory == 'fill'
+      ? _activeOptionValues
+            .map((id) => '${DesignThumbnailImage.fillPrefix}$id')
+            .toList()
       : _activeCategory == 'curl'
       ? _activeOptionValues.map((id) {
           final c = _selectedPreset!.definition.options.curlShape(id);
@@ -1271,6 +1296,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       'thickness' => _selectedThicknessIndex,
       'color' => _selectedColorId,
       'curl' => _selectedCurlId ?? -1,
+      'fill' => _selectedFillLevel,
       _ => -1,
     };
     return _activeCategory == 'effect'
@@ -1313,6 +1339,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         case 'curl':
           _selectedCurlId = _activeOptionValues[index];
           break;
+        case 'fill':
+          _selectedFillLevel = _activeOptionValues[index];
+          break;
       }
       _buildingRecipe = true;
     });
@@ -1321,6 +1350,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       technique: _selectedTechIndex,
       thickness: _selectedThicknessIndex,
       curl: _selectedCurlId,
+      fill: _selectedFillLevel,
     );
     final request = ++_recipeRequest;
     _recipeTimer?.cancel();
@@ -1343,7 +1373,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _switchingDesignModel = true;
     });
     try {
-      await _service.setLashColor(_selectedColorHex);
+      await _service.setLashColor(_selectedColorHex, gloss: _selectedGloss);
       await _service.loadEyeModels(
         leftPath: _leftModelPath,
         rightPath: _rightModelPath,
@@ -2371,6 +2401,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                         false)
                     ? () => _onCategoryTap('curl')
                     : null,
+                onFillTap: () => _onCategoryTap('fill'),
                 onColorTap: _hasColorChoices
                     ? () => _onCategoryTap('color')
                     : null,

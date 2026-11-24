@@ -590,9 +590,9 @@ class CameraXManager(
     }
 
     /** Ver [LashRenderer.setLashColor]. */
-    fun setLashColor(hex: String?) {
+    fun setLashColor(hex: String?, gloss: Float = 0f) {
         Log.i(TAG, "setLashColor manager=${System.identityHashCode(this)} hex=$hex")
-        lashRenderer.setLashColor(hex)
+        lashRenderer.setLashColor(hex, gloss)
     }
 
     /** Ver [LashRenderer.setStyle]. */

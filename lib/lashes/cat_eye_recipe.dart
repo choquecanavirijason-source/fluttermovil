@@ -31,6 +31,10 @@ class CatEyeRecipe {
 
   /// Id del catálogo de la curvatura elegida (`null` = curva del estilo).
   final int? curlId;
+
+  /// Nivel de intensidad elegido en el probador: 0 suave, 1 normal (la del
+  /// estilo), 2 intenso. Ver [fillFactors].
+  final int fillLevel;
   const CatEyeRecipe({
     this.length = 1,
     this.technique = 0,
@@ -42,7 +46,14 @@ class CatEyeRecipe {
     this.catalogRevision = 0,
     this.curlShape,
     this.curlId,
+    this.fillLevel = 1,
   });
+
+  /// Factor de cada nivel de intensidad sobre la del estilo.
+  static const fillFactors = [.75, 1.0, 1.35];
+
+  /// Nombres de los niveles para el probador.
+  static const fillLevelNames = ['Suave', 'Normal', 'Intenso'];
 
   /// Curva con la que se genera la fibra.
   LashCurl get effectiveCurl => curlShape ?? LashCurl.fromStyleCurl(curl);
@@ -51,7 +62,8 @@ class CatEyeRecipe {
     if (catalogStyleKey == null &&
         profile == null &&
         options == null &&
-        curlShape == null) {
+        curlShape == null &&
+        fillLevel == 1) {
       return '${styleId}_${style == 0 ? 'v1' : 'v2'}${_geometryTag}_${length}_${technique}_$thickness';
     }
     var hash = 0x811c9dc5;
@@ -60,6 +72,8 @@ class CatEyeRecipe {
         'profile': profile?.toJson(),
         'options': options?.toJson(),
         'curl': curlShape?.toParameters(),
+        // Solo si cambia: los diseños de intensidad normal conservan su clave.
+        if (fillLevel != 1) 'fill_level': fillLevel,
       }),
     )) {
       hash = ((hash ^ byte) * 0x01000193) & 0xffffffff;
@@ -79,6 +93,7 @@ class CatEyeRecipe {
     'catalog_revision': catalogRevision,
     'curl': curlShape?.toParameters(),
     'curl_id': curlId,
+    'fill_level': fillLevel,
     'length': length,
     'technique': technique,
     'thickness': thickness,
@@ -101,6 +116,7 @@ class CatEyeRecipe {
         ? null
         : LashCurl.fromParameters(Map<String, dynamic>.from(m['curl'] as Map)),
     curlId: m['curl_id'] as int?,
+    fillLevel: ((m['fill_level'] as int?) ?? 1).clamp(0, 2),
     length: m['length']!,
     technique: m['technique']!,
     thickness: m['thickness']!,
@@ -132,11 +148,16 @@ class CatEyeRecipe {
     final maxFan =
         options?.technique.parameters['fibers_per_group'] as int? ??
         [1, 3, 6, 3][engineTechnique];
-    return (base * density * densityBoost).round().clamp(
+    return (base * density * densityBoost * fillIntensity).round().clamp(
       8,
       math.min(180, maxFibersPerEye ~/ maxFan),
     );
   }
+
+  /// Intensidad del relleno del estilo (1 = normal … 2 = más tupido y
+  /// marcado): más grupos y fibras un poco más gruesas.
+  double get fillIntensity =>
+      (profile?.fill ?? 1) * fillFactors[fillLevel.clamp(0, 2)];
 
   double get curl =>
       profile?.curl ??
@@ -183,7 +204,20 @@ class CatEyeRecipe {
 /// los .glb ya guardados en caché se regeneren al cambiar la receta.
 /// g2: fibras irregulares (largo/ángulo) y curvas.
 /// g3: curvatura paramétrica (LashCurl) y más densidad.
-const _geometryTag = 'g3';
+/// g4: fibras más finas, con forma de pelo y tono variable por fibra.
+/// g5: forma del grupo (tallo, puntas unidas) y curva por nivel.
+const _geometryTag = 'g5';
+
+/// Ancho visual de la fibra a 0.15 mm (unidades del modelo; antes .028).
+const _fiberWidthAt015 = .0168;
+
+/// Perfil del ancho a lo largo de la fibra (s = 0 raíz … 1 punta): parejo
+/// hasta el 60% y afinado suave hasta una punta fina.
+double _hairTaper(double s) {
+  if (s <= .6) return 1;
+  final t = ((s - .6) / .4).clamp(0.0, 1.0);
+  return .04 + .96 * (1 - t * t * (3 - 2 * t));
+}
 
 /// Tramos a lo largo de cada fibra (perfil de [LashCurl]).
 const _curlSamples = 10;
@@ -227,22 +261,59 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
       (recipe.options?.technique.parameters['layer_split'] as num?)
           ?.toDouble() ??
       0;
+  double techniqueParam(String key) =>
+      (recipe.options?.technique.parameters[key] as num?)?.toDouble() ?? 0;
+  // Forma del grupo: tramo en que las fibras van juntas antes de abrirse
+  // (tallo) y cuánto se vuelven a unir las puntas (laminado / húmedo).
+  final stem = techniqueParam('stem');
+  final tipMerge = techniqueParam('tip_merge');
+  // Curvas combinadas: el nivel de arriba se curva más (o menos) que el de
+  // abajo. Solo tiene sentido con separación en altura.
+  final layerCurl = layerSplit > 0 ? techniqueParam('layer_curl') : 0.0;
+  final effective = recipe.effectiveCurl;
+  final upperCurl = layerCurl == 0
+      ? curl
+      : LashCurl(
+          (effective.degrees + layerCurl).clamp(0.0, 150.0),
+          effective.position,
+          effective.sharpness,
+        ).profile(_curlSamples);
+
+  /// Apertura del grupo a lo largo de la fibra (0 juntas … 1 abiertas).
+  double openAt(double s) {
+    final rise = stem <= 0 ? 1.0 : _smooth((s - stem) / (stem * .8));
+    return rise * (1 - tipMerge * _smooth((s - .55) / .45));
+  }
+
   void fiber(
     double t,
     double length,
     double angle,
     double jitter, [
     double liftDeg = 0,
+    double tone = 1,
+    double groupOffset = 0,
   ]) {
-    final x = (.5 - t) * 3, z = _rootZ(x), theta = angle * math.pi / 180;
+    final x = (.5 - t) * 3, z = _rootZ(x);
+    final profile = liftDeg > 0 ? upperCurl : curl;
     final lift = liftDeg * math.pi / 180;
     final cosLift = math.cos(lift), sinLift = math.sin(lift);
+    // Ancho visual: proporcional al diámetro (0.15 mm = 3× 0.05 mm). Antes
+    // .028 a 0.15 mm (≈3× la proporción real largo/grosor): las fibras se
+    // veían como cintas de plástico. No se lleva a la proporción real exacta
+    // porque en el teléfono quedaría por debajo de un píxel.
     final width =
-        .028 * diameter / .15 * (recipe.profile?.widthMultiplier ?? 1);
+        _fiberWidthAt015 *
+        diameter /
+        .15 *
+        (recipe.profile?.widthMultiplier ?? 1) *
+        (1 + .2 * (recipe.fillIntensity - 1));
     for (final crossed in [false, true]) {
       final start = p.length;
       for (var j = 0; j <= _curlSamples; j++) {
         final s = j / _curlSamples;
+        // Dirección de la fibra: la del grupo más su apertura en este tramo.
+        final theta = (angle + groupOffset * openAt(s)) * math.pi / 180;
         // La inclinación crece hacia la punta (+ s²): la fibra se curva en
         // vez de ser una recta, como una pestaña natural.
         final cx =
@@ -251,14 +322,17 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
             jitter * length * math.sin(math.pi * s);
         // Curvatura (ver LashCurl): sube en la dirección de nacimiento y se
         // dobla hacia el párpado (−Z; el motor proyecta la base hacia +Z).
-        final y0 = math.cos(theta) * length * curl.up[j];
-        final z0 = -length * curl.back[j];
+        final y0 = math.cos(theta) * length * profile.up[j];
+        final z0 = -length * profile.back[j];
         // Nivel: girar hacia −Z (más erguida tras la proyección del motor)
         // levanta la fibra; hacia +Z la baja.
         final cy = y0 * cosLift + z0 * sinLift;
         final cz = z + (-y0 * sinLift + z0 * cosLift);
-        final half = width * .5 * (math.pow(1 - s, 1.2) + .025);
-        final g = .045 + .12 * math.pow(s, .7);
+        // Forma de pelo: ancho parejo en el primer tramo y afinado hacia la
+        // punta (antes una cuña ancha en la raíz que fundía las raíces).
+        final half = width * .5 * _hairTaper(s);
+        // Tono con leve variación por fibra: se distinguen entre sí.
+        final g = (.045 + .12 * math.pow(s, .7)) * tone;
         for (final side in [-1, 1]) {
           p.add([
             cx + (crossed ? 0 : side * half),
@@ -310,16 +384,23 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
       final resolvedSpread = customSpread == null || count == 1
           ? actualSpread
           : (f / (count - 1) - .5) * customSpread;
+      // Mismo orden de sorteo que antes: los estilos sin forma de grupo
+      // quedan idénticos.
+      final fiberLength =
+          length *
+          (1 - .06 * resolvedSpread.abs() / 8) *
+          (.9 + .2 * rng.nextDouble());
+      final offset = resolvedSpread + (rng.nextDouble() - .5) * 5;
       fiber(
         t,
-        length *
-            (1 - .06 * resolvedSpread.abs() / 8) *
-            (.9 + .2 * rng.nextDouble()),
-        angle + resolvedSpread + (rng.nextDouble() - .5) * 5,
+        fiberLength,
+        angle,
         jitter,
         count > 1 && layerSplit > 0
             ? (f.isEven ? layerSplit / 2 : -layerSplit / 2)
             : 0,
+        .82 + .36 * rng.nextDouble(),
+        offset,
       );
     }
   }

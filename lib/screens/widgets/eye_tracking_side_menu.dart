@@ -20,6 +20,9 @@ class EyeTrackingSideMenu extends StatelessWidget {
   /// Abre el selector de curvatura. `null` = el estilo usa su propia curva
   /// y el botón no se muestra.
   final VoidCallback? onCurlTap;
+
+  /// Abre el selector de intensidad del relleno (Suave, Normal, Intenso).
+  final VoidCallback? onFillTap;
   final String? activeCategory;
 
   const EyeTrackingSideMenu({
@@ -33,16 +36,17 @@ class EyeTrackingSideMenu extends StatelessWidget {
     this.onColorTap,
     this.currentColor,
     this.onCurlTap,
+    this.onFillTap,
     this.activeCategory,
   });
 
-  static const _gap = SizedBox(height: 10);
+  static const _gap = SizedBox(height: 8);
 
   @override
   Widget build(BuildContext context) {
     return Positioned(
       right: 10,
-      top: 220,
+      top: 150,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -92,6 +96,15 @@ class EyeTrackingSideMenu extends StatelessWidget {
               label: 'Curvatura',
               onTap: onCurlTap!,
               isActive: activeCategory == 'curl',
+            ),
+          ],
+          if (onFillTap != null) ...[
+            _gap,
+            _MenuItem(
+              icon: Icons.blur_on_rounded,
+              label: 'Intensidad',
+              onTap: onFillTap!,
+              isActive: activeCategory == 'fill',
             ),
           ],
           if (onColorTap != null) ...[

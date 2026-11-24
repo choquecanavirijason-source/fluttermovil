@@ -583,7 +583,11 @@ class LashRenderer(
      * necesidad de recargar el `.glb`.
      */
     /** `#RRGGBB` del catálogo, o `null`/negro aprobado = sin tinte. */
-    fun setLashColor(hex: String?) {
+    /** Brillo del material de la fibra (0 mate … 1 brillante), del color elegido. */
+    @Volatile private var lashGloss: Float = 0f
+
+    fun setLashColor(hex: String?, gloss: Float = 0f) {
+        lashGloss = gloss.coerceIn(0f, 1f)
         val parsed = hex?.trim()?.takeIf {
             Regex("^#[0-9A-Fa-f]{6}$").matches(it) &&
                 !it.equals(RendererConfiguration.LASH_APPROVED_BLACK, ignoreCase = true)
@@ -1295,6 +1299,16 @@ class LashRenderer(
                     rewind()
                 }
                 val modelInstance = sv.modelLoader.createModelInstance(buffer)
+                // Acabado: mate (rugosidad del .glb) … brillante (más pulida).
+                val roughness = RendererConfiguration.LASH_MATTE_ROUGHNESS -
+                    (RendererConfiguration.LASH_MATTE_ROUGHNESS - RendererConfiguration.LASH_GLOSSY_ROUGHNESS) * lashGloss
+                try {
+                    modelInstance.materialInstances.forEach {
+                        it.setParameter("roughnessFactor", roughness)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "loadIntoSlot[$eye] no se pudo aplicar el brillo: ${e.message}")
+                }
 
                 val node = ModelNode(
                     modelInstance = modelInstance,

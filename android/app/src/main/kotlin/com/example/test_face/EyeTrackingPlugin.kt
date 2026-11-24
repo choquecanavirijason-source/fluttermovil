@@ -124,7 +124,10 @@ class EyeTrackingPlugin(
                 result.success(null)
             }
             "setLashColor" -> {
-                cameraXManager?.setLashColor(call.argument<String>("color"))
+                cameraXManager?.setLashColor(
+                    call.argument<String>("color"),
+                    call.argument<Double>("gloss")?.toFloat() ?: 0f,
+                )
                 result.success(null)
             }
             // DIAGNÓSTICO: los flags de perf_flags.properties que aplica

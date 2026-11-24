@@ -94,6 +94,7 @@ class TryOnStyle {
     int? technique,
     int? thickness,
     int? curl,
+    int fill = 1,
   }) {
     final chosenCurl = curl ?? defaultCurl;
     final shape = chosenCurl == null ? null : options.curlShape(chosenCurl);
@@ -112,6 +113,7 @@ class TryOnStyle {
       thickness: thickness ?? defaultThickness,
       curlShape: shape,
       curlId: shape == null ? null : chosenCurl,
+      fillLevel: fill.clamp(0, 2),
     );
   }
 
@@ -154,6 +156,8 @@ class TryOnStyle {
         'thickness': applied?.thickness ?? defaultThickness,
         if (chosenColor != 0) 'color': chosenColor,
         if (curlOption != null) 'curl': curlOption.id,
+        // Intensidad elegida en el probador (solo si no es la normal).
+        if ((applied?.fillLevel ?? 1) != 1) 'fill': applied!.fillLevel,
       },
     };
   }

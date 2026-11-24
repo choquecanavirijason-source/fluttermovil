@@ -1061,6 +1061,10 @@ object RendererConfiguration {
      * raíz más oscura, como la fibra negra aprobada. */
     const val LASH_TINT_ROOT_FACTOR = 0.55f
 
+    /** Rugosidad de la fibra con brillo 0 (mate, la del .glb) y con brillo 1. */
+    const val LASH_MATTE_ROUGHNESS = 0.82f
+    const val LASH_GLOSSY_ROUGHNESS = 0.3f
+
     /** El negro aprobado del catálogo: con este color no se tiñe nada y la
      * pestaña se ve exactamente como siempre. */
     const val LASH_APPROVED_BLACK = "#111111"

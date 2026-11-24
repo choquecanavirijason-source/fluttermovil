@@ -9,7 +9,8 @@ class LashRenderProfile {
       spikeMultiplier,
       fanSpread,
       megaFanSpread,
-      widthMultiplier;
+      widthMultiplier,
+      fill;
   final int spikeEvery, spikeOffset;
   const LashRenderProfile._(
     this.points,
@@ -23,6 +24,7 @@ class LashRenderProfile {
     this.fanSpread,
     this.megaFanSpread,
     this.widthMultiplier,
+    this.fill,
   );
 
   factory LashRenderProfile.fromJson(Map<String, dynamic> json) {
@@ -93,6 +95,7 @@ class LashRenderProfile {
       n(json['fan_spread'] ?? 10, 0, 24),
       n(json['mega_fan_spread'] ?? 16, 0, 24),
       n(json['width_multiplier'] ?? 1, .4, 1.8),
+      n(json['fill'] ?? 1, .5, 2),
     );
   }
   double lengthAt(double t, int root) {
@@ -124,5 +127,7 @@ class LashRenderProfile {
     'fan_spread': fanSpread,
     'mega_fan_spread': megaFanSpread,
     'width_multiplier': widthMultiplier,
+    // Solo si cambia: los estilos sin relleno conservan su clave de caché.
+    if (fill != 1) 'fill': fill,
   };
 }

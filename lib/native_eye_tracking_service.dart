@@ -229,10 +229,12 @@ class NativeEyeTrackingService {
   /// Color de pestaña (`#RRGGBB`) que Kotlin aplica al CARGAR el modelo;
   /// `null` = negro aprobado. Para verlo en un modelo ya cargado hay que
   /// volver a llamar a [loadEyeModels]. Solo cambia el color de las fibras.
-  Future<void> setLashColor(String? color) async {
+  /// [gloss]: brillo del material (0 mate … 1 brillante).
+  Future<void> setLashColor(String? color, {double gloss = 0}) async {
     try {
       await _methodChannel.invokeMethod<void>('setLashColor', <String, dynamic>{
         'color': color,
+        'gloss': gloss,
       });
     } catch (e) {
       debugPrint('[EyeTracking] setLashColor error: $e');

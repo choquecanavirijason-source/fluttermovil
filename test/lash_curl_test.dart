@@ -154,4 +154,54 @@ void main() {
         (p[v ~/ 2 - 1][2] - p[v + v ~/ 2 - 1][2]).abs();
     expect(tipGap(split), greaterThan(tipGap(flat) + .05));
   });
+
+  test('el tallo junta la base del grupo y las puntas unidas cierran el pico', () {
+    CatEyeRecipe recipe({double stem = 0, double merge = 0}) => CatEyeRecipe(
+      options: ResolvedLashOptions(
+        const LashOption(1, 'Medio', {'scale': 1.0}),
+        LashOption(9, '3D', {
+          'base_technique': 1,
+          'fibers_per_group': 3,
+          'single_every': 0,
+          'density': 1.0,
+          'spread': 20.0,
+          'layer_split': 0.0,
+          'stem': stem,
+          'tip_merge': merge,
+          'layer_curl': 0.0,
+        }),
+        const LashOption(3, '0.15 mm', {'diameter': .15}),
+      ),
+    );
+    final v = CatEyeRecipe.verticesPerFiber;
+    // Separación en X entre la primera y la última fibra del primer grupo,
+    // en el tramo j (vértice del lado izquierdo de la cinta plana).
+    double gap(List<List<double>> p, int j) =>
+        (p[2 * j][0] - p[2 * v + 2 * j][0]).abs();
+    final open = positions(buildCatEyeGlb(recipe(), right: false));
+    final stem = positions(buildCatEyeGlb(recipe(stem: .4), right: false));
+    final merged = positions(buildCatEyeGlb(recipe(merge: 1), right: false));
+    expect(gap(stem, 3), lessThan(gap(open, 3) * .2));
+    expect(gap(merged, 10), lessThan(gap(open, 10) * .5));
+  });
+
+  test('la intensidad del probador cambia la cantidad de fibras y se guarda', () {
+    final options = LashOptionCatalog.fromJson(_catalog());
+    final style = TryOnStyle.fromJson(_style(), options: options);
+    final normal = style.recipe();
+    final soft = style.recipe(fill: 0);
+    final strong = style.recipe(fill: 2);
+    expect(soft.roots, lessThan(normal.roots));
+    expect(strong.roots, greaterThan(normal.roots));
+    expect(strong.key, isNot(normal.key));
+    // Normal conserva la clave de siempre (no regenera los modelos guardados).
+    expect(style.recipe(fill: 1).key, normal.key);
+    expect(CatEyeRecipe.fromMap(strong.toMap()).fillLevel, 2);
+    final snapshot = style.snapshot(applied: strong);
+    expect((snapshot['selection'] as Map)['fill'], 2);
+    expect(
+      (style.snapshot(applied: normal)['selection'] as Map).containsKey('fill'),
+      false,
+    );
+  });
 }
