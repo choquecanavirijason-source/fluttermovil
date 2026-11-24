@@ -77,7 +77,11 @@ object RendererConfiguration {
      * 0 = la punta vuelve a vertical (la fibra termina justo encima de la
      * raíz y de frente se ve igual de recta: probado, no se notaba); 1 = la
      * fibra entera inclinada sin curva. */
-    const val LASH_PROJECTION_TIP_FRACTION = 0.5f
+    // 1.0 desde la curvatura paramétrica (receta g3, LashCurl): la curva ya
+    // viene en la geometría (la fibra se dobla hacia el párpado), así que
+    // esto queda como la DIRECCIÓN DE NACIMIENTO, igual en toda la fibra.
+    // Con 0.5 se sumaba a la curvatura y la duplicaba.
+    const val LASH_PROJECTION_TIP_FRACTION = 1.0f
 
     /** Desde esta proporción alto/ancho del ojo abierto, sin cola EXTRA
      * (redondos; `pruebas/ojos` 04 = 0.41). */

@@ -52,8 +52,11 @@ void main() {
                   right = buildCatEyeGlb(recipe, right: true);
               final data = parse(bytes);
               final p = positions(bytes), r = positions(right);
-              expect(p.length, recipe.fiberCount * 40 + 194);
-              expect(p.length, lessThan(10000));
+              expect(
+                p.length,
+                recipe.fiberCount * CatEyeRecipe.verticesPerFiber + 194,
+              );
+              expect(p.length, lessThan(16500));
               expect(data.doc['materials'][0]['doubleSided'], true);
               for (var i = 0; i < p.length; i++) {
                 expect(p[i].every((v) => v.isFinite), true);
@@ -111,10 +114,10 @@ void main() {
   );
   test('techniques have individual, fan, mega fan and mixed fiber counts', () {
     expect(List.generate(4, (t) => CatEyeRecipe(technique: t).fiberCount), [
-      72,
-      144,
-      240,
-      112,
+      115,
+      231,
+      360,
+      180,
     ]);
     expect(
       () => buildCatEyeGlb(const CatEyeRecipe(length: 4), right: false),

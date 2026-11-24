@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'lash_render_profile.dart';
 import 'lash_options.dart';
+import 'lash_curl.dart';
 
 /// Nominal salon settings; visual scale is calibrated independently of mm.
 class CatEyeRecipe {
@@ -24,6 +25,9 @@ class CatEyeRecipe {
   final ResolvedLashOptions? options;
   final String? catalogStyleKey;
   final int catalogRevision;
+
+  /// Curvatura elegida; `null` = la del estilo (ver [effectiveCurl]).
+  final LashCurl? curlShape;
   const CatEyeRecipe({
     this.length = 1,
     this.technique = 0,
@@ -33,15 +37,26 @@ class CatEyeRecipe {
     this.options,
     this.catalogStyleKey,
     this.catalogRevision = 0,
+    this.curlShape,
   });
+
+  /// Curva con la que se genera la fibra.
+  LashCurl get effectiveCurl => curlShape ?? LashCurl.fromStyleCurl(curl);
   String get styleId => styleIds[style];
   String get key {
-    if (catalogStyleKey == null && profile == null && options == null) {
+    if (catalogStyleKey == null &&
+        profile == null &&
+        options == null &&
+        curlShape == null) {
       return '${styleId}_${style == 0 ? 'v1' : 'v2'}${_geometryTag}_${length}_${technique}_$thickness';
     }
     var hash = 0x811c9dc5;
     for (final byte in utf8.encode(
-      jsonEncode({'profile': profile?.toJson(), 'options': options?.toJson()}),
+      jsonEncode({
+        'profile': profile?.toJson(),
+        'options': options?.toJson(),
+        'curl': curlShape?.toParameters(),
+      }),
     )) {
       hash = ((hash ^ byte) * 0x01000193) & 0xffffffff;
     }
@@ -58,6 +73,7 @@ class CatEyeRecipe {
     'profile': profile?.toJson(),
     'catalog_key': catalogStyleKey,
     'catalog_revision': catalogRevision,
+    'curl': curlShape?.toParameters(),
     'length': length,
     'technique': technique,
     'thickness': thickness,
@@ -76,12 +92,27 @@ class CatEyeRecipe {
           ),
     catalogStyleKey: m['catalog_key'] as String?,
     catalogRevision: m['catalog_revision'] as int? ?? 0,
+    curlShape: m['curl'] == null
+        ? null
+        : LashCurl.fromParameters(Map<String, dynamic>.from(m['curl'] as Map)),
     length: m['length']!,
     technique: m['technique']!,
     thickness: m['thickness']!,
   );
   int get engineTechnique =>
       options?.technique.parameters['base_technique'] as int? ?? technique;
+
+  /// Factor de población: las bandejas del salón son franjas densas y
+  /// parejas; con las raíces de antes el modelo se veía ralo a su lado.
+  static const densityBoost = 1.6;
+
+  /// Tope de fibras por ojo (rendimiento: cada fibra son 44 vértices que se
+  /// doblan en cada frame). Antes 240.
+  static const maxFibersPerEye = 360;
+
+  /// Vértices de cada fibra: 2 cintas cruzadas × (tramos + 1) × 2 lados.
+  static const verticesPerFiber = 4 * (_curlSamples + 1);
+
   int get roots {
     final base =
         profile?.roots[engineTechnique] ??
@@ -92,11 +123,12 @@ class CatEyeRecipe {
             : [72, 48, 40, 56])[engineTechnique];
     final density =
         (options?.technique.parameters['density'] as num?)?.toDouble() ?? 1;
-    final maxFan = options?.technique.parameters['fibers_per_group'] as int?;
-    if (maxFan == null && density == 1) return base;
-    return (base * density).round().clamp(
+    final maxFan =
+        options?.technique.parameters['fibers_per_group'] as int? ??
+        [1, 3, 6, 3][engineTechnique];
+    return (base * density * densityBoost).round().clamp(
       8,
-      math.min(120, 240 ~/ (maxFan ?? [1, 3, 6, 3][engineTechnique])),
+      math.min(180, maxFibersPerEye ~/ maxFan),
     );
   }
 
@@ -144,7 +176,11 @@ class CatEyeRecipe {
 /// Versión de la geometría generada: entra en [CatEyeRecipe.key] para que
 /// los .glb ya guardados en caché se regeneren al cambiar la receta.
 /// g2: fibras irregulares (largo/ángulo) y curvas.
-const _geometryTag = 'g2';
+/// g3: curvatura paramétrica (LashCurl) y más densidad.
+const _geometryTag = 'g3';
+
+/// Tramos a lo largo de cada fibra (perfil de [LashCurl]).
+const _curlSamples = 10;
 
 double _smooth(double t) {
   t = t.clamp(0.0, 1.0);
@@ -177,22 +213,26 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
   final diameter =
       (recipe.options?.thickness.parameters['diameter'] as num?)?.toDouble() ??
       [.05, .07, .10, .15][recipe.thickness];
+  // Perfil de la curvatura (igual para todas las fibras del modelo).
+  final curl = recipe.effectiveCurl.profile(_curlSamples);
   void fiber(double t, double length, double angle, double jitter) {
     final x = (.5 - t) * 3, z = _rootZ(x), theta = angle * math.pi / 180;
     final width =
         .028 * diameter / .15 * (recipe.profile?.widthMultiplier ?? 1);
     for (final crossed in [false, true]) {
       final start = p.length;
-      for (var j = 0; j <= 9; j++) {
-        final s = j / 9;
+      for (var j = 0; j <= _curlSamples; j++) {
+        final s = j / _curlSamples;
         // La inclinación crece hacia la punta (+ s²): la fibra se curva en
         // vez de ser una recta, como una pestaña natural.
         final cx =
             x +
             math.sin(theta) * length * (math.pow(s, 1.12) + .18 * s * s) +
             jitter * length * math.sin(math.pi * s);
-        final cy = math.cos(theta) * length * s;
-        final cz = z + recipe.curl * length * (1.15 * s * s - .15 * s * s * s);
+        // Curvatura (ver LashCurl): sube en la dirección de nacimiento y se
+        // dobla hacia el párpado (−Z; el motor proyecta la base hacia +Z).
+        final cy = math.cos(theta) * length * curl.up[j];
+        final cz = z - length * curl.back[j];
         final half = width * .5 * (math.pow(1 - s, 1.2) + .025);
         final g = .045 + .12 * math.pow(s, .7);
         for (final side in [-1, 1]) {
@@ -205,7 +245,7 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
           uv.add([s, (side + 1) / 2]);
         }
       }
-      for (var j = 0; j < 9; j++) {
+      for (var j = 0; j < _curlSamples; j++) {
         final a = start + j * 2;
         ix.addAll([a, a + 1, a + 2, a + 1, a + 3, a + 2]);
       }
@@ -216,7 +256,8 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
     final t = i / (recipe.roots - 1);
     // Irregularidad natural (antes ±10% de largo y ±3°: se veía como un
     // peine, todas iguales y paralelas).
-    final length = recipe.lengthAt(t, i) * scale * (.82 + .36 * rng.nextDouble());
+    final length =
+        recipe.lengthAt(t, i) * scale * (.82 + .36 * rng.nextDouble());
     final angle =
         (.5 - t) * recipe.fan -
         recipe.sweep * _smooth((t - .35) / .65) +

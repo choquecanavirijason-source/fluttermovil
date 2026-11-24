@@ -63,16 +63,24 @@ void main() {
       expect(recipe.thickness, 4);
       expect(recipe.options!.length.name, 'Extra largo');
       expect(recipe.fanSize(0), 5);
-      expect(recipe.fiberCount, lessThanOrEqualTo(240));
+      expect(
+        recipe.fiberCount,
+        lessThanOrEqualTo(CatEyeRecipe.maxFibersPerEye),
+      );
       final left = positions(buildCatEyeGlb(recipe, right: false)),
           right = positions(buildCatEyeGlb(recipe, right: true));
-      expect(left.length, lessThan(10000));
+      expect(
+        left.length,
+        lessThan(
+          16500,
+        ) /* presupuesto de vértices por ojo: 360 fibras x 44 + riel (receta g3) */,
+      );
       for (var i = 0; i < left.length; i++) {
         expect(left[i].every((n) => n.isFinite), true);
         expect(right[i][0], -left[i][0]);
       }
       for (var i = 0; i < recipe.fiberCount; i++) {
-        expect(left[i * 40][1], 0);
+        expect(left[i * CatEyeRecipe.verticesPerFiber][1], 0);
       }
       final restored = CatEyeRecipe.fromMap(
         jsonDecode(jsonEncode(recipe.toMap())) as Map<String, dynamic>,
@@ -110,11 +118,13 @@ void main() {
       expect(full.fanSize(0), 8);
       expect(mixed.fanSize(0), 1);
       expect(mixed.fanSize(1), 8);
-      expect(full.fiberCount, lessThanOrEqualTo(240));
-      expect(mixed.fiberCount, lessThanOrEqualTo(240));
+      expect(full.fiberCount, lessThanOrEqualTo(CatEyeRecipe.maxFibersPerEye));
+      expect(mixed.fiberCount, lessThanOrEqualTo(CatEyeRecipe.maxFibersPerEye));
       expect(
         positions(buildCatEyeGlb(full, right: false)).length,
-        lessThan(10000),
+        lessThan(
+          16500,
+        ) /* presupuesto de vértices por ojo: 360 fibras x 44 + riel (receta g3) */,
       );
     },
   );
