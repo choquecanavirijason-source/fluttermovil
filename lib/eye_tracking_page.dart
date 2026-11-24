@@ -30,6 +30,7 @@ import 'eye_tracking_photo_pipeline.dart';
 import 'native_eye_tracking_service.dart';
 import 'screens/widgets/bottom_carousel.dart';
 import 'screens/widgets/preview_startup_cover.dart';
+import 'screens/widgets/design_thumbnail_image.dart';
 import 'screens/widgets/client_picker_sheet.dart';
 import 'screens/widgets/eye_position_guide_painter.dart';
 import 'screens/widgets/eye_tracking_bottom_actions.dart';
@@ -424,6 +425,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       _selectedThicknessIndex = design.thickness;
       _selectedColorId = design.colorId;
       _savedColorHex = design.colorHex ?? LashOptionCatalog.approvedBlack;
+      _selectedCurlId = design.curlId;
       _activeCategory = null;
       _showTransparentMenu = true;
     });
@@ -454,6 +456,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   length: design.length,
                   technique: design.technique,
                   thickness: design.thickness,
+                  curlShape: design.curl,
+                  curlId: design.curlId,
                 ),
           request,
         ),
@@ -539,6 +543,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         _appliedRecipe?.thickness ?? style?.defaultThickness ?? 3;
     _selectedColorId = style?.defaultColor ?? 0;
     _savedColorHex = null;
+    _selectedCurlId = _appliedRecipe?.curlId ?? style?.defaultCurl;
   }
 
   Future<void> _applyRecipe(CatEyeRecipe recipe, int request) async {
@@ -595,6 +600,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   int _selectedDesignIndex = 1;
   int _selectedTechIndex = 0;
   int _selectedThicknessIndex = 3;
+
+  /// Curvatura elegida (`null` = curva propia del estilo).
+  int? _selectedCurlId;
 
   /// Color de pestaña elegido (id del catálogo; 0 = negro aprobado).
   int _selectedColorId = 0;
@@ -933,7 +941,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
   /// inicio, multitarea) y la de estado. Con `immersiveSticky` deslizar
   /// desde el borde las muestra un momento y se vuelven a ocultar solas.
   void _enterImmersive() {
-    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky),
+    );
   }
 
   /// Restaura las barras del sistema como en el resto de la app.
@@ -1175,6 +1185,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       'tech' => style?.techniques ?? const [0, 1, 2, 3],
       'thickness' => style?.thicknesses ?? const [0, 1, 2, 3],
       'color' => style?.colorOptions.map((o) => o.id).toList() ?? const [0],
+      'curl' => style?.curlOptions.map((o) => o.id).toList() ?? const [],
       _ => const [],
     };
   }
@@ -1183,6 +1194,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
     'design' => 'length',
     'tech' => 'technique',
     'color' => 'color',
+    'curl' => 'curl',
     _ => 'thickness',
   };
   String _optionLabel(String kind, int id) => kind == 'color'
@@ -1227,6 +1239,13 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                   'swatch:${_selectedPreset!.definition.options.color(id).parameters['color']}',
             )
             .toList()
+      : _activeCategory == 'curl'
+      ? _activeOptionValues.map((id) {
+          final c = _selectedPreset!.definition.options.curlShape(id);
+          return c == null
+              ? ''
+              : '${DesignThumbnailImage.curlPrefix}${c.degrees},${c.position},${c.sharpness}';
+        }).toList()
       : _activeOptionValues.map((id) {
           final images = LashCustomizationCatalog.imagesFor(_activeCategory);
           final option = _selectedPreset!.definition.options.get(
@@ -1251,6 +1270,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       'tech' => _selectedTechIndex,
       'thickness' => _selectedThicknessIndex,
       'color' => _selectedColorId,
+      'curl' => _selectedCurlId ?? -1,
       _ => -1,
     };
     return _activeCategory == 'effect'
@@ -1290,6 +1310,9 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         case 'thickness':
           _selectedThicknessIndex = _activeOptionValues[index];
           break;
+        case 'curl':
+          _selectedCurlId = _activeOptionValues[index];
+          break;
       }
       _buildingRecipe = true;
     });
@@ -1297,6 +1320,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       length: _selectedDesignIndex,
       technique: _selectedTechIndex,
       thickness: _selectedThicknessIndex,
+      curl: _selectedCurlId,
     );
     final request = ++_recipeRequest;
     _recipeTimer?.cancel();
@@ -1731,7 +1755,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
       for (final e in _recentMappable)
         if (now.difference(e.at) <= _mappingAverageWindow) e.frame,
     ];
-    if (window.isNotEmpty) return EyeTrackingPhotoPipeline.averageFrames(window);
+    if (window.isNotEmpty)
+      return EyeTrackingPhotoPipeline.averageFrames(window);
     final at = _lastMappableAt;
     final recent = at != null && now.difference(at) <= _mappableFrameMaxAge;
     return recent ? _lastMappableFrame : _frame;
@@ -1927,9 +1952,7 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
             color: _eyesAligned ? const Color(0xFF2ECC71) : Colors.white,
             shape: BoxShape.circle,
             border: Border.all(color: Colors.white, width: 4),
-            boxShadow: const [
-              BoxShadow(color: Colors.black45, blurRadius: 10),
-            ],
+            boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10)],
           ),
           child: Icon(
             Icons.camera_alt_rounded,
@@ -2133,6 +2156,8 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
         'Técnica: ${recipe.options?.technique.name ?? LashCustomizationCatalog.techOptionAt(recipe.technique)}',
         'Grosor: ${recipe.options?.thickness.name ?? LashCustomizationCatalog.thicknessOptionAt(recipe.thickness)}',
       ],
+      if (recipe?.curlId != null && _selectedPreset != null)
+        'Curvatura: ${_selectedPreset!.definition.curlOptions.where((o) => o.id == recipe!.curlId).firstOrNull?.name ?? recipe!.curlId}',
       if (_selectedColorId != 0 && _selectedPreset != null)
         'Color: ${_selectedPreset!.definition.options.color(_selectedColorId).name}',
     ].join(' | ');
@@ -2324,35 +2349,41 @@ class _EyeTrackingPageState extends ConsumerState<EyeTrackingPage>
                 ),
               ),
             ),
-            if (!_alignmentGuideActive) ...EyeTrackingOverlay.buildSiblings(
-              onBack: () => _goHome(context),
-              status: _frame == null ? _status : null,
-              title:
-                  _analysisView.value.needsAdjustment &&
-                      _consultation.shapeOverride == null &&
-                      _stableEyeAnalysis == null
-                  ? 'Ajusta la posición'
-                  : _consultation.title(_stableEyeAnalysis),
-              onEyeTypeTap: _showEyeTypeSheet,
-              onSwitchCamera: () => unawaited(_onSwitchCamera()),
-              onFlashTap: () {},
-              onDesignTap: () => _onCategoryTap('design'),
-              onTechniqueTap: () => _onCategoryTap('tech'),
-              onEffectTap: () => _onCategoryTap('effect'),
-              onThicknessTap: () => _onCategoryTap('thickness'),
-              onColorTap: _hasColorChoices
-                  ? () => _onCategoryTap('color')
-                  : null,
-              currentColor: Color(
-                0xFF000000 |
-                    int.parse(
-                      (_selectedColorHex ?? LashOptionCatalog.approvedBlack)
-                          .substring(1),
-                      radix: 16,
-                    ),
+            if (!_alignmentGuideActive)
+              ...EyeTrackingOverlay.buildSiblings(
+                onBack: () => _goHome(context),
+                status: _frame == null ? _status : null,
+                title:
+                    _analysisView.value.needsAdjustment &&
+                        _consultation.shapeOverride == null &&
+                        _stableEyeAnalysis == null
+                    ? 'Ajusta la posición'
+                    : _consultation.title(_stableEyeAnalysis),
+                onEyeTypeTap: _showEyeTypeSheet,
+                onSwitchCamera: () => unawaited(_onSwitchCamera()),
+                onFlashTap: () {},
+                onDesignTap: () => _onCategoryTap('design'),
+                onTechniqueTap: () => _onCategoryTap('tech'),
+                onEffectTap: () => _onCategoryTap('effect'),
+                onThicknessTap: () => _onCategoryTap('thickness'),
+                onCurlTap:
+                    (_selectedPreset?.definition.curlOptions.isNotEmpty ??
+                        false)
+                    ? () => _onCategoryTap('curl')
+                    : null,
+                onColorTap: _hasColorChoices
+                    ? () => _onCategoryTap('color')
+                    : null,
+                currentColor: Color(
+                  0xFF000000 |
+                      int.parse(
+                        (_selectedColorHex ?? LashOptionCatalog.approvedBlack)
+                            .substring(1),
+                        radix: 16,
+                      ),
+                ),
+                activeCategory: _activeCategory,
               ),
-              activeCategory: _activeCategory,
-            ),
             if (!_alignmentGuideActive)
               EyeTrackingWorkAssistantButton(onTap: _toggleAlignmentGuide),
 

@@ -36,7 +36,8 @@ double _lengthAt(List<({double t, double length})> points, double t) {
     final a = points[i - 1], b = points[i];
     if (t <= b.t) {
       final span = b.t - a.t;
-      return a.length + (b.length - a.length) * ((t - a.t) / (span == 0 ? 1 : span));
+      return a.length +
+          (b.length - a.length) * ((t - a.t) / (span == 0 ? 1 : span));
     }
   }
   return points.last.length;

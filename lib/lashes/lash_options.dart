@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'lash_curl.dart';
+
 /// Published salon settings. Stable IDs are independent from display order.
 class LashOption {
   final int id, revision, order;
@@ -65,7 +67,13 @@ class LashOption {
         'single_every': every,
         'density': p['density'] == null ? 1.0 : number('density', .25, 1.5),
         'spread': p['spread'] == null ? null : number('spread', 0, 24),
+        // Separación en altura entre las fibras del grupo (pestañas en Y).
+        'layer_split': p['layer_split'] == null
+            ? 0.0
+            : number('layer_split', 0, 40),
       });
+    } else if (kind == 'curl') {
+      values.addAll(LashCurl.fromParameters(p).toParameters());
     } else if (kind == 'color') {
       final color = p['color'];
       if (color is! String || !RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(color)) {
@@ -141,11 +149,18 @@ class LashOptionCatalog {
   /// actualizar o caché vieja) ofrece solo el negro aprobado.
   List<LashOption> get colors => groups['color'] ?? const [blackOption];
 
+  /// Curvaturas publicadas (pueden no existir: servidor anterior).
+  List<LashOption> get curls => groups['curl'] ?? const [];
+
+  /// Forma de la curvatura [id]; `null` si no está publicada.
+  LashCurl? curlShape(int id) {
+    final option = curls.where((o) => o.id == id).firstOrNull;
+    return option == null ? null : LashCurl.fromParameters(option.parameters);
+  }
+
   /// Color de la opción [id]; si no existe, el negro aprobado.
-  LashOption color(int id) => colors.firstWhere(
-    (o) => o.id == id,
-    orElse: () => blackOption,
-  );
+  LashOption color(int id) =>
+      colors.firstWhere((o) => o.id == id, orElse: () => blackOption);
   static const bundled = LashOptionCatalog({
     'length': [
       LashOption(0, 'Corto', {'scale': .78}),
@@ -183,6 +198,22 @@ class LashOptionCatalog {
         throw const FormatException('Duplicate option');
       }
       groups[kind] = List.unmodifiable(options);
+    }
+    // Curvaturas: opcionales (los servidores anteriores no las publican).
+    final curlList = m['curl'];
+    if (curlList is List && curlList.isNotEmpty && curlList.length <= 64) {
+      final curls = curlList
+          .map(
+            (e) => LashOption.fromJson(
+              Map<String, dynamic>.from(e as Map),
+              'curl',
+            ),
+          )
+          .toList();
+      if (curls.map((e) => e.id).toSet().length != curls.length) {
+        throw const FormatException('Duplicate option');
+      }
+      groups['curl'] = List.unmodifiable(curls);
     }
     // Colores: opcionales (los servidores anteriores no los publican).
     final colorList = m['color'];

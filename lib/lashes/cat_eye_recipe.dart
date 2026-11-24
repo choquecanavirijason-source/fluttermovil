@@ -28,6 +28,9 @@ class CatEyeRecipe {
 
   /// Curvatura elegida; `null` = la del estilo (ver [effectiveCurl]).
   final LashCurl? curlShape;
+
+  /// Id del catálogo de la curvatura elegida (`null` = curva del estilo).
+  final int? curlId;
   const CatEyeRecipe({
     this.length = 1,
     this.technique = 0,
@@ -38,6 +41,7 @@ class CatEyeRecipe {
     this.catalogStyleKey,
     this.catalogRevision = 0,
     this.curlShape,
+    this.curlId,
   });
 
   /// Curva con la que se genera la fibra.
@@ -74,6 +78,7 @@ class CatEyeRecipe {
     'catalog_key': catalogStyleKey,
     'catalog_revision': catalogRevision,
     'curl': curlShape?.toParameters(),
+    'curl_id': curlId,
     'length': length,
     'technique': technique,
     'thickness': thickness,
@@ -95,6 +100,7 @@ class CatEyeRecipe {
     curlShape: m['curl'] == null
         ? null
         : LashCurl.fromParameters(Map<String, dynamic>.from(m['curl'] as Map)),
+    curlId: m['curl_id'] as int?,
     length: m['length']!,
     technique: m['technique']!,
     thickness: m['thickness']!,
@@ -215,8 +221,22 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
       [.05, .07, .10, .15][recipe.thickness];
   // Perfil de la curvatura (igual para todas las fibras del modelo).
   final curl = recipe.effectiveCurl.profile(_curlSamples);
-  void fiber(double t, double length, double angle, double jitter) {
+  // Separación en altura (técnica): las fibras de un grupo se alternan en
+  // dos niveles, una levantada y otra baja (pestañas en Y vistas de costado).
+  final layerSplit =
+      (recipe.options?.technique.parameters['layer_split'] as num?)
+          ?.toDouble() ??
+      0;
+  void fiber(
+    double t,
+    double length,
+    double angle,
+    double jitter, [
+    double liftDeg = 0,
+  ]) {
     final x = (.5 - t) * 3, z = _rootZ(x), theta = angle * math.pi / 180;
+    final lift = liftDeg * math.pi / 180;
+    final cosLift = math.cos(lift), sinLift = math.sin(lift);
     final width =
         .028 * diameter / .15 * (recipe.profile?.widthMultiplier ?? 1);
     for (final crossed in [false, true]) {
@@ -231,8 +251,12 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
             jitter * length * math.sin(math.pi * s);
         // Curvatura (ver LashCurl): sube en la dirección de nacimiento y se
         // dobla hacia el párpado (−Z; el motor proyecta la base hacia +Z).
-        final cy = math.cos(theta) * length * curl.up[j];
-        final cz = z - length * curl.back[j];
+        final y0 = math.cos(theta) * length * curl.up[j];
+        final z0 = -length * curl.back[j];
+        // Nivel: girar hacia −Z (más erguida tras la proyección del motor)
+        // levanta la fibra; hacia +Z la baja.
+        final cy = y0 * cosLift + z0 * sinLift;
+        final cz = z + (-y0 * sinLift + z0 * cosLift);
         final half = width * .5 * (math.pow(1 - s, 1.2) + .025);
         final g = .045 + .12 * math.pow(s, .7);
         for (final side in [-1, 1]) {
@@ -293,6 +317,9 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
             (.9 + .2 * rng.nextDouble()),
         angle + resolvedSpread + (rng.nextDouble() - .5) * 5,
         jitter,
+        count > 1 && layerSplit > 0
+            ? (f.isEven ? layerSplit / 2 : -layerSplit / 2)
+            : 0,
       );
     }
   }

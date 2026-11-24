@@ -1,3 +1,4 @@
+import '../../../../lashes/lash_curl.dart';
 import '../../../../lashes/lash_options.dart';
 import '../../../../lashes/lash_render_profile.dart';
 
@@ -17,9 +18,18 @@ class SavedTryOnDesign {
     this.colorId = 0,
     this.colorName,
     this.colorHex,
+    this.curlId,
+    this.curlName,
+    this.curl,
     this.options,
     this.profile,
   });
+
+  /// Curvatura elegida (`null` = la curva propia del estilo) y la copia de
+  /// su forma, para volver a aplicarla igual aunque se edite en el admin.
+  final int? curlId;
+  final String? curlName;
+  final LashCurl? curl;
 
   final String styleKey, styleName;
   final int revision;
@@ -49,9 +59,16 @@ class SavedTryOnDesign {
       final resolvedRaw = m['resolved_options'];
       ResolvedLashOptions? options;
       LashOption? color;
+      LashOption? curl;
       if (resolvedRaw is Map) {
         final resolved = Map<String, dynamic>.from(resolvedRaw);
         options = ResolvedLashOptions.fromJson(resolved);
+        if (resolved['curl'] is Map) {
+          curl = LashOption.fromJson(
+            Map<String, dynamic>.from(resolved['curl'] as Map),
+            'curl',
+          );
+        }
         if (resolved['color'] is Map) {
           color = LashOption.fromJson(
             Map<String, dynamic>.from(resolved['color'] as Map),
@@ -72,6 +89,9 @@ class SavedTryOnDesign {
         colorId: selection['color'] as int? ?? 0,
         colorName: color?.name,
         colorHex: hex == LashOptionCatalog.approvedBlack ? null : hex,
+        curlId: curl?.id,
+        curlName: curl?.name,
+        curl: curl == null ? null : LashCurl.fromParameters(curl.parameters),
         options: options,
         profile: profileRaw is Map
             ? LashRenderProfile.fromJson(Map<String, dynamic>.from(profileRaw))

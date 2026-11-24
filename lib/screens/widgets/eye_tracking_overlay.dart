@@ -28,6 +28,7 @@ class EyeTrackingOverlay {
     required VoidCallback onThicknessTap,
     VoidCallback? onColorTap,
     Color? currentColor,
+    VoidCallback? onCurlTap,
     required VoidCallback onEyeTypeTap,
     String? activeCategory,
   }) {
@@ -49,6 +50,7 @@ class EyeTrackingOverlay {
         onThicknessTap: onThicknessTap,
         onColorTap: onColorTap,
         currentColor: currentColor,
+        onCurlTap: onCurlTap,
         activeCategory: activeCategory,
       ),
     ];

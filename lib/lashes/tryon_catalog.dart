@@ -19,6 +19,13 @@ class TryOnStyle {
   /// Colores de pestaña que ofrece el estilo (ids del catálogo). Los
   /// estilos anteriores al catálogo de colores: solo negro (0).
   final List<int> colors;
+
+  /// Curvaturas que ofrece el estilo. Vacía = usa su propia curva y el
+  /// probador no muestra el botón de curvatura.
+  final List<int> curls;
+
+  /// Curvatura inicial; `null` = la curva propia del estilo.
+  final int? defaultCurl;
   final List<String> eyeTypes;
   final int defaultLength, defaultTechnique, defaultThickness, defaultColor;
   final LashOptionCatalog options;
@@ -44,6 +51,8 @@ class TryOnStyle {
     this.techniques = const [0, 1, 2, 3],
     this.thicknesses = const [0, 1, 2, 3],
     this.colors = const [0],
+    this.curls = const [],
+    this.defaultCurl,
     this.eyeTypes = const [],
     this.defaultLength = 1,
     this.defaultTechnique = 0,
@@ -60,6 +69,11 @@ class TryOnStyle {
         ? const [LashOptionCatalog.blackOption]
         : List.unmodifiable(available);
   }
+
+  /// Curvaturas disponibles en este estilo, en el orden del catálogo.
+  List<LashOption> get curlOptions =>
+      List.unmodifiable(options.curls.where((o) => curls.contains(o.id)));
+
   int get engineStyle {
     final index = CatEyeRecipe.styleIds.indexOf(builtinStyle ?? '');
     return index < 0 ? 0 : index;
@@ -72,21 +86,35 @@ class TryOnStyle {
       defaultTechnique == 0 &&
       defaultThickness == 3 &&
       options.resolve(1, 0, 3).isOriginalCatEye;
-  CatEyeRecipe recipe({int? length, int? technique, int? thickness}) =>
-      CatEyeRecipe(
-        style: engineStyle,
-        options: options.resolve(
-          length ?? defaultLength,
-          technique ?? defaultTechnique,
-          thickness ?? defaultThickness,
-        ),
-        profile: profile,
-        catalogStyleKey: key,
-        catalogRevision: revision,
-        length: length ?? defaultLength,
-        technique: technique ?? defaultTechnique,
-        thickness: thickness ?? defaultThickness,
-      );
+
+  /// [curl]: id de la curvatura elegida; sin valor, la inicial del estilo
+  /// (o su propia curva si no ofrece curvaturas).
+  CatEyeRecipe recipe({
+    int? length,
+    int? technique,
+    int? thickness,
+    int? curl,
+  }) {
+    final chosenCurl = curl ?? defaultCurl;
+    final shape = chosenCurl == null ? null : options.curlShape(chosenCurl);
+    return CatEyeRecipe(
+      style: engineStyle,
+      options: options.resolve(
+        length ?? defaultLength,
+        technique ?? defaultTechnique,
+        thickness ?? defaultThickness,
+      ),
+      profile: profile,
+      catalogStyleKey: key,
+      catalogRevision: revision,
+      length: length ?? defaultLength,
+      technique: technique ?? defaultTechnique,
+      thickness: thickness ?? defaultThickness,
+      curlShape: shape,
+      curlId: shape == null ? null : chosenCurl,
+    );
+  }
+
   /// [color]: id del color elegido. El negro (0) no se guarda en la receta,
   /// así un servidor todavía sin el catálogo de colores la sigue aceptando.
   Map<String, dynamic> snapshot({
@@ -95,11 +123,19 @@ class TryOnStyle {
     int? color,
   }) {
     final chosenColor = color ?? defaultColor;
-    final resolved =
+    final base =
         applied?.options?.toJson() ??
         options
             .resolve(defaultLength, defaultTechnique, defaultThickness)
             .toJson();
+    // Curvatura: copia de sus parámetros, como el resto de las opciones.
+    final curlId = applied == null ? defaultCurl : applied.curlId;
+    final curlOption = curlId == null
+        ? null
+        : options.curls.where((o) => o.id == curlId).firstOrNull;
+    final resolved = curlOption == null
+        ? base
+        : {...base, 'curl': curlOption.toJson()};
     return {
       'eye_assessment': ?eyeAssessment,
       'style_key': key,
@@ -117,9 +153,11 @@ class TryOnStyle {
         'technique': applied?.technique ?? defaultTechnique,
         'thickness': applied?.thickness ?? defaultThickness,
         if (chosenColor != 0) 'color': chosenColor,
+        if (curlOption != null) 'curl': curlOption.id,
       },
     };
   }
+
   factory TryOnStyle.fromJson(
     Map<String, dynamic> m, {
     LashOptionCatalog options = LashOptionCatalog.bundled,
@@ -170,7 +208,17 @@ class TryOnStyle {
     final colors = m['allowed_colors'] == null
         ? const <int>[0]
         : parseOptions('allowed_colors', 4095);
+    // Curvaturas: opcionales y pueden venir vacías (curva propia del estilo).
+    final curlsRaw = m['allowed_curls'];
+    final curls = curlsRaw is List && curlsRaw.isNotEmpty
+        ? parseOptions('allowed_curls', 4095)
+        : const <int>[];
     final d = Map<String, dynamic>.from(m['defaults'] as Map);
+    final curlDefault = d['curl'] == null ? null : integer(d['curl'], 0, 4095);
+    if ((curls.isEmpty && curlDefault != null) ||
+        (curls.isNotEmpty && !curls.contains(curlDefault))) {
+      throw const FormatException('Unavailable default');
+    }
     final l = integer(d['length'], 0, 4095),
         t = integer(d['technique'], 0, 4095),
         th = integer(d['thickness'], 0, 4095),
@@ -225,6 +273,8 @@ class TryOnStyle {
       techniques: techniques,
       thicknesses: thicknesses,
       colors: colors,
+      curls: curls,
+      defaultCurl: curlDefault,
       eyeTypes: eyes,
       defaultLength: l,
       defaultTechnique: t,

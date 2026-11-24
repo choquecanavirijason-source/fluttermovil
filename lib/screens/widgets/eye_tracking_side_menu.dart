@@ -16,6 +16,10 @@ class EyeTrackingSideMenu extends StatelessWidget {
 
   /// Color elegido, para pintar el botón.
   final Color? currentColor;
+
+  /// Abre el selector de curvatura. `null` = el estilo usa su propia curva
+  /// y el botón no se muestra.
+  final VoidCallback? onCurlTap;
   final String? activeCategory;
 
   const EyeTrackingSideMenu({
@@ -28,6 +32,7 @@ class EyeTrackingSideMenu extends StatelessWidget {
     required this.onThicknessTap,
     this.onColorTap,
     this.currentColor,
+    this.onCurlTap,
     this.activeCategory,
   });
 
@@ -80,6 +85,15 @@ class EyeTrackingSideMenu extends StatelessWidget {
             onTap: onThicknessTap,
             isActive: activeCategory == 'thickness',
           ),
+          if (onCurlTap != null) ...[
+            _gap,
+            _MenuItem(
+              icon: Icons.gesture_rounded,
+              label: 'Curvatura',
+              onTap: onCurlTap!,
+              isActive: activeCategory == 'curl',
+            ),
+          ],
           if (onColorTap != null) ...[
             _gap,
             _ColorMenuItem(

@@ -59,6 +59,7 @@ class LashCustomizationCatalog {
     'effect' => 'Efecto',
     'thickness' => 'Grosor',
     'color' => 'Color',
+    'curl' => 'Curvatura',
     _ => '',
   };
 

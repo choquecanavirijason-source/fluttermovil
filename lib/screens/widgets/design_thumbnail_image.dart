@@ -1,6 +1,9 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'dart:convert';
+import 'dart:math' as math;
+
+import 'package:Probador/lashes/lash_curl.dart';
 
 /// Miniatura de una opción del menú de personalización (diseño/técnica/
 /// efecto/grosor).
@@ -21,6 +24,10 @@ class DesignThumbnailImage extends StatefulWidget {
   final String path;
   final double size;
   final Color? color;
+
+  /// Prefijo de las curvaturas (`curl:grados,posición,nitidez`): se dibuja la
+  /// fibra en vista lateral con el mismo modelo del motor ([LashCurl]).
+  static const curlPrefix = 'curl:';
 
   @override
   State<DesignThumbnailImage> createState() => _DesignThumbnailImageState();
@@ -62,10 +69,26 @@ class _DesignThumbnailImageState extends State<DesignThumbnailImage> {
   /// Prefijo de las muestras del catálogo de colores (`swatch:#RRGGBB`).
   static const swatchPrefix = 'swatch:';
 
+
   @override
   Widget build(BuildContext context) {
     if (path.isEmpty) return _fallbackIcon();
     if (path.startsWith(swatchPrefix)) return _swatch();
+    if (path.startsWith(DesignThumbnailImage.curlPrefix)) {
+      final parts = path.substring(DesignThumbnailImage.curlPrefix.length).split(',');
+      final values = parts.map(double.tryParse).toList();
+      if (values.length != 3 || values.contains(null)) return _fallbackIcon();
+      return SizedBox(
+        width: size,
+        height: size,
+        child: CustomPaint(
+          painter: _CurlGlyphPainter(
+            LashCurl(values[0]!, values[1]!, values[2]!),
+            color ?? const Color(0xFF1B1B1B),
+          ),
+        ),
+      );
+    }
     if (path.startsWith('data:image/')) {
       final image = _embeddedImage;
       if (image == null) return _fallbackIcon();
@@ -131,7 +154,10 @@ class _DesignThumbnailImageState extends State<DesignThumbnailImage> {
               radius: .95,
               colors: [Color.lerp(base, Colors.white, .28)!, base],
             ),
-            border: Border.all(color: Colors.white.withValues(alpha: .7), width: 1.5),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: .7),
+              width: 1.5,
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: .25),
@@ -147,4 +173,57 @@ class _DesignThumbnailImageState extends State<DesignThumbnailImage> {
 
   Widget _fallbackIcon() =>
       Icon(Icons.image_not_supported, color: Colors.white54, size: size);
+}
+
+/// Fibra en vista lateral para las miniaturas de curvatura: nace proyectada
+/// hacia adelante (como el motor, ~70° desde la vertical) y se dobla hacia
+/// arriba según la [LashCurl].
+class _CurlGlyphPainter extends CustomPainter {
+  _CurlGlyphPainter(this.curl, this.color);
+  final LashCurl curl;
+  final Color color;
+
+  static const _baseRad = 70 * math.pi / 180;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final profile = curl.profile(10);
+    // Puntos en el plano (adelante, arriba) con largo 1.
+    final pts = <Offset>[
+      for (var i = 0; i < profile.up.length; i++)
+        Offset(
+          profile.up[i] * math.sin(_baseRad) -
+              profile.back[i] * math.cos(_baseRad),
+          profile.up[i] * math.cos(_baseRad) +
+              profile.back[i] * math.sin(_baseRad),
+        ),
+    ];
+    final minX = pts.map((p) => p.dx).reduce(math.min);
+    final maxX = pts.map((p) => p.dx).reduce(math.max);
+    final maxY = pts.map((p) => p.dy).reduce(math.max);
+    final span = math.max(math.max(maxX - minX, maxY), 1e-6);
+    final scale = size.shortestSide * .78 / span;
+    final origin = Offset(
+      (size.width - (maxX - minX) * scale) / 2 - minX * scale,
+      size.height - (size.height - maxY * scale) / 2,
+    );
+    final path = Path();
+    for (var i = 0; i < pts.length; i++) {
+      final p = origin + Offset(pts[i].dx * scale, -pts[i].dy * scale);
+      i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = math.max(1.5, size.shortestSide * .07)
+        ..strokeCap = StrokeCap.round
+        ..isAntiAlias = true,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CurlGlyphPainter old) =>
+      old.curl != curl || old.color != color;
 }
