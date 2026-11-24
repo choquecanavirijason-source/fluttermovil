@@ -206,7 +206,9 @@ class CatEyeRecipe {
 /// g3: curvatura paramétrica (LashCurl) y más densidad.
 /// g4: fibras más finas, con forma de pelo y tono variable por fibra.
 /// g5: forma del grupo (tallo, puntas unidas) y curva por nivel.
-const _geometryTag = 'g5';
+/// g6: sin franja visible en la raíz y lagrimal más corto y fino.
+/// g7: fibras rectas (sin comba lateral) y menos dispersión de ángulo.
+const _geometryTag = 'g7';
 
 /// Ancho visual de la fibra a 0.15 mm (unidades del modelo; antes .028).
 const _fiberWidthAt015 = .0168;
@@ -293,6 +295,7 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
     double liftDeg = 0,
     double tone = 1,
     double groupOffset = 0,
+    double widthScale = 1,
   ]) {
     final x = (.5 - t) * 3, z = _rootZ(x);
     final profile = liftDeg > 0 ? upperCurl : curl;
@@ -307,7 +310,8 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
         diameter /
         .15 *
         (recipe.profile?.widthMultiplier ?? 1) *
-        (1 + .2 * (recipe.fillIntensity - 1));
+        (1 + .2 * (recipe.fillIntensity - 1)) *
+        widthScale;
     for (final crossed in [false, true]) {
       final start = p.length;
       for (var j = 0; j <= _curlSamples; j++) {
@@ -316,9 +320,11 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
         final theta = (angle + groupOffset * openAt(s)) * math.pi / 180;
         // La inclinación crece hacia la punta (+ s²): la fibra se curva en
         // vez de ser una recta, como una pestaña natural.
+        // Recta de lado a lado (antes s^1.12 + .18·s² y una comba lateral:
+        // las fibras se veían "dobladitas"). La punta queda donde estaba.
         final cx =
             x +
-            math.sin(theta) * length * (math.pow(s, 1.12) + .18 * s * s) +
+            math.sin(theta) * length * 1.18 * s +
             jitter * length * math.sin(math.pi * s);
         // Curvatura (ver LashCurl): sube en la dirección de nacimiento y se
         // dobla hacia el párpado (−Z; el motor proyecta la base hacia +Z).
@@ -359,9 +365,13 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
     final angle =
         (.5 - t) * recipe.fan -
         recipe.sweep * _smooth((t - .35) / .65) +
-        (rng.nextDouble() - .5) * 16;
-    final jitter = (rng.nextDouble() - .5) * .14;
+        (rng.nextDouble() - .5) * 10;
+    // Comba lateral mínima: fibras rectas, como las extensiones (antes .14).
+    final jitter = (rng.nextDouble() - .5) * .03;
     final count = recipe.fanSize(i);
+    // Lagrimal: como en un ojo real, las pestañas arrancan cortas y finas y
+    // crecen hacia afuera (antes empezaban con el largo completo, en bloque).
+    final inner = _smooth(t / .16);
     for (var f = 0; f < count; f++) {
       final spread = count == 1
           ? 0.0
@@ -393,7 +403,7 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
       final offset = resolvedSpread + (rng.nextDouble() - .5) * 5;
       fiber(
         t,
-        fiberLength,
+        fiberLength * (.45 + .55 * inner),
         angle,
         jitter,
         count > 1 && layerSplit > 0
@@ -401,6 +411,7 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
             : 0,
         .82 + .36 * rng.nextDouble(),
         offset,
+        .55 + .45 * inner,
       );
     }
   }
@@ -413,10 +424,10 @@ Uint8List buildCatEyeGlb(CatEyeRecipe recipe, {required bool right}) {
       uv.add([i / 96, y / .0045]);
     }
   }
-  for (var i = 0; i < 96; i++) {
-    final a = rail + i * 2;
-    ix.addAll([a, a + 1, a + 2, a + 1, a + 3, a + 2]);
-  }
+  // El riel solo marca la fila de la raíz para el anclaje del motor; ya no se
+  // dibuja (teñido se veía como una cinta pegada al párpado, y las
+  // extensiones reales no tienen base). Sus vértices se conservan.
+  assert(rail > 0);
   if (right) {
     for (final v in p) {
       v[0] = -v[0];

@@ -5,7 +5,9 @@ import kotlin.math.roundToInt
 /** Rest depth of the attachment band, cached once per asset. The supplied
  * assets have a flat minimum-Y root row, but a curved, nonzero Z profile. */
 object LashRootDepth {
-    fun perVertex(raw: RawMesh): FloatArray {
+    /** [rootXs]: X de la raíz de cada vértice (ver [LashRootX]); así toda la
+     * fibra toma la profundidad de SU raíz y no la del punto bajo su punta. */
+    fun perVertex(raw: RawMesh, rootXs: FloatArray? = null): FloatArray {
         val bins = 64
         val sums = FloatArray(bins)
         val counts = IntArray(bins)
@@ -32,7 +34,8 @@ object LashRootDepth {
             }
         }
         return FloatArray(raw.vertices.size) { i ->
-            val t = ((raw.vertices[i].position.x - raw.minX) / span * (bins - 1)).coerceIn(0f, (bins - 1).toFloat())
+            val x = rootXs?.getOrNull(i) ?: raw.vertices[i].position.x
+            val t = ((x - raw.minX) / span * (bins - 1)).coerceIn(0f, (bins - 1).toFloat())
             val a = t.toInt().coerceAtMost(bins - 2)
             sums[a] + (sums[a + 1] - sums[a]) * (t - a)
         }

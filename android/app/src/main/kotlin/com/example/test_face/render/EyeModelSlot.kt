@@ -176,6 +176,9 @@ class EyeModelSlot {
     var usedClosedCurve = false
     val closedContour = ClosedLidContour()
     var rootDepths: FloatArray? = null
+
+    /** X de la raíz de cada vértice (ver [LashRootX]); `null` = la X propia. */
+    var rootXs: FloatArray? = null
     var lastDropRadians = 0f
     var rootBandMinX = 0f
     var rootBandMaxX = 0f
@@ -213,6 +216,7 @@ class EyeModelSlot {
         usedClosedCurve = false
         closedContour.reset()
         rootDepths = null
+        rootXs = null
         lastDropRadians = 0f
         rootBandMinX = 0f
         rootBandMaxX = 0f

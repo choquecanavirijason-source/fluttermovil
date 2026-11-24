@@ -132,6 +132,9 @@ object LashMeshBender {
          * con derivada cero en el borde. */
         wingStrength: Float = RendererConfiguration.LASH_BEND_WING_STRENGTH,
         rootDepths: FloatArray? = null,
+        /** X de la raíz de cada vértice (ver [LashRootX]): toda la fibra se
+         * ancla en el punto del párpado de su raíz. `null` = X propia. */
+        rootXs: FloatArray? = null,
         dropRadians: Float = 0f,
         scaleYToZ: Float = RendererConfiguration.HEIGHT_VOLUME_MULTIPLIER,
         /** scale.x / scale.y del nodo: para que "perpendicular a la línea"
@@ -295,7 +298,13 @@ object LashMeshBender {
                 // veía vacío (~2% del ancho, medido en dispositivo). El
                 // sobrante estira la banda un poco más allá de cada punta.
                 val overshoot = RendererConfiguration.LASH_ROOT_END_OVERSHOOT
-                val u = 0.5f + ((pos.x - rootBinding.sourceMinX) /
+                // Punto del párpado de la RAÍZ de esta fibra (no el que queda
+                // debajo de este vértice: la punta de una fibra inclinada
+                // caía en otro tramo de la línea y en la esquina externa la
+                // fibra seguía la curva del párpado, "doblada").
+                val rootX = rootXs?.takeIf { it.size == raw.vertices.size }?.get(i) ?: pos.x
+                val lateral = pos.x - rootX
+                val u = 0.5f + ((rootX - rootBinding.sourceMinX) /
                     (rootBinding.sourceMaxX - rootBinding.sourceMinX) - 0.5f) * (1f + 2f * overshoot)
                 // Curva suave por los landmarks (no tramos rectos: daban
                 // esquinas en cada punto del párpado).
@@ -322,7 +331,10 @@ object LashMeshBender {
                 // LASH_FIBER_FOLLOW_NORMAL. La normal se calcula en espacio
                 // de MUNDO (escala X≠Y del nodo) y se vuelve a local.
                 val h = (pos.y - raw.minY) * taper
-                var offX = 0f
+                // Inclinación propia de la fibra, en línea recta desde su raíz
+                // (antes salía de deslizar el punto por la línea del párpado).
+                val lat = lateral * taper
+                var offX = lat
                 var offY = h
                 val follow = RendererConfiguration.LASH_FIBER_FOLLOW_NORMAL
                 if (follow > 0f && scaleXToY.isFinite() && scaleXToY > 1e-6f) {
@@ -339,9 +351,12 @@ object LashMeshBender {
                         var my = 1f + (ny - 1f) * follow
                         val ml = kotlin.math.sqrt(mx * mx + my * my).coerceAtLeast(1e-6f)
                         mx /= ml; my /= ml
-                        // De mundo a local: X se divide por scaleXToY.
-                        offX = h * mx / scaleXToY
-                        offY = h * my
+                        // "Arriba" (m) y "al costado" (perpendicular a m,
+                        // hacia +X) de la fibra, en mundo; de vuelta a local,
+                        // X se divide por scaleXToY.
+                        val latW = lat * scaleXToY
+                        offX = (h * mx + latW * my) / scaleXToY
+                        offY = h * my - latW * mx
                         fanAngle = kotlin.math.atan2(-mx, my)
                     }
                 }
@@ -365,7 +380,14 @@ object LashMeshBender {
                     val ca = cos(a)
                     val sa = sin(a)
                     val yw = offY
-                    val zw = offZ / scaleYToZ
+                    // La forma de la fibra (sube Y, se dobla hacia −Z) está en
+                    // unidades iguales en el modelo. El nodo estira Y ×scaleYToZ
+                    // (volumen vertical) pero no Z: llevando Z a unidades de
+                    // mundo, el doblez quedaba 1/1.55 del largo y todas las
+                    // curvas se veían casi iguales (una C parecía una J).
+                    // Con LASH_CURL_ISOTROPIC el doblez se estira igual que el
+                    // largo y la curva elegida se ve con su forma real.
+                    val zw = if (RendererConfiguration.LASH_CURL_ISOTROPIC) offZ else offZ / scaleYToZ
                     offY = yw * ca - zw * sa
                     offZ = (yw * sa + zw * ca) * scaleYToZ
                     projAngle = a

@@ -1165,6 +1165,7 @@ class LashRenderer(
                 styleConfig = currentStyleConfig,
                 eyeWidthPx = transform.eyeWidthPx,
                 rootDepths = slot.rootDepths,
+                rootXs = slot.rootXs,
                 dropRadians = dropRadians,
                 scaleYToZ = smoothed.scale.y / smoothed.scale.z,
                 scaleXToY = smoothed.scale.x / smoothed.scale.y,
@@ -1371,7 +1372,9 @@ class LashRenderer(
                     if (renderableNode != null) {
                         renderableNode.setGeometry(geometry)
                         slot.rawMesh = rawMesh
-                        slot.rootDepths = LashRootDepth.perVertex(rawMesh)
+                        slot.rootXs = LashRootX.perVertex(rawMesh)
+                        Log.i(TAG, "loadIntoSlot[$eye] anclaje por raíz=${slot.rootXs != null}")
+                        slot.rootDepths = LashRootDepth.perVertex(rawMesh, slot.rootXs)
                         val rootTolerance = (rawMesh.vertices.maxOf { it.position.y } - rawMesh.minY) * 0.005f
                         val rootRow = rawMesh.vertices.filter { it.position.y - rawMesh.minY <= rootTolerance }
                         slot.rootBandMinX = rootRow.minOf { it.position.x }

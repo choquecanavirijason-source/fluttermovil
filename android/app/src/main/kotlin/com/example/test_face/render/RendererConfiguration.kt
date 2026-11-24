@@ -62,8 +62,10 @@ object RendererConfiguration {
     /** Cuánto se orienta cada fibra perpendicular al borde del párpado en
      * vez de vertical (ver LashMeshBender, root binding). 0 = todas
      * verticales (en la esquina externa quedaban paradas contra el borde
-     * inclinado, "forzadas"); 1 = perpendicular exacta (abanico completo). */
-    const val LASH_FIBER_FOLLOW_NORMAL = 0.6f
+     * inclinado, "forzadas"); 1 = perpendicular exacta (abanico completo).
+     * 0.6 → 0.4: con la cara en tres cuartos la esquina externa se torcía
+     * hacia la sien (sumado al barrido propio del estilo). */
+    const val LASH_FIBER_FOLLOW_NORMAL = 0.4f
 
     /** Inclinación hacia adelante (hacia la cámara) de la fibra en la RAÍZ,
      * en grados; baja hacia la punta (ver LashMeshBender y
@@ -71,7 +73,7 @@ object RendererConfiguration {
      * natural sale del párpado hacia adelante y se curva hacia arriba; con 0
      * las fibras nacen verticales y se ven "paradas" a 90°. Subir = más
      * proyectada (y más corta vista de frente). */
-    const val LASH_PROJECTION_DEG = 70f
+    const val LASH_PROJECTION_DEG = 90f
 
     /** Fracción de [LASH_PROJECTION_DEG] que conserva la PUNTA de la fibra.
      * 0 = la punta vuelve a vertical (la fibra termina justo encima de la
@@ -82,6 +84,11 @@ object RendererConfiguration {
     // esto queda como la DIRECCIÓN DE NACIMIENTO, igual en toda la fibra.
     // Con 0.5 se sumaba a la curvatura y la duplicaba.
     const val LASH_PROJECTION_TIP_FRACTION = 1.0f
+
+    /** true: el doblez de la fibra (curvatura) se estira igual que su largo
+     * (HEIGHT_VOLUME_MULTIPLIER), así cada curva se ve con su forma real.
+     * false: comportamiento anterior (curvas aplanadas, casi iguales). */
+    const val LASH_CURL_ISOTROPIC = true
 
     /** Desde esta proporción alto/ancho del ojo abierto, sin cola EXTRA
      * (redondos; `pruebas/ojos` 04 = 0.41). */
